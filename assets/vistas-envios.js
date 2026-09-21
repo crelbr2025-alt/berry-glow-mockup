@@ -41,13 +41,13 @@
     const html = '<div class="page">'
       + '<div class="page-head"><div><h1 class="page-title">Envíos</h1><p class="page-sub">Encomiendas y courier desde ' + esc(origen.ciudad) + ' (' + esc(origen.departamento) + '), con etiqueta lista para pegar.</p></div>'
       + '<div class="page-actions"><a class="btn btn-primary" href="#/envios/nuevo">' + icon('plus') + 'Nuevo envío</a></div></div>'
-      + '<div class="tiles tiles-4">'
+      + '<div class="tiles tiles-compact">'
       + '<a class="tile tile-link" href="#/envios?estado=preparando"><span class="tile-label">Preparando</span><span class="tile-value">' + n('preparando') + '</span><span class="tile-sub">falta completar o empaquetar</span></a>'
       + '<a class="tile tile-link" href="#/envios?estado=listo"><span class="tile-label">Listos para despachar</span><span class="tile-value">' + n('listo') + '</span><span class="tile-sub">etiqueta pegada, falta llevar</span></a>'
       + '<a class="tile tile-link" href="#/envios?estado=despachado"><span class="tile-label">En camino</span><span class="tile-value">' + n('despachado') + '</span><span class="tile-sub">con número de guía</span></a>'
       + '<a class="tile tile-link" href="#/envios?estado=entregado"><span class="tile-label">Entregados</span><span class="tile-value">' + n('entregado') + '</span><span class="tile-sub">confirmados</span></a></div>'
       + '<div class="toolbar"><div class="search-box grow"><label class="sr-only" for="q-envios">Buscar envío</label>' + icon('search')
-      + '<input id="q-envios" class="search-input" type="search" autocomplete="off" placeholder="Cliente, ciudad, empresa o número de guía"></div>'
+      + '<input id="q-envios" class="search-input" type="search" autocomplete="off" placeholder="Cliente, ciudad o guía"></div>'
       + '<div class="chips" role="group" aria-label="Estado">' + chip('activos', 'En curso', activos) + chip('preparando', 'Preparando', n('preparando'))
       + chip('listo', 'Listos', n('listo')) + chip('despachado', 'En camino', n('despachado')) + chip('entregado', 'Entregados', n('entregado')) + chip('todos', 'Todos', BG.db.envios.length) + '</div></div>'
       + '<ul class="list" id="lista-envios"></ul></div>';

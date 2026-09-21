@@ -193,7 +193,7 @@
       });
 
       $('#rs-cuerpo', root).innerHTML = '<p class="small muted">Del ' + BG.fmtFecha(desde) + ' al ' + BG.fmtFecha(hasta) + '</p>'
-        + '<div class="tiles tiles-5">' + tile('Vendido', gs(vendido), ventas.length + (ventas.length === 1 ? ' venta' : ' ventas'))
+        + '<div class="tiles tiles-5 tiles-compact">' + tile('Vendido', gs(vendido), ventas.length + (ventas.length === 1 ? ' venta' : ' ventas'))
         + tile('Cobrado', gs(cobrado), 'plata que entró en el período') + tile('Ganancia real', gs(ganancia), 'precio de venta − costo congelado')
         + tile('Por cobrar hoy', gs(sum(deudores, (d) => d.saldo)), deudores.length + ' clientes') + tile('Envíos', String(envios.length), fleteTienda ? 'fletes pagados por la tienda: ' + gs(fleteTienda) : 'en el período') + '</div>'
         + '<div class="grid-2 grid-charts">'
@@ -206,12 +206,15 @@
         + '<p class="row">' + estados + '</p></section>'
         + '<section class="card stack"><div class="card-head"><h2>Productos más vendidos</h2><span class="small muted">unidades</span></div>' + barrasH(top, 'Sin ventas en el período.') + '</section>'
         + '<section class="card stack"><div class="card-head"><h2>Actividad por usuario</h2><a class="small" href="#/auditoria">Auditoría</a></div>'
-        + '<div class="table-wrap table-bare"><table class="table table-compact"><thead><tr><th>Usuario</th><th class="num">Ventas</th><th class="num">Cobros</th><th class="num">Recibos</th><th class="num">Envíos</th></tr></thead><tbody>'
-        + actividad.map((a) => '<tr><td><div class="t-title">' + esc(a.u.nombre) + '</div><div class="t-sub">' + (a.u.rol === 'admin' ? 'Dueño' : 'Vendedora')
-          + (a.ultimo ? ' · último movimiento ' + BG.fmtFecha(a.ultimo.ts.slice(0, 10)) + ' ' + BG.fmtHora(a.ultimo.ts) : '') + '</div></td>'
-          + '<td class="num">' + a.ventas + '<div class="t-sub">' + gs(a.vendido) + '</div></td><td class="num">' + a.cobros + '<div class="t-sub">' + gs(a.cobrado) + '</div></td>'
-          + '<td class="num">' + a.recibos + '</td><td class="num">' + a.envios + '</td></tr>').join('')
-        + '</tbody></table></div><p class="hint">Todo lo que hace cada usuario queda en la auditoría, con fecha y hora.</p></section>'
+        + '<ul class="actividad">'
+        + actividad.map((a) => '<li><div class="act-quien"><strong>' + esc(a.u.nombre) + '</strong><span class="small muted">' + (a.u.rol === 'admin' ? 'Dueño' : 'Vendedora')
+          + (a.ultimo ? ' · último movimiento ' + BG.fmtFecha(a.ultimo.ts.slice(0, 10)) + ' ' + BG.fmtHora(a.ultimo.ts) : '') + '</span></div>'
+          + '<dl class="act-nums">'
+          + '<div><dt>Ventas</dt><dd>' + a.ventas + '<span class="act-monto">' + gs(a.vendido) + '</span></dd></div>'
+          + '<div><dt>Cobros</dt><dd>' + a.cobros + '<span class="act-monto">' + gs(a.cobrado) + '</span></dd></div>'
+          + '<div><dt>Recibos</dt><dd>' + a.recibos + '<span class="act-monto">emitidos</span></dd></div>'
+          + '<div><dt>Envíos</dt><dd>' + a.envios + '<span class="act-monto">preparados</span></dd></div></dl></li>').join('')
+        + '</ul><p class="hint">Todo lo que hace cada usuario queda en la auditoría, con fecha y hora.</p></section>'
         + '</div>';
       enlazarColumnas(root, 'rs-semanas', sem, series);
     };
