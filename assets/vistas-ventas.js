@@ -72,7 +72,8 @@
     const chips = (grupo, pares) => '<div class="chips" role="group">' + pares.map(([k, t]) => '<button type="button" class="chip" data-' + grupo + '="' + k + '" aria-pressed="' + (e[grupo] === k) + '">' + t + '</button>').join('') + '</div>';
     const html = '<div class="page">'
       + '<div class="page-head"><div><h1 class="page-title">Ventas</h1><p class="page-sub" id="ventas-resumen"></p></div>'
-      + '<div class="page-actions"><a class="btn" href="#/cobros/nuevo">' + icon('cash') + 'Registrar cobro</a><a class="btn btn-primary" href="#/ventas/nueva">' + icon('plus') + 'Nueva venta</a></div></div>'
+      + '<div class="page-actions">' + (BG.puede('registrarCobros') ? '<a class="btn" href="#/cobros/nuevo">' + icon('cash') + 'Registrar cobro</a>' : '')
+      + (BG.puede('registrarVentas') ? '<a class="btn btn-primary" href="#/ventas/nueva">' + icon('plus') + 'Nueva venta</a>' : '') + '</div></div>'
       + '<div class="toolbar">'
       + '<div class="search-box grow"><label class="sr-only" for="q-ventas">Buscar por cliente</label>' + icon('search') + '<input id="q-ventas" class="search-input" type="search" autocomplete="off" placeholder="Buscar por cliente"></div>'
       + chips('periodo', [['hoy', 'Hoy'], ['7', '7 días'], ['mes', 'Este mes'], ['todo', 'Todo']])
@@ -118,6 +119,7 @@
     const saldo = BG.saldoVenta(v);
     const pagos = BG.pagosDeVenta(v.id, true).sort((a, b) => a.ts.localeCompare(b.ts));
     const nueva = params.get('nueva') === '1';
+    const envio = BG.envioDeVenta ? BG.envioDeVenta(v.id) : null;
     const costo = sum(v.items, (it) => (it.costoUnitGs || 0) * it.cantidad);
     const ganancia = v.total - costo;
     const textoWa = 'Hola ' + cli.nombre.split(' ')[0] + ', gracias por tu compra en ' + BG.db.config.tienda.nombre + '. Total ' + gs(v.total)
@@ -127,15 +129,17 @@
       + '<a class="back-link" href="#/clientes/' + cli.id + '">' + icon('left', 'i-sm') + esc(cli.nombre) + '</a>'
       + (nueva ? '<section class="success" aria-live="polite"><h2>' + icon('check') + 'Venta registrada · Recibo ' + BG.fmtRecibo(v.recibo) + '</h2>'
         + '<p>' + (saldo > 0 ? 'Queda un saldo de <strong>' + gs(saldo) + '</strong> en la cuenta de ' + esc(cli.nombre) + '.' : 'La venta quedó saldada.') + '</p>'
-        + '<div class="row"><a class="btn btn-primary" href="#/recibo/v/' + v.id + '">' + icon('receipt') + 'Ver e imprimir recibo</a>'
+        + '<div class="row">' + (BG.puede('emitirRecibos') ? '<a class="btn btn-primary" href="#/recibo/v/' + v.id + '">' + icon('receipt') + 'Ver e imprimir recibo</a>' : '')
         + '<a class="btn" href="' + BG.waLink(cli, textoWa) + '" target="_blank" rel="noopener">' + icon('chat') + 'Enviar por WhatsApp</a>'
         + '<a class="btn btn-quiet" href="#/ventas/nueva">' + icon('plus') + 'Otra venta</a></div></section>' : '')
       + '<div class="page-head"><div><p class="eyebrow">' + BG.fmtFechaLarga(v.fecha) + ' · ' + BG.fmtHora(v.ts) + ' · por ' + esc(v.usuario) + '</p>'
       + '<h1 class="page-title">Venta ' + BG.fmtRecibo(v.recibo) + '</h1><p class="page-sub"><a href="#/clientes/' + cli.id + '">' + esc(cli.nombre) + '</a> · ' + BG.estadoVenta(v) + '</p></div>'
       + '<div class="page-actions">'
-      + (saldo > 0 ? '<a class="btn btn-primary" href="#/cobros/nuevo?cliente=' + cli.id + '&venta=' + v.id + '">' + icon('cash') + 'Registrar cobro</a>' : '')
-      + '<a class="btn" href="#/recibo/v/' + v.id + '">' + icon('receipt') + 'Recibo</a>'
-      + (v.anulada ? '' : '<button type="button" class="btn btn-danger" data-accion="anular-venta">' + icon('ban') + 'Anular venta</button>')
+      + (saldo > 0 && BG.puede('registrarCobros') ? '<a class="btn btn-primary" href="#/cobros/nuevo?cliente=' + cli.id + '&venta=' + v.id + '">' + icon('cash') + 'Registrar cobro</a>' : '')
+      + (BG.puede('emitirRecibos') ? '<a class="btn" href="#/recibo/v/' + v.id + '">' + icon('receipt') + 'Recibo</a>' : '')
+      + (!v.anulada && BG.puede('prepararEnvios') ? (envio ? '<a class="btn" href="#/envios/' + envio.id + '">' + icon('truck') + 'Envío ' + esc(envio.numero) + '</a>'
+        : '<a class="btn" href="#/envios/nuevo?venta=' + v.id + '">' + icon('truck') + 'Preparar envío</a>') : '')
+      + (v.anulada || !BG.esDuena() ? '' : '<button type="button" class="btn btn-danger" data-accion="anular-venta">' + icon('ban') + 'Anular venta</button>')
       + '</div></div>'
       + (v.anulada ? '<div class="callout callout-bad">' + icon('ban') + '<div><strong>Venta anulada el ' + BG.fmtFecha(v.anulada.fecha) + ' a las ' + BG.fmtHora(v.anulada.ts) + ' por ' + esc(v.anulada.usuario) + '.</strong> Motivo: ' + esc(v.anulada.motivo) + '</div></div>' : '')
       + '<div class="grid-2">'
@@ -156,7 +160,7 @@
         + '<div class="row-sub">' + BG.fmtFecha(p.fecha) + ' ' + BG.fmtHora(p.ts) + ' · ' + BG.fmtRecibo(p.recibo) + (p.inicial ? ' · pago inicial' : '') + '</div>'
         + '<div class="row-sub">' + p.partes.map((x) => BG.FORMAS[x.forma] + ' ' + gs(x.monto)).join(' + ') + '</div>'
         + (p.anulado ? '<div class="row-sub">Anulado el ' + BG.fmtFecha(p.anulado.fecha) + ': ' + esc(p.anulado.motivo) + '</div>' : '')
-        + '</div>' + (p.anulado || v.anulada ? '' : '<button type="button" class="btn btn-sm btn-quiet" data-accion="anular-pago" data-id="' + p.id + '">Anular</button>')
+        + '</div>' + (p.anulado || v.anulada || !BG.esDuena() ? '' : '<button type="button" class="btn btn-sm btn-quiet" data-accion="anular-pago" data-id="' + p.id + '">Anular</button>')
         + '</div></li>').join('') + '</ul>' : '<p class="empty">Todavía no hay pagos: la venta quedó a cuenta.</p>')
       + '<dl class="summary list-top"><dt>Total de la venta</dt><dd>' + gs(v.total) + '</dd><dt>Pagado</dt><dd>' + gs(BG.pagadoVenta(v)) + '</dd><div class="sep"></div>'
       + '<dt><strong>Saldo</strong></dt><dd class="big ' + (saldo > 0 ? 'due' : 'clear') + '">' + gs(saldo) + '</dd></dl>'
@@ -167,10 +171,14 @@
         root.addEventListener('click', async (ev) => {
           const b = ev.target.closest('[data-accion]');
           if (!b) return;
-          if (b.dataset.accion === 'anular-venta' && (await BG.anularVentaUI(v))) BG.render();
-          if (b.dataset.accion === 'anular-pago') {
-            const pg = BG.db.pagos.find((x) => x.id === b.dataset.id);
-            if (await BG.anularPagoUI(pg)) BG.render();
+          try {
+            if (b.dataset.accion === 'anular-venta' && (await BG.anularVentaUI(v))) BG.render();
+            if (b.dataset.accion === 'anular-pago') {
+              const pg = BG.db.pagos.find((x) => x.id === b.dataset.id);
+              if (await BG.anularPagoUI(pg)) BG.render();
+            }
+          } catch (err) {
+            BG.toast(err.message, 'error');
           }
         });
       },

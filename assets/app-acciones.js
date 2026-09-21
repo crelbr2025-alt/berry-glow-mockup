@@ -173,7 +173,10 @@
 
   /* ── Anulaciones (nunca se borra nada) ───────────────────────────────── */
 
+  const soloDuenio = (que) => { if (!BG.esDuena()) throw new Error('Solo ' + BG.nombreDuena() + ' (dueño) puede ' + que + '.'); };
+
   BG.anularVenta = (id, motivo) => {
+    soloDuenio('anular ventas');
     const v = BG.venta(id);
     const cli = BG.cliente(v.clienteId);
     const pagado = BG.pagadoVenta(v);
@@ -197,6 +200,7 @@
   };
 
   BG.anularPago = (id, motivo) => {
+    soloDuenio('anular pagos');
     const pg = BG.db.pagos.find((p) => p.id === id);
     const cli = BG.cliente(pg.clienteId);
     pg.anulado = { fecha: BG.hoy(), ts: BG.ahora(), motivo: motivo, usuario: BG.usuario().nombre };
@@ -341,8 +345,110 @@
   };
 
   BG.reabrirCaja = (fecha) => {
+    soloDuenio('reabrir la caja');
     BG.db.config.cajaCerradaHasta = BG.sumarDias(fecha, -1);
     BG.auditar('caja', 'Caja reabierta', BG.fmtFecha(fecha) + ' y días siguientes');
+    BG.guardar();
+  };
+
+  /* ── Recibos emitidos ────────────────────────────────────────────────── */
+
+  /** Cada vez que alguien imprime, guarda en PDF o manda por WhatsApp un recibo queda registrado. */
+  BG.registrarEmision = (d) => {
+    const cli = BG.cliente(d.clienteId);
+    BG.db.emisiones.push({ id: BG.uid('em'), ts: BG.ahora(), usuario: BG.usuario().nombre, recibo: d.recibo, ventaId: d.ventaId || null, clienteId: d.clienteId, medio: d.medio });
+    BG.auditar('recibos', 'Recibo emitido', (d.recibo ? 'Recibo ' + BG.fmtRecibo(d.recibo) : 'Estado de cuenta') + ' · ' + (cli ? cli.nombre : '') + ' · por ' + d.medio);
+    BG.guardar();
+  };
+  BG.emisionesDe = (recibo, clienteId) => BG.db.emisiones.filter((e) => (recibo ? e.recibo === recibo : !e.recibo && e.clienteId === clienteId));
+
+  /* ── Usuarios y permisos ─────────────────────────────────────────────── */
+
+  BG.actualizarPermiso = (usuarioId, permiso, valor) => {
+    soloDuenio('cambiar permisos');
+    const u = BG.db.usuarios.find((x) => x.id === usuarioId);
+    u.permisos = Object.assign({}, u.permisos, { [permiso]: !!valor });
+    const etiqueta = (BG.PERMISOS.find((p) => p[0] === permiso) || [permiso, permiso])[1];
+    BG.auditar('seguridad', 'Permisos de ' + u.nombre, (valor ? 'Habilitado: ' : 'Quitado: ') + etiqueta);
+    BG.guardar();
+  };
+
+  /* ── Envíos por encomienda o courier ─────────────────────────────────── */
+
+  BG.ESTADOS_ENVIO = { preparando: 'Preparando', listo: 'Listo para despachar', despachado: 'Despachado', entregado: 'Entregado', cancelado: 'Cancelado' };
+  BG.CHECKLIST_ENVIO = [
+    ['datos', 'Datos del destinatario confirmados por WhatsApp (nombre, CI, teléfono y ciudad)'],
+    ['embalaje', 'Paquete bien cerrado con cinta, en bolsa o caja resistente'],
+    ['etiqueta', 'Etiqueta impresa y pegada en la cara más grande, una por bulto'],
+    ['prohibidos', 'Sin productos que la empresa no acepta (perfumes y aerosoles: consultar antes)'],
+    ['cobro', 'Pago confirmado, o cobro contra entrega acordado con la empresa'],
+    ['comprobante', 'Comprobante de la empresa guardado y número de guía cargado'],
+  ];
+  const ETIQUETA_AUDIT = { preparando: 'Envío preparado', listo: 'Listo para despachar', despachado: 'Envío despachado', entregado: 'Envío entregado', cancelado: 'Envío cancelado' };
+  const resumenEnvio = (e) => e.numero + ' · ' + e.destinatario.nombre + ' → ' + e.destinatario.ciudad + ' (' + e.empresa + ')';
+
+  /** Qué le falta a un envío para pasar a un estado. Devuelve una lista de textos (vacía = puede pasar). */
+  BG.faltantesEnvio = (e, estado) => {
+    const f = [];
+    const d = e.destinatario;
+    if (estado === 'listo' || estado === 'despachado') {
+      if (!d.nombre) f.push('nombre del destinatario');
+      if (BG.soloDigitos(d.ci).length < 5) f.push('CI del destinatario (la empresa la pide para retirar)');
+      if (BG.soloDigitos(d.telefono).length < 6) f.push('teléfono del destinatario');
+      if (!d.ciudad) f.push('ciudad de destino');
+      if (!d.departamento) f.push('departamento');
+      if (d.modalidad === 'domicilio' && !d.direccion) f.push('dirección de entrega');
+      if (!e.empresa) f.push('empresa de transporte');
+      if (!(e.bultos >= 1)) f.push('cantidad de bultos');
+      BG.CHECKLIST_ENVIO.filter(([k]) => k !== 'comprobante').forEach(([k, t]) => { if (!e.checklist[k]) f.push('control: ' + t.split(' (')[0].toLowerCase()); });
+    }
+    if (estado === 'despachado' && !String(e.guia || '').trim()) f.push('número de guía o comprobante de la empresa');
+    return f;
+  };
+
+  BG.guardarEnvio = (datos, id) => {
+    let e;
+    if (id) {
+      e = BG.db.envios.find((x) => x.id === id);
+      Object.assign(e, datos);
+      BG.auditar('envios', 'Envío editado', resumenEnvio(e));
+    } else {
+      const cfg = BG.db.config.envios;
+      e = Object.assign({
+        id: BG.uid('en'), numero: 'E-' + String(cfg.proximo++).padStart(4, '0'), creado: BG.ahora(), usuario: BG.usuario().nombre,
+        estado: 'preparando', historial: [{ estado: 'preparando', ts: BG.ahora(), usuario: BG.usuario().nombre, nota: '' }],
+      }, datos);
+      BG.db.envios.push(e);
+      BG.auditar('envios', ETIQUETA_AUDIT.preparando, resumenEnvio(e));
+    }
+    BG.guardar();
+    return e;
+  };
+
+  BG.cambiarEstadoEnvio = (id, estado, extra) => {
+    const e = BG.db.envios.find((x) => x.id === id);
+    if (estado === 'cancelado') soloDuenio('cancelar envíos');
+    if (extra && extra.guia != null) e.guia = String(extra.guia).trim();
+    if (estado === 'despachado') e.checklist.comprobante = true;
+    const falta = BG.faltantesEnvio(e, estado);
+    if (falta.length) throw new Error('Falta: ' + falta.join(', ') + '.');
+    const nota = estado === 'despachado' ? 'Guía ' + e.guia : (extra && extra.nota) || '';
+    e.estado = estado;
+    e.historial.push({ estado: estado, ts: BG.ahora(), usuario: BG.usuario().nombre, nota: nota });
+    BG.auditar('envios', ETIQUETA_AUDIT[estado], resumenEnvio(e) + (nota ? ' · ' + nota : ''));
+    BG.guardar();
+    return e;
+  };
+
+  BG.registrarEtiquetaImpresa = (e) => {
+    BG.auditar('envios', 'Etiqueta impresa', resumenEnvio(e) + ' · ' + e.bultos + (e.bultos === 1 ? ' bulto' : ' bultos'));
+    BG.guardar();
+  };
+
+  BG.guardarEmpresasEnvio = (lista) => {
+    soloDuenio('cambiar las empresas de envío');
+    BG.db.config.envios.empresas = lista;
+    BG.auditar('parametros', 'Empresas de envío', lista.map((x) => x.nombre).join(', '));
     BG.guardar();
   };
 })();

@@ -16,31 +16,31 @@
 
   // [id, nombre, CI/RUC, teléfono, dirección, correo, notas, alta (días atrás)]
   const CLIENTES = [
-    ['c01', 'María José Benítez', '4.567.890', '0981 234 567', 'Lambaré', '', 'Talle M. Prefiere retirar los sábados.', 120],
+    ['c01', 'María José Benítez', '4.567.890', '0981 234 567', 'Coronel Oviedo', '', 'Talle M. Prefiere retirar los sábados.', 120],
     ['c02', 'Lorena Giménez', '3.912.004', '0971 556 120', 'Asunción, Villa Morra', 'lorena.gimenez@example.com', '', 95],
-    ['c03', 'Fátima Ortiz', '5.201.337', '0982 440 918', 'San Lorenzo', '', '', 90],
-    ['c04', 'Rocío Villalba', '4.880.126', '0994 310 245', 'Fernando de la Mora', '', 'Paga siempre por transferencia.', 88],
-    ['c05', 'Natalia Duarte', '3.645.772', '0985 772 031', 'Luque', '', '', 80],
-    ['c06', 'Camila Acosta', '6.012.448', '0976 118 509', 'Asunción, Recoleta', 'cami.acosta@example.com', '', 75],
-    ['c07', 'Andrea Fernández', '4102938-5', '0981 905 377', 'Asunción, Centro', '', 'Compra para revender. Tiene RUC.', 70],
-    ['c08', 'Sofía Martínez', '5.574.210', '0972 663 804', 'Mariano Roque Alonso', '', '', 66],
-    ['c09', 'Paola Ramírez', '4.339.061', '0983 207 655', 'Capiatá', '', '', 60],
-    ['c10', 'Liz Cabrera', '3.788.915', '0991 448 270', 'Lambaré', '', '', 58],
-    ['c11', 'Gabriela Rojas', '5.920.384', '0984 516 902', 'Asunción, Sajonia', '', '', 50],
-    ['c12', 'Diana Aquino', '4.105.629', '0975 902 117', 'Villa Elisa', '', '', 45],
-    ['c13', 'Mirian Báez', '2.987.340', '0961 337 480', 'Ñemby', '', '', 44],
+    ['c03', 'Fátima Ortiz', '5.201.337', '0982 440 918', 'Coronel Oviedo', '', '', 90],
+    ['c04', 'Rocío Villalba', '4.880.126', '0994 310 245', 'Caaguazú', '', 'Paga siempre por transferencia.', 88],
+    ['c05', 'Natalia Duarte', '3.645.772', '0985 772 031', 'Ciudad del Este', '', 'Compra por WhatsApp; se le manda por encomienda.', 80],
+    ['c06', 'Camila Acosta', '6.012.448', '0976 118 509', 'Coronel Oviedo', 'cami.acosta@example.com', '', 75],
+    ['c07', 'Andrea Fernández', '4102938-5', '0981 905 377', 'Villarrica', '', 'Compra para revender. Tiene RUC. Envío a domicilio.', 70],
+    ['c08', 'Sofía Martínez', '5.574.210', '0972 663 804', 'Coronel Oviedo', '', '', 66],
+    ['c09', 'Paola Ramírez', '4.339.061', '0983 207 655', 'Dr. J. Eulogio Estigarribia', '', '', 60],
+    ['c10', 'Liz Cabrera', '3.788.915', '0991 448 270', 'Coronel Oviedo', '', '', 58],
+    ['c11', 'Gabriela Rojas', '5.920.384', '0984 516 902', 'Encarnación', '', '', 50],
+    ['c12', 'Diana Aquino', '4.105.629', '0975 902 117', 'Coronel Oviedo', '', '', 45],
+    ['c13', 'Mirian Báez', '2.987.340', '0961 337 480', 'Carayaó', '', '', 44],
     ['c14', 'Tamara Cáceres', '6.230.518', '0986 120 663', 'San Lorenzo', '', 'Avisarle cuando lleguen blazers.', 40],
     ['c15', 'Belén Núñez', '5.412.776', '0973 845 210', 'Luque', '', '', 36],
-    ['c16', 'Jazmín Ayala', '6.498.002', '0981 660 394', 'Limpio', '', '', 30],
-    ['c17', 'Karen Espínola', '4.721.853', '0992 574 118', 'Asunción, Carmelitas', '', '', 28],
-    ['c18', 'Leticia Ferreira', '3.366.490', '0982 931 506', 'Fernando de la Mora', '', '', 25],
-    ['c19', 'Mónica Galeano', '2.845.117', '0971 208 743', 'Lambaré', '', '', 22],
-    ['c20', 'Silvia Insfrán', '3.098.664', '0985 419 820', 'Asunción, Mburucuyá', '', '', 18],
-    ['c21', 'Noelia Zárate', '5.763.201', '0976 334 095', 'Capiatá', '', '', 15],
-    ['c22', 'Romina Vera', '4.953.380', '0983 780 612', 'Itauguá', '', '', 12],
-    ['c23', 'Carolina Sanabria', '5.117.925', '0994 602 381', 'San Antonio', '', '', 8],
-    ['c24', 'Luis Ortiz', '4.402.716', '0981 477 209', 'San Lorenzo', '', 'Compra regalos: pedir envoltorio.', 5],
-    ['c25', 'Mariela Benítez', '5.330.842', '0972 118 455', 'Lambaré', '', '', 2],
+    ['c16', 'Johana Ayala', '6.498.002', '0981 660 394', 'Coronel Oviedo', '', '', 30],
+    ['c17', 'Karen Espínola', '4.721.853', '0992 574 118', 'Pedro Juan Caballero', '', '', 28],
+    ['c18', 'Leticia Ferreira', '3.366.490', '0982 931 506', 'Coronel Oviedo', '', '', 25],
+    ['c19', 'Mónica Galeano', '2.845.117', '0971 208 743', 'Repatriación', '', '', 22],
+    ['c20', 'Silvia Insfrán', '3.098.664', '0985 419 820', 'Salto del Guairá', '', '', 18],
+    ['c21', 'Noelia Zárate', '5.763.201', '0976 334 095', 'Coronel Oviedo', '', '', 15],
+    ['c22', 'Romina Vera', '4.953.380', '0983 780 612', 'Caaguazú', '', '', 12],
+    ['c23', 'Carolina Sanabria', '5.117.925', '0994 602 381', 'Coronel Oviedo', '', '', 8],
+    ['c24', 'Luis Ortiz', '4.402.716', '0981 477 209', 'Coronel Oviedo', '', 'Compra regalos: pedir envoltorio.', 5],
+    ['c25', 'Mariela Benítez', '5.330.842', '0972 118 455', 'Luque', '', '', 2],
   ];
 
   // Pedidos al courier. modo 'kg' = tarifa por kilo (opción A); 'total' = monto único repartido por peso (opción B).
@@ -134,24 +134,56 @@
   ];
 
   const REDONDEO = { paso: 1000, modo: 'cercano' };
-  const USUARIO = 'Dueña';
+  const ARIEL = 'Ariel';
+  const JAZMIN = 'Jazmín';
+  const USUARIO = ARIEL;
+  // Ventas de los últimos días que registró Jazmín en el mostrador (número de venta, empezando en 1).
+  const DE_JAZMIN = new Set([16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29]);
+  // Permisos de la vendedora: Ariel los puede cambiar desde Ajustes.
+  const PERMISOS_VENDEDORA = {
+    emitirRecibos: true, registrarVentas: true, registrarCobros: true, editarClientes: true,
+    verPrecios: true, verCaja: true, prepararEnvios: true,
+  };
+
+  // Envíos por encomienda o courier desde Coronel Oviedo (venta = número de venta, empezando en 1).
+  // estados: [estado, días atrás, hora, quién (a = Ariel, j = Jazmín)]
+  const ENVIOS = [
+    { venta: 2, ciudad: 'Asunción', depto: 'Capital', modalidad: 'agencia', agencia: 'Terminal de ómnibus', empresa: 'NSA', bultos: 1, peso: '0.6', flete: 25000, paga: 'destinatario', guia: 'NSA 0048213',
+      estados: [['preparando', 38, '11:20', 'a'], ['listo', 38, '15:10', 'a'], ['despachado', 37, '07:30', 'a'], ['entregado', 36, '10:05', 'a']] },
+    { venta: 5, ciudad: 'Ciudad del Este', depto: 'Alto Paraná', modalidad: 'agencia', agencia: 'Terminal de ómnibus', empresa: 'Crucero del Este', bultos: 1, peso: '0.8', flete: 25000, paga: 'tienda', guia: 'CE 771204',
+      estados: [['preparando', 33, '12:30', 'a'], ['listo', 33, '16:00', 'a'], ['despachado', 32, '07:15', 'a'], ['entregado', 31, '09:40', 'a']] },
+    { venta: 7, ciudad: 'Villarrica', depto: 'Guairá', modalidad: 'domicilio', direccion: 'Calle Ejemplo 123', referencia: 'Frente a la despensa', empresa: 'AEX', bultos: 2, peso: '1.4', flete: 35000, paga: 'tienda', guia: 'AEX 7730-1182',
+      estados: [['preparando', 29, '10:30', 'a'], ['listo', 29, '17:00', 'a'], ['despachado', 28, '08:00', 'a'], ['entregado', 27, '14:20', 'a']] },
+    { venta: 11, ciudad: 'Encarnación', depto: 'Itapúa', modalidad: 'domicilio', direccion: 'Calle Ejemplo 456', referencia: 'Portón blanco', empresa: 'AEX', bultos: 1, peso: '0.5', flete: 30000, paga: 'tienda', guia: 'AEX 7730-2410',
+      estados: [['preparando', 18, '10:10', 'a'], ['listo', 18, '16:30', 'a'], ['despachado', 17, '08:10', 'a'], ['entregado', 15, '11:45', 'a']] },
+    { venta: 14, ciudad: 'San Lorenzo', depto: 'Central', modalidad: 'agencia', agencia: 'Terminal de ómnibus', empresa: 'NSA', bultos: 1, peso: '0.7', flete: 25000, paga: 'destinatario', guia: 'NSA 0051877',
+      estados: [['preparando', 15, '18:20', 'a'], ['listo', 14, '09:00', 'a'], ['despachado', 14, '11:30', 'a'], ['entregado', 13, '10:15', 'a']] },
+    { venta: 18, ciudad: 'Pedro Juan Caballero', depto: 'Amambay', modalidad: 'agencia', agencia: 'Sucursal del correo', empresa: 'Correo Paraguayo', bultos: 1, peso: '0.4', flete: 22000, paga: 'tienda', guia: 'CP 040521',
+      estados: [['preparando', 10, '11:40', 'j'], ['listo', 10, '16:15', 'j'], ['despachado', 9, '08:20', 'j'], ['entregado', 6, '15:30', 'a']] },
+    { venta: 21, ciudad: 'Salto del Guairá', depto: 'Canindeyú', modalidad: 'agencia', agencia: 'Sucursal del correo', empresa: 'Correo Paraguayo', bultos: 1, peso: '0.3', flete: 22000, paga: 'destinatario', guia: 'CP 040688',
+      estados: [['preparando', 6, '10:50', 'j'], ['listo', 6, '15:40', 'j'], ['despachado', 5, '08:05', 'j']] },
+    { venta: 27, ciudad: 'Ciudad del Este', depto: 'Alto Paraná', modalidad: 'agencia', agencia: 'Terminal de ómnibus', empresa: 'Crucero del Este', bultos: 1, peso: '0.4', flete: 25000, paga: 'destinatario', guia: '',
+      estados: [['preparando', 1, '12:20', 'j'], ['listo', 0, '08:40', 'j']] },
+    { venta: 29, ciudad: 'Luque', depto: 'Central', modalidad: 'domicilio', direccion: 'Calle Ejemplo 789', referencia: 'Casa esquina, rejas verdes', empresa: 'AEX', bultos: 1, peso: '0.5', flete: 30000, paga: 'tienda', guia: '', cobro: 'saldo',
+      estados: [['preparando', 0, '11:00', 'j']] },
+  ];
 
   function crear(hoy) {
     const F = (dias) => sumarDias(hoy, -dias);
     const T = (dias, hora) => F(dias) + 'T' + hora;
     const auditoria = [];
-    const log = (ts, tipo, accion, detalle) => auditoria.push({ id: 'a' + (auditoria.length + 1), ts: ts, usuario: USUARIO, tipo: tipo, accion: accion, detalle: detalle });
+    const log = (ts, tipo, accion, detalle, usuario) => auditoria.push({ id: 'a' + (auditoria.length + 1), ts: ts, usuario: usuario || USUARIO, tipo: tipo, accion: accion, detalle: detalle });
     const gs = (n) => C.fmtGs(n);
 
     const db = {
-      version: 1,
+      version: 2,
       creado: hoy,
       config: {
         tienda: {
           nombre: 'berry.Glow_py',
           whatsapp: '0981 000 000',
           instagram: '@berry.glow_py',
-          direccion: 'Asunción, Paraguay',
+          direccion: 'Coronel Oviedo, Caaguazú',
           mensaje: '¡Gracias por elegirnos! Cualquier consulta, escribinos por WhatsApp.',
         },
         marca: { principal: '#A3195B', acento: '#E2A94F', logo: null },
@@ -167,12 +199,23 @@
         margenDefecto: 100,
         proximoRecibo: 101,
         cajaCerradaHasta: F(1),
+        envios: {
+          origen: { ciudad: 'Coronel Oviedo', departamento: 'Caaguazú' },
+          empresas: [
+            { nombre: 'NSA', servicio: 'Encomienda en ómnibus' },
+            { nombre: 'Crucero del Este', servicio: 'Encomienda en ómnibus' },
+            { nombre: 'AEX', servicio: 'Courier a domicilio' },
+            { nombre: 'Correo Paraguayo', servicio: 'Correo' },
+          ],
+          proximo: 1,
+        },
       },
       usuarios: [
-        { id: 'u1', nombre: 'Dueña', usuario: 'duena', rol: 'admin' },
-        { id: 'u2', nombre: 'Caja', usuario: 'caja', rol: 'vendedor' },
+        { id: 'u1', nombre: ARIEL, usuario: 'ariel', rol: 'admin' },
+        { id: 'u2', nombre: JAZMIN, usuario: 'jazmin', rol: 'vendedor', permisos: Object.assign({}, PERMISOS_VENDEDORA) },
       ],
       clientes: [], productos: [], pedidos: [], ventas: [], pagos: [], creditos: [], cierres: [], auditoria: [],
+      emisiones: [], envios: [],
     };
 
     db.config.historialTarifa.forEach((h) => log(h.ts, 'parametros', 'Tarifa del courier', C.fmtUSD(h.valor) + ' por kg'));
@@ -233,10 +276,11 @@
         return { productoId: p.id, descripcion: p.descripcion, cantidad: cantidad, precio: p.precioVenta, costoUnitGs: p.costoTotalGs, margen: p.margen };
       });
       const t = C.totalesVenta(items, s.desc);
+      const deJazmin = DE_JAZMIN.has(n + 1);
       const v = {
         id: id, recibo: null, clienteId: s.c, fecha: F(s.d), ts: T(s.d, s.h), items: items,
         descuento: { tipo: s.desc ? s.desc.tipo : 'monto', valor: s.desc ? s.desc.valor : 0, monto: t.descuento },
-        subtotal: t.subtotal, total: t.total, anulada: null, usuario: USUARIO,
+        subtotal: t.subtotal, total: t.total, anulada: null, usuario: deJazmin ? JAZMIN : ARIEL,
       };
       db.ventas.push(v);
       eventos.push({ tipo: 'venta', ts: v.ts, obj: v });
@@ -258,7 +302,8 @@
         const pg = {
           id: 'pg' + String(db.pagos.length + 1).padStart(3, '0'), ventaId: id, clienteId: s.c,
           fecha: F(dias), ts: T(dias, hora), partes: partes, total: total, excedente: 0,
-          recibo: null, inicial: idx === 0 && dias === s.d, grupo: null, anulado: null, usuario: USUARIO,
+          recibo: null, inicial: idx === 0 && dias === s.d, grupo: null, anulado: null,
+          usuario: dias <= 12 && (deJazmin || dias < s.d) ? JAZMIN : ARIEL,
         };
         pagado += total;
         db.pagos.push(pg);
@@ -286,11 +331,11 @@
     for (const e of eventos) {
       if (e.tipo === 'venta') {
         const v = e.obj;
-        log(v.ts, 'ventas', 'Venta registrada', 'Recibo ' + numero(v.recibo) + ' · ' + nombre(v.clienteId) + ' · ' + gs(v.total));
+        log(v.ts, 'ventas', 'Venta registrada', 'Recibo ' + numero(v.recibo) + ' · ' + nombre(v.clienteId) + ' · ' + gs(v.total), v.usuario);
       } else if (e.tipo === 'pago') {
         const pg = e.obj;
         const formas = pg.partes.map((x) => FORMAS[x.forma] + ' ' + gs(x.monto)).join(' + ');
-        log(pg.ts, 'cobros', pg.inicial ? 'Pago inicial' : 'Cobro registrado', 'Recibo ' + numero(pg.recibo) + ' · ' + nombre(pg.clienteId) + ' · ' + formas);
+        log(pg.ts, 'cobros', pg.inicial ? 'Pago inicial' : 'Cobro registrado', 'Recibo ' + numero(pg.recibo) + ' · ' + nombre(pg.clienteId) + ' · ' + formas, pg.usuario);
       } else if (e.tipo === 'anulacion') {
         const v = e.obj;
         log(v.anulada.ts, 'anulaciones', 'Venta anulada', 'Recibo ' + numero(v.recibo) + ' · ' + nombre(v.clienteId) + ' · motivo: ' + v.anulada.motivo);
@@ -304,6 +349,50 @@
       }
     }
 
+    // Recibos emitidos (impresos o mandados por WhatsApp): cada emisión queda registrada con quién la hizo.
+    const MEDIOS = ['WhatsApp', 'impresión'];
+    db.ventas.filter((v) => !v.anulada && BG_diasAtras(v.fecha) <= 12).forEach((v, i) => {
+      const ts = v.ts.slice(0, 11) + sumarMinutos(v.ts.slice(11, 16), 3);
+      const medio = MEDIOS[i % 2];
+      db.emisiones.push({ id: 'em' + (db.emisiones.length + 1), ts: ts, usuario: v.usuario, recibo: v.recibo, ventaId: v.id, clienteId: v.clienteId, medio: medio });
+      log(ts, 'recibos', 'Recibo emitido', 'Recibo ' + numero(v.recibo) + ' · ' + nombre(v.clienteId) + ' · por ' + medio, v.usuario);
+    });
+    function BG_diasAtras(fecha) {
+      const a = fecha.split('-').map(Number);
+      const b = hoy.split('-').map(Number);
+      return Math.round((new Date(b[0], b[1] - 1, b[2]) - new Date(a[0], a[1] - 1, a[2])) / 86400000);
+    }
+
+    // Envíos por encomienda o courier (con su historial de estados).
+    const cfgEnvio = db.config.envios;
+    const ETIQ = { preparando: 'Envío preparado', listo: 'Listo para despachar', despachado: 'Envío despachado', entregado: 'Envío entregado' };
+    ENVIOS.forEach((e) => {
+      const v = db.ventas[e.venta - 1];
+      const cli = db.clientes.find((c) => c.id === v.clienteId);
+      const numeroEnvio = 'E-' + String(cfgEnvio.proximo++).padStart(4, '0');
+      const historial = e.estados.map(([estado, dias, hora, q]) => ({ estado: estado, ts: T(dias, hora), usuario: q === 'j' ? JAZMIN : ARIEL, nota: estado === 'despachado' ? 'Guía ' + e.guia : '' }));
+      const ultimo = historial[historial.length - 1];
+      const pagadoV = db.pagos.filter((p) => p.ventaId === v.id && !p.anulado).reduce((s, p) => s + p.total, 0);
+      const hecho = (k) => {
+        const n = e.estados.length;
+        if (k === 'datos') return true;
+        if (k === 'comprobante') return n >= 3;
+        return n >= 2;
+      };
+      db.envios.push({
+        id: 'en' + (db.envios.length + 1), numero: numeroEnvio, ventaId: v.id, clienteId: cli.id,
+        creado: historial[0].ts, usuario: historial[0].usuario, estado: ultimo.estado, historial: historial,
+        destinatario: { nombre: cli.nombre, ci: cli.ci, telefono: cli.telefono, ciudad: e.ciudad, departamento: e.depto, modalidad: e.modalidad, agencia: e.agencia || '', direccion: e.direccion || '', referencia: e.referencia || '' },
+        empresa: e.empresa, bultos: e.bultos, pesoKg: e.peso, contenido: 'Ropa y accesorios',
+        detalle: v.items.map((it) => it.cantidad + ' × ' + it.descripcion).join(', '),
+        valorDeclarado: v.total, fragil: false, seco: true,
+        flete: { monto: e.flete, paga: e.paga }, cobro: e.cobro === 'saldo' ? v.total - pagadoV : 0,
+        guia: e.guia, notas: '',
+        checklist: { datos: hecho('datos'), embalaje: hecho('embalaje'), etiqueta: hecho('etiqueta'), prohibidos: hecho('prohibidos'), cobro: hecho('cobro'), comprobante: hecho('comprobante') },
+      });
+      historial.forEach((h) => log(h.ts, 'envios', ETIQ[h.estado], numeroEnvio + ' · ' + cli.nombre + ' → ' + e.ciudad + ' (' + e.empresa + ')' + (h.nota ? ' · ' + h.nota : ''), h.usuario));
+    });
+
     // Cierres de caja de los últimos días (el sistema bloquea esos movimientos).
     [3, 2, 1].forEach((dias) => {
       const fecha = F(dias);
@@ -311,11 +400,12 @@
         .filter((pg) => pg.fecha === fecha && !pg.anulado)
         .reduce((s, pg) => s + pg.partes.filter((x) => x.forma === 'efectivo').reduce((a, x) => a + x.monto, 0), 0);
       const falta = dias === 3 ? 5000 : 0;
+      const quien = dias === 3 ? ARIEL : JAZMIN;
       db.cierres.push({
-        fecha: fecha, ts: T(dias, '20:15'), usuario: USUARIO, efectivoEsperado: efectivo, efectivoContado: efectivo - falta,
+        fecha: fecha, ts: T(dias, '20:15'), usuario: quien, efectivoEsperado: efectivo, efectivoContado: efectivo - falta,
         nota: falta ? 'Faltaron ' + gs(falta) + ': se dio mal un vuelto.' : '',
       });
-      log(T(dias, '20:15'), 'caja', 'Cierre de caja', fmtFecha(fecha) + ' · efectivo contado ' + gs(efectivo - falta) + (falta ? ' (faltaron ' + gs(falta) + ')' : ' · sin diferencias'));
+      log(T(dias, '20:15'), 'caja', 'Cierre de caja', fmtFecha(fecha) + ' · efectivo contado ' + gs(efectivo - falta) + (falta ? ' (faltaron ' + gs(falta) + ')' : ' · sin diferencias'), quien);
     });
 
     auditoria.sort((a, b) => b.ts.localeCompare(a.ts));
@@ -326,6 +416,11 @@
   function fmtFecha(iso) {
     return iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4);
   }
+  function sumarMinutos(hhmm, min) {
+    const [h, m] = hhmm.split(':').map(Number);
+    const t = Math.min(h * 60 + m + min, 23 * 60 + 59);
+    return String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0');
+  }
 
-  root.BGSeed = { crear: crear };
+  root.BGSeed = { crear: crear, PERMISOS_VENDEDORA: PERMISOS_VENDEDORA };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

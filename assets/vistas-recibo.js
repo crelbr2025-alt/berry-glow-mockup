@@ -126,8 +126,8 @@
       + '<label><input type="radio" name="formato" value="ticket"' + (formato === 'ticket' ? ' checked' : '') + '>Ticket 80 mm</label></div>'
       + '<button type="button" class="btn" data-accion="imprimir">' + icon('print') + 'Imprimir</button>'
       + '<button type="button" class="btn" data-accion="pdf">' + icon('download') + 'Guardar PDF</button>'
-      + '<a class="btn btn-primary" href="' + BG.waLink(cli, textoWa) + '" target="_blank" rel="noopener">' + icon('chat') + 'WhatsApp</a></div></div>'
-      + '<div class="no-print" id="privacidad"></div>'
+      + '<a class="btn btn-primary" data-accion="whatsapp" href="' + BG.waLink(cli, textoWa) + '" target="_blank" rel="noopener">' + icon('chat') + 'WhatsApp</a></div></div>'
+      + '<div class="no-print row" id="privacidad"></div>'
       + '<div class="receipt-stage">' + htmlRecibo(d, formato) + '</div>'
       + '<p class="hint no-print">El PDF se genera con «Imprimir → Guardar como PDF». En el sistema final el PDF se crea directo y se adjunta en WhatsApp.</p>'
       + '</div>';
@@ -142,11 +142,16 @@
         aplicarFormato(formato);
         const revisar = () => {
           const h = BG.revisarPrivacidad($('#recibo', root), ventasOrig);
-          $('#privacidad', root).innerHTML = h.length
+          const em = BG.emisionesDe(d.numero, cli.id);
+          const ult = em[em.length - 1];
+          $('#privacidad', root).innerHTML = (h.length
             ? '<p class="privacy privacy-bad">' + icon('alert') + 'Atención: el recibo muestra ' + esc(h.join(', ')) + '.</p>'
-            : '<p class="privacy privacy-ok">' + icon('shield') + 'Control automático: el recibo no muestra costos, dólares, cotización, envío, margen, ganancia ni proveedor.</p>';
+            : '<p class="privacy privacy-ok">' + icon('shield') + 'Control automático: el recibo no muestra costos, dólares, cotización, envío, margen, ganancia ni proveedor.</p>')
+            + '<p class="small muted">' + (em.length ? 'Emitido ' + em.length + (em.length === 1 ? ' vez' : ' veces') + ' · la última por ' + esc(ult.usuario) + ' el ' + BG.fmtFecha(ult.ts.slice(0, 10)) + ' a las ' + BG.fmtHora(ult.ts) + ' (' + esc(ult.medio) + ')'
+              : 'Todavía no se emitió: al imprimir o mandar por WhatsApp queda registrado quién lo hizo.') + '</p>';
         };
         revisar();
+        const emitir = (medio) => { BG.registrarEmision({ recibo: d.numero, ventaId: tipo === 'v' ? args[1] : null, clienteId: cli.id, medio: medio }); revisar(); };
         root.addEventListener('change', (e) => {
           if (e.target.name !== 'formato') return;
           formato = e.target.value;
@@ -157,8 +162,10 @@
         root.addEventListener('click', (e) => {
           const b = e.target.closest('[data-accion]');
           if (!b) return;
+          if (b.dataset.accion === 'whatsapp') { emitir('WhatsApp'); return; }
           if (b.dataset.accion === 'pdf') BG.toast('En la ventana que se abre, elegí «Guardar como PDF» como impresora.');
           if (b.dataset.accion === 'imprimir' || b.dataset.accion === 'pdf') {
+            emitir(b.dataset.accion === 'pdf' ? 'PDF' : 'impresión');
             setTimeout(() => { try { window.print(); } catch (err) { /* el visor puede bloquearlo */ } }, b.dataset.accion === 'pdf' ? 600 : 0);
             if (BG.publicado) setTimeout(() => BG.toast('Si no se abrió la impresión, es porque esta versión por link no lo permite: probalo en el mockup de la computadora.'), 1500);
           }
@@ -191,9 +198,14 @@
       + CRITERIOS.map((c) => '<div class="check' + (hechos.indexOf(c.id) >= 0 ? ' is-done' : '') + '"><input type="checkbox" id="g-' + c.id + '" data-check="' + c.id + '"' + (hechos.indexOf(c.id) >= 0 ? ' checked' : '') + '>'
         + '<label class="check-title" for="g-' + c.id + '">' + esc(c.titulo) + '</label><p class="check-how">' + esc(c.como) + '</p>'
         + '<button type="button" class="btn btn-sm check-go" data-ir="' + c.ir + '">Probarlo</button></div>').join('') + '</div>'
+      + '<h3>Lo nuevo: perfiles, envíos y resumen</h3><ul class="bullets">'
+      + '<li><strong>Perfiles:</strong> arriba, «Ver como» cambia entre Ariel (dueño: ve y cambia todo) y Jazmín (vendedora: vende, cobra, emite recibos y prepara envíos, sin costos ni dólar, y sin anular).</li>'
+      + '<li><strong>Permisos:</strong> como Ariel, en Ajustes → Usuarios y permisos, quitale a Jazmín por ejemplo «Registrar cobros» y fijate cómo desaparece esa opción en su vista.</li>'
+      + '<li><strong>Envíos:</strong> desde una venta, «Preparar envío» → completá la lista de control → «Imprimir etiqueta» → «Registrar despacho» con el número de guía → «Marcar entregado».</li>'
+      + '<li><strong>Resumen gráfico:</strong> como Ariel, en el menú «Resumen»: ventas y cobros por semana, deudas por antigüedad, envíos por ciudad y la actividad de cada usuario.</li>'
+      + '<li><strong>Registro de todo:</strong> en Auditoría se puede filtrar por usuario; también quedan los recibos emitidos y cada paso de los envíos.</li></ul>'
       + '<h3>Otras reglas para probar</h3><ul class="bullets">'
-      + '<li><strong>Vista vendedor/a:</strong> «Ver como: Vendedor/a» oculta costos, dólar y márgenes.</li>'
-      + '<li><strong>Anular en vez de borrar:</strong> en una venta, «Anular venta» pide motivo y queda en la auditoría. Si el día tiene la caja cerrada pide el PIN (1234).</li>'
+      + '<li><strong>Anular en vez de borrar:</strong> solo Ariel puede anular; pide motivo y queda en la auditoría. Si el día tiene la caja cerrada pide el PIN (1234).</li>'
       + '<li><strong>Saldo a favor:</strong> Leticia Ferreira tiene ₲ 50.000 a favor por una venta anulada; se ofrece al venderle.</li>'
       + '<li><strong>Cobro de más:</strong> si pagan más que la deuda, el sistema pregunta si es vuelto o saldo a favor.</li>'
       + '<li><strong>Vender sin precio:</strong> el «Pañuelo de seda» no tiene costo cargado y el sistema no deja venderlo.</li>'
@@ -210,7 +222,8 @@
       + '<li><strong>Redondeo:</strong> el brief dice "al millar" pero su ejemplo ₲ 87.300 → ₲ 90.000 es redondear a 10.000. Está ajustable.</li>'
       + '<li><strong>Cotización:</strong> "cambio el dólar y todo se recalcula" choca con "congelar la cotización". Propuesta: el costo queda congelado y el precio de venta del stock se actualiza solo si lo confirmás.</li>'
       + '<li><strong>Stock:</strong> el mockup no deja vender más unidades de las cargadas. ¿Se queda así o pasa a la fase 2?</li>'
-      + '<li><strong>Recibo:</strong> ¿hoja A4 o ticket de 80 mm? ¿Se agrega el teléfono de la clienta?</li></ul>'
+      + '<li><strong>Recibo:</strong> ¿hoja A4 o ticket de 80 mm? ¿Se agrega el teléfono de la clienta?</li>'
+      + '<li><strong>Envíos:</strong> las empresas de la lista son ejemplos: ¿con cuáles mandan desde Coronel Oviedo? ¿Imprimen en etiquetas de 10 × 15 cm o en hoja A4?</li></ul>'
       + '<div class="card-foot"><span class="small muted">¿Querés empezar de cero?</span><button type="button" class="btn btn-sm btn-danger" data-guia="reiniciar">' + icon('refresh', 'i-sm') + 'Reiniciar datos</button></div>';
   }
 

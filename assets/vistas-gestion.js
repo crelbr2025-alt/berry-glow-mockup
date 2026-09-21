@@ -323,10 +323,22 @@
       + '<div class="row"><label class="color-field" for="aj-c1"><input id="aj-c1" type="color" value="' + esc(cfg.marca.principal) + '"> Color principal</label>'
       + '<label class="color-field" for="aj-c2"><input id="aj-c2" type="color" value="' + esc(cfg.marca.acento) + '"> Color de acento</label></div></section>'
       + '<section class="card stack"><div class="card-head"><h2>Usuarios y permisos</h2></div>'
-      + '<div class="table-wrap table-bare"><table class="table table-compact"><thead><tr><th>Usuario</th><th>Puede</th></tr></thead><tbody>'
-      + '<tr><td><div class="t-title">Dueña</div><div class="t-sub">usuario «duena» · administradora</div></td><td>Todo: productos, costos, precios, ventas, cobros, cotización, reportes, auditoría y ajustes.</td></tr>'
-      + '<tr><td><div class="t-title">Caja</div><div class="t-sub">usuario «caja» · vendedor/a (previsto)</div></td><td>Vender, cobrar, consultar saldos y la lista de precios. <strong>No ve</strong> costos, dólar, envío, márgenes ni ganancias.</td></tr>'
-      + '</tbody></table></div><p class="hint">Probalo con «Ver como: Vendedor/a» arriba (o en «Más» desde el celular).</p></section>'
+      + BG.db.usuarios.map((u) => u.rol === 'admin'
+        ? '<div class="callout">' + icon('shield') + '<div><strong>' + esc(u.nombre) + ' · dueño</strong> (usuario «' + esc(u.usuario) + '»). Ve y cambia todo: costos, dólar, precios, anulaciones, ajustes, resumen y la auditoría de lo que hace cada usuario.</div></div>'
+        : '<div class="stack"><p><strong>' + esc(u.nombre) + ' · vendedora</strong> <span class="small muted">(usuario «' + esc(u.usuario) + '»)</span></p><div class="perm-list">'
+          + '<label class="perm is-fixed"><input type="checkbox" checked disabled><strong>Ver ventas, clientes y cuánto debe cada uno</strong><span>Siempre, es la base de su perfil.</span></label>'
+          + BG.PERMISOS.map(([k, t, desc]) => '<label class="perm"><input type="checkbox" data-permiso="' + k + '" data-usuario="' + u.id + '"' + (u.permisos && u.permisos[k] ? ' checked' : '') + '><strong>' + esc(t) + '</strong><span>' + esc(desc) + '</span></label>').join('')
+          + '<label class="perm is-fixed"><input type="checkbox" disabled><strong>Costos, dólar, márgenes, anular, resumen y ajustes</strong><span>Nunca: son solo del dueño.</span></label>'
+          + '</div></div>').join('')
+      + '<p class="hint">Probalo con «Ver como» arriba (o en «Más» desde el celular). Cada cambio de permisos queda en la auditoría.</p></section>'
+      + '<section class="card stack"><div class="card-head"><h2>Envíos</h2></div>'
+      + '<p class="small">Salen de <strong>' + esc(cfg.envios.origen.ciudad) + ' (' + esc(cfg.envios.origen.departamento) + ')</strong>. Empresas con las que mandan (aparecen al preparar un envío):</p>'
+      + '<ul class="list" id="aj-empresas">' + cfg.envios.empresas.map((x, i) => '<li class="list-row"><span class="row-main"><span class="row-title">' + esc(x.nombre) + '</span><span class="row-sub">' + esc(x.servicio) + '</span></span>'
+        + '<button type="button" class="btn-icon" data-quitar-empresa="' + i + '" aria-label="Quitar ' + esc(x.nombre) + '">' + icon('x') + '</button></li>').join('') + '</ul>'
+      + '<div class="fields"><div class="field"><label for="emp-nombre">Empresa</label><input id="emp-nombre" class="input" autocomplete="off" placeholder="Nombre"></div>'
+      + '<div class="field"><label for="emp-servicio">Servicio</label><select id="emp-servicio" class="select"><option>Encomienda en ómnibus</option><option>Courier a domicilio</option><option>Correo</option><option>Transportadora</option></select></div></div>'
+      + '<div class="form-actions"><button type="button" class="btn" data-accion="agregar-empresa">' + icon('plus') + 'Agregar empresa</button></div>'
+      + '<p class="hint">Las de la lista son ejemplos: dejá las que realmente usan.</p></section>'
       + '<section class="card stack"><div class="card-head"><h2>Respaldo y exportación</h2></div>'
       + '<div class="note-mock">' + icon('info') + '<span>En el sistema real: copia de seguridad automática de la base de datos todos los días, guardada fuera del servidor. En este mockup los datos viven solo en este navegador.</span></div>'
       + (BG.publicado
@@ -344,6 +356,11 @@
         root.addEventListener('change', async (e) => {
           const t = e.target;
           if (t.name === 'aj-margen') { BG.cambiarMargenDefecto(Number(t.value)); BG.toast('Margen preseleccionado: ' + t.value + ' %.'); }
+          if (t.dataset && t.dataset.permiso) {
+            const u = BG.db.usuarios.find((x) => x.id === t.dataset.usuario);
+            BG.actualizarPermiso(u.id, t.dataset.permiso, t.checked);
+            BG.toast((t.checked ? 'Habilitado para ' : 'Quitado a ') + u.nombre + ': ' + BG.PERMISOS.find((p) => p[0] === t.dataset.permiso)[1].toLowerCase() + '.');
+          }
           if (t.id === 'aj-c1' || t.id === 'aj-c2') { BG.guardarMarca(t.id === 'aj-c1' ? { principal: t.value } : { acento: t.value }); BG.toast('Color guardado: se ve en el recibo.'); }
           if (t.id === 'aj-file' && t.files[0]) {
             const file = t.files[0];
@@ -355,8 +372,25 @@
           }
         });
         root.addEventListener('click', async (e) => {
+          const q = e.target.closest('[data-quitar-empresa]');
+          if (q) {
+            const lista = cfg.envios.empresas.slice();
+            const [quitada] = lista.splice(Number(q.dataset.quitarEmpresa), 1);
+            BG.guardarEmpresasEnvio(lista);
+            BG.toast('Quitada: ' + quitada.nombre + '.');
+            BG.render();
+            return;
+          }
           const b = e.target.closest('[data-accion], [data-exportar]');
           if (!b) return;
+          if (b.dataset.accion === 'agregar-empresa') {
+            const nombre = $('#emp-nombre', root).value.trim();
+            if (nombre.length < 2) { BG.toast('Escribí el nombre de la empresa.', 'error'); $('#emp-nombre', root).focus(); return; }
+            BG.guardarEmpresasEnvio(cfg.envios.empresas.concat([{ nombre: nombre, servicio: $('#emp-servicio', root).value }]));
+            BG.toast('Agregada: ' + nombre + '.');
+            BG.render();
+            return;
+          }
           if (b.dataset.exportar) { descargarCSV(b.dataset.exportar + '_' + BG.hoy() + '.csv', EXPORTAR[b.dataset.exportar]()); BG.toast('Descargado: ' + b.dataset.exportar + '.'); return; }
           const a = b.dataset.accion;
           if (a === 'guardar-tienda') {
@@ -384,15 +418,18 @@
   /* ── Auditoría ───────────────────────────────────────────────────────── */
 
   BG.vistas.auditoria = () => {
-    const e = { tipo: 'todo', q: '', max: 120 };
-    const tipos = [['todo', 'Todo'], ['ventas', 'Ventas'], ['cobros', 'Cobros'], ['anulaciones', 'Anulaciones'], ['productos', 'Productos'], ['parametros', 'Parámetros'], ['caja', 'Caja'], ['clientes', 'Clientes'], ['seguridad', 'Autorizaciones']];
-    const html = '<div class="page"><div class="page-head"><div><h1 class="page-title">Auditoría</h1><p class="page-sub">Cada venta, cobro, anulación y cambio de parámetros queda con fecha, hora y usuario. No se puede editar.</p></div></div>'
+    const e = { tipo: 'todo', usuario: 'todos', q: '', max: 120 };
+    const tipos = [['todo', 'Todo'], ['ventas', 'Ventas'], ['cobros', 'Cobros'], ['recibos', 'Recibos'], ['envios', 'Envíos'], ['anulaciones', 'Anulaciones'], ['productos', 'Productos'], ['parametros', 'Parámetros'], ['caja', 'Caja'], ['clientes', 'Clientes'], ['seguridad', 'Permisos y PIN']];
+    const html = '<div class="page"><div class="page-head"><div><h1 class="page-title">Auditoría</h1><p class="page-sub">Cada venta, cobro, recibo emitido, envío, anulación y cambio de parámetros queda con fecha, hora y usuario. No se puede editar.</p></div></div>'
       + '<div class="toolbar"><div class="search-box grow"><label class="sr-only" for="q-aud">Buscar en la auditoría</label>' + icon('search') + '<input id="q-aud" class="search-input" type="search" autocomplete="off" placeholder="Buscar (cliente, recibo, motivo…)"></div>'
-      + '<div class="chips" role="group">' + tipos.map(([k, t]) => '<button type="button" class="chip" data-tipo="' + k + '" aria-pressed="' + (e.tipo === k) + '">' + t + '</button>').join('') + '</div></div>'
+      + '<div class="chips" role="group" aria-label="Usuario">' + [['todos', 'Todos']].concat(BG.db.usuarios.map((u) => [u.nombre, u.nombre]))
+        .map(([k, t]) => '<button type="button" class="chip" data-usuario="' + esc(k) + '" aria-pressed="' + (e.usuario === k) + '">' + esc(t) + '</button>').join('') + '</div></div>'
+      + '<div class="chips" role="group" aria-label="Tipo">' + tipos.map(([k, t]) => '<button type="button" class="chip" data-tipo="' + k + '" aria-pressed="' + (e.tipo === k) + '">' + t + '</button>').join('') + '</div>'
       + '<div id="aud-lista"></div></div>';
     const pintar = (root) => {
       const q = BG.norm(e.q.trim());
-      const lista = BG.db.auditoria.filter((a) => (e.tipo === 'todo' || a.tipo === e.tipo) && (!q || BG.norm(a.accion + ' ' + a.detalle + ' ' + a.usuario).includes(q)));
+      const lista = BG.db.auditoria.filter((a) => (e.tipo === 'todo' || a.tipo === e.tipo) && (e.usuario === 'todos' || a.usuario === e.usuario)
+        && (!q || BG.norm(a.accion + ' ' + a.detalle + ' ' + a.usuario).includes(q)));
       $('#aud-lista', root).innerHTML = '<div class="table-wrap"><table class="table table-compact"><thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>'
         + lista.slice(0, e.max).map((a) => '<tr><td class="nowrap">' + BG.fmtFecha(a.ts.slice(0, 10)) + ' ' + BG.fmtHora(a.ts) + '</td><td>' + esc(a.usuario) + '</td><td class="nowrap"><strong>' + esc(a.accion) + '</strong></td><td>' + esc(a.detalle) + '</td></tr>').join('')
         + '</tbody></table></div>' + (lista.length > e.max ? '<button type="button" class="btn btn-sm list-top" data-accion="mas">Mostrar más (' + (lista.length - e.max) + ')</button>' : '')
@@ -406,6 +443,8 @@
         root.addEventListener('click', (ev) => {
           const c = ev.target.closest('[data-tipo]');
           if (c) { e.tipo = c.dataset.tipo; $$('[data-tipo]', root).forEach((x) => x.setAttribute('aria-pressed', String(x === c))); pintar(root); }
+          const u = ev.target.closest('[data-usuario]');
+          if (u) { e.usuario = u.dataset.usuario; $$('[data-usuario]', root).forEach((x) => x.setAttribute('aria-pressed', String(x === u))); pintar(root); }
           if (ev.target.closest('[data-accion="mas"]')) { e.max += 200; pintar(root); }
         });
       },

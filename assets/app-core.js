@@ -57,12 +57,33 @@
   BG.reiniciarDatos = () => { BG.db = window.BGSeed.crear(hoy()); BG.guardar(); };
 
   BG.db = BG.leer(KEY_DB);
-  if (!BG.db || BG.db.version !== 1) BG.reiniciarDatos();
+  if (!BG.db || BG.db.version !== 2) BG.reiniciarDatos();
   BG.sesion = BG.leer(KEY_SESION);
+  if (BG.sesion && !BG.db.usuarios.some((u) => u.id === BG.sesion.usuarioId)) BG.sesion = null;
   BG.guardarSesion = () => { if (BG.sesion) BG.escribir(KEY_SESION, BG.sesion); else { try { localStorage.removeItem(KEY_SESION); } catch (e) { /* sin almacenamiento */ } } };
 
   BG.esDuena = () => !!BG.sesion && BG.sesion.rol === 'admin';
   BG.usuario = () => BG.db.usuarios.find((u) => u.id === (BG.sesion && BG.sesion.usuarioId)) || BG.db.usuarios[0];
+  BG.nombreDuena = () => (BG.db.usuarios.find((u) => u.rol === 'admin') || { nombre: 'el dueño' }).nombre;
+
+  /** Lo que el dueño puede habilitar o quitar a la vendedora (Ajustes → Usuarios y permisos). */
+  BG.PERMISOS = [
+    ['emitirRecibos', 'Emitir recibos', 'Imprimir, guardar en PDF y mandar por WhatsApp.'],
+    ['registrarVentas', 'Registrar ventas', 'Nueva venta con el precio de lista; sin ver costos ni márgenes.'],
+    ['registrarCobros', 'Registrar cobros', 'Pagos, pagos mixtos y señas.'],
+    ['editarClientes', 'Crear y editar clientes', 'Alta de clientes nuevos y corrección de datos.'],
+    ['verPrecios', 'Ver la lista de precios', 'Precios de venta y stock, sin costos.'],
+    ['verCaja', 'Caja del día', 'Ver lo cobrado y hacer el cierre (reabrir es solo del dueño).'],
+    ['prepararEnvios', 'Preparar envíos', 'Cargar envíos, imprimir etiquetas y registrar el despacho.'],
+  ];
+  /** ¿El usuario actual puede hacer esto? El dueño puede todo; la vendedora, lo que tenga habilitado. */
+  BG.puede = (permiso) => {
+    if (!BG.sesion) return false;
+    if (BG.esDuena()) return true;
+    if (permiso === 'verVentas' || permiso === 'verClientes') return true;
+    const u = BG.usuario();
+    return !!(u && u.permisos && u.permisos[permiso]);
+  };
 
   /* ── Consultas del dominio ───────────────────────────────────────────── */
 
@@ -225,6 +246,8 @@
     cash: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9.5v5M18 9.5v5"/>',
     box: '<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5v-9Z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
     chart: '<path d="M3.5 20h17"/><path d="M6.5 16v-5M11.5 16V6M16.5 16V9"/>',
+    pie: '<path d="M11 4a8 8 0 1 0 8.5 9H11V4Z"/><path d="M14 2.8a8 8 0 0 1 7 7.2h-7V2.8Z"/>',
+    box2: '<path d="M4 8h16v12H4z"/><path d="M4 8l2-4h12l2 4M10 12h4"/>',
     register: '<rect x="3" y="9" width="18" height="11" rx="2"/><path d="M7 9V4.5h10V9"/><path d="M7 13h2M11 13h2M15 13h2M7 16.5h10"/>',
     sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
     audit: '<rect x="5" y="3.5" width="14" height="17" rx="2"/><path d="M9 3.5V5h6V3.5M9 10h6M9 13.5h6M9 17h3"/>',
@@ -472,26 +495,35 @@
 
   /* ── Navegación ──────────────────────────────────────────────────────── */
 
+  // [ruta, pantalla, requisito]: true = solo el dueño; texto = permiso que tiene que tener la vendedora.
   const RUTAS = [
     [/^\/inicio$/, 'inicio'],
     [/^\/clientes$/, 'clientes'],
-    [/^\/clientes\/nuevo$/, 'clienteForm'],
-    [/^\/clientes\/([\w-]+)\/editar$/, 'clienteForm'],
+    [/^\/clientes\/nuevo$/, 'clienteForm', 'editarClientes'],
+    [/^\/clientes\/([\w-]+)\/editar$/, 'clienteForm', 'editarClientes'],
     [/^\/clientes\/([\w-]+)$/, 'cliente'],
     [/^\/ventas$/, 'ventas'],
-    [/^\/ventas\/nueva$/, 'ventaNueva'],
+    [/^\/ventas\/nueva$/, 'ventaNueva', 'registrarVentas'],
     [/^\/ventas\/([\w-]+)$/, 'venta'],
-    [/^\/cobros\/nuevo$/, 'cobro'],
-    [/^\/productos$/, 'productos'],
+    [/^\/cobros\/nuevo$/, 'cobro', 'registrarCobros'],
+    [/^\/productos$/, 'productos', 'verPrecios'],
     [/^\/productos\/nuevo$/, 'productoNuevo', true],
     [/^\/productos\/pedido$/, 'pedido', true],
     [/^\/productos\/importar$/, 'importar', true],
+    [/^\/envios$/, 'envios', 'prepararEnvios'],
+    [/^\/envios\/nuevo$/, 'envioForm', 'prepararEnvios'],
+    [/^\/envios\/([\w-]+)\/editar$/, 'envioForm', 'prepararEnvios'],
+    [/^\/envios\/([\w-]+)\/etiqueta$/, 'etiqueta', 'prepararEnvios'],
+    [/^\/envios\/([\w-]+)$/, 'envio', 'prepararEnvios'],
+    [/^\/resumen$/, 'resumen', true],
     [/^\/reportes$/, 'reportes', true],
-    [/^\/caja$/, 'caja'],
+    [/^\/caja$/, 'caja', 'verCaja'],
     [/^\/ajustes$/, 'ajustes', true],
     [/^\/auditoria$/, 'auditoria', true],
-    [/^\/recibo\/(v|c)\/([\w-]+)$/, 'recibo'],
+    [/^\/recibo\/(v|c)\/([\w-]+)$/, 'recibo', 'emitirRecibos'],
   ];
+  const permitido = (req) => !req || (req === true ? BG.esDuena() : BG.puede(req));
+  BG.rutaPermitida = (path) => { const x = RUTAS.find((r) => r[0].test(path)); return !x || permitido(x[2]); };
 
   function ruta() {
     const h = location.hash.replace(/^#/, '') || '/inicio';
@@ -503,18 +535,21 @@
 
   function navItems() {
     const d = BG.esDuena();
-    return [
+    const items = [
       ['inicio', 'Inicio', 'home'],
       ['clientes', 'Clientes', 'users'],
       ['ventas', 'Ventas', 'bag'],
-      ['cobros/nuevo', 'Cobrar', 'cash'],
-      ['caja', 'Caja del día', 'register'],
+      BG.puede('registrarCobros') && ['cobros/nuevo', 'Cobrar', 'cash'],
+      BG.puede('prepararEnvios') && ['envios', 'Envíos', 'truck'],
+      BG.puede('verCaja') && ['caja', 'Caja del día', 'register'],
       ['-'],
-      ['productos', d ? 'Productos' : 'Lista de precios', 'box'],
+      BG.puede('verPrecios') && ['productos', d ? 'Productos' : 'Lista de precios', 'box'],
+      d && ['resumen', 'Resumen', 'pie'],
       d && ['reportes', 'Reportes', 'chart'],
       d && ['auditoria', 'Auditoría', 'audit'],
       d && ['ajustes', 'Ajustes', 'sliders'],
     ].filter(Boolean);
+    return items[items.length - 1][0] === '-' ? items.slice(0, -1) : items;
   }
 
   function renderChrome() {
@@ -528,20 +563,28 @@
       + '<div class="params-row"><span>Courier</span><strong>' + C.fmtUSD(cfg.tarifa.valor) + '/kg</strong></div>'
       + '<a href="#/ajustes">Cambiar parámetros</a></div>' : '')
       + '<div class="user-box"><span class="avatar">' + esc(iniciales(u.nombre)) + '</span><div class="grow"><strong>' + esc(u.nombre) + '</strong>'
-      + '<small>' + (d ? 'Dueña · ve todo' : 'Vendedor/a · sin costos') + '</small></div>'
+      + '<small>' + (d ? 'Dueño · ve y cambia todo' : 'Vendedora · sin costos') + '</small></div>'
       + '<button type="button" class="btn-icon" data-action="salir" aria-label="Cerrar sesión" title="Cerrar sesión">' + icon('logout') + '</button></div>';
+    const duenio = BG.db.usuarios.find((x) => x.rol === 'admin');
+    const vendedora = BG.db.usuarios.find((x) => x.rol === 'vendedor');
     $('#topbar-actions').innerHTML = '<span class="small muted hide-mobile">Ver como</span>'
       + '<div class="seg hide-mobile" role="group" aria-label="Ver el sistema como">'
-      + '<button type="button" data-action="rol" data-rol="admin" aria-pressed="' + d + '">Dueña</button>'
-      + '<button type="button" data-action="rol" data-rol="vendedor" aria-pressed="' + !d + '">Vendedor/a</button></div>'
+      + '<button type="button" data-action="rol" data-rol="admin" aria-pressed="' + d + '">' + esc(duenio.nombre) + '</button>'
+      + '<button type="button" data-action="rol" data-rol="vendedor" aria-pressed="' + !d + '">' + esc(vendedora.nombre) + '</button></div>'
       + '<button type="button" class="btn btn-quiet hide-mobile" data-action="guia">' + icon('guide') + '<span>Guía</span></button>'
-      + '<a class="btn btn-primary hide-mobile" href="#/ventas/nueva">' + icon('plus') + '<span>Nueva venta</span></a>'
+      + (BG.puede('registrarVentas') ? '<a class="btn btn-primary hide-mobile" href="#/ventas/nueva">' + icon('plus') + '<span>Nueva venta</span></a>' : '')
       + '<button type="button" class="btn-icon show-mobile" data-action="guia" aria-label="Guía de prueba">' + icon('guide') + '</button>';
-    $('#tabbar').innerHTML = '<a class="tab" href="#/inicio" data-nav="inicio">' + icon('home') + '<span>Inicio</span></a>'
-      + '<a class="tab" href="#/clientes" data-nav="clientes">' + icon('users') + '<span>Clientes</span></a>'
-      + '<a class="tab tab-main" href="#/ventas/nueva" data-nav="ventas/nueva"><span class="tab-bubble">' + icon('plus') + '</span><span>Vender</span></a>'
-      + '<a class="tab" href="#/cobros/nuevo" data-nav="cobros/nuevo">' + icon('cash') + '<span>Cobrar</span></a>'
-      + '<button type="button" class="tab" data-action="mas">' + icon('more') + '<span>Más</span></button>';
+    const tabs = ['<a class="tab" href="#/inicio" data-nav="inicio">' + icon('home') + '<span>Inicio</span></a>',
+      '<a class="tab" href="#/clientes" data-nav="clientes">' + icon('users') + '<span>Clientes</span></a>'];
+    tabs.push(BG.puede('registrarVentas')
+      ? '<a class="tab tab-main" href="#/ventas/nueva" data-nav="ventas/nueva"><span class="tab-bubble">' + icon('plus') + '</span><span>Vender</span></a>'
+      : '<a class="tab" href="#/ventas" data-nav="ventas">' + icon('bag') + '<span>Ventas</span></a>');
+    if (BG.puede('registrarCobros')) tabs.push('<a class="tab" href="#/cobros/nuevo" data-nav="cobros/nuevo">' + icon('cash') + '<span>Cobrar</span></a>');
+    else if (BG.puede('prepararEnvios')) tabs.push('<a class="tab" href="#/envios" data-nav="envios">' + icon('truck') + '<span>Envíos</span></a>');
+    tabs.push('<button type="button" class="tab" data-action="mas">' + icon('more') + '<span>Más</span></button>');
+    const tabbar = $('#tabbar');
+    tabbar.innerHTML = tabs.join('');
+    tabbar.style.gridTemplateColumns = 'repeat(' + tabs.length + ', 1fr)';
     marcarNav(ruta().path);
   }
   BG.renderChrome = renderChrome;
@@ -564,7 +607,7 @@
     const input = $('#q-global');
     BG.combobox(input, $('#q-global-lista'), {
       buscar: (q) => BG.buscarClientes(q, 6).map((c) => ({ grupo: 'Clientes', c: c }))
-        .concat(BG.buscarProductos(q, 5).map((p) => ({ grupo: BG.esDuena() ? 'Productos' : 'Lista de precios', p: p }))),
+        .concat(BG.puede('verPrecios') ? BG.buscarProductos(q, 5).map((p) => ({ grupo: BG.esDuena() ? 'Productos' : 'Lista de precios', p: p })) : []),
       pintar: (it, q) => {
         if (it.c) return BG.filaCliente(it.c, q);
         const p = it.p;
@@ -606,27 +649,28 @@
     const d = BG.esDuena();
     const sheet = $('#sheet');
     const item = (href, ic, texto) => '<a class="sheet-item" href="' + href + '" data-cerrar-hoja>' + icon(ic) + texto + '</a>';
+    const otro = BG.db.usuarios.find((x) => x.rol === (d ? 'vendedor' : 'admin'));
     sheet.innerHTML = '<div class="sheet-grip"></div><div class="sheet-list">'
       + item('#/ventas', 'bag', 'Ventas')
-      + item('#/productos', 'box', d ? 'Productos' : 'Lista de precios')
-      + item('#/caja', 'register', 'Caja del día')
-      + (d ? item('#/reportes', 'chart', 'Reportes') + item('#/auditoria', 'audit', 'Auditoría') + item('#/ajustes', 'sliders', 'Ajustes') : '')
+      + (BG.puede('prepararEnvios') ? item('#/envios', 'truck', 'Envíos') : '')
+      + (BG.puede('verPrecios') ? item('#/productos', 'box', d ? 'Productos' : 'Lista de precios') : '')
+      + (BG.puede('verCaja') ? item('#/caja', 'register', 'Caja del día') : '')
+      + (d ? item('#/resumen', 'pie', 'Resumen') + item('#/reportes', 'chart', 'Reportes') + item('#/auditoria', 'audit', 'Auditoría') + item('#/ajustes', 'sliders', 'Ajustes') : '')
       + '<div class="sheet-sep"></div>'
       + '<button type="button" class="sheet-item" data-action="guia" data-cerrar-hoja>' + icon('guide') + 'Guía de prueba</button>'
-      + '<button type="button" class="sheet-item" data-action="rol" data-rol="' + (d ? 'vendedor' : 'admin') + '" data-cerrar-hoja>' + icon('eye') + (d ? 'Ver como vendedor/a' : 'Volver a la vista de la dueña') + '</button>'
+      + '<button type="button" class="sheet-item" data-action="rol" data-rol="' + (d ? 'vendedor' : 'admin') + '" data-cerrar-hoja>' + icon('eye') + 'Ver como ' + esc(otro.nombre) + (d ? ' (vendedora)' : ' (dueño)') + '</button>'
       + '<button type="button" class="sheet-item" data-action="salir" data-cerrar-hoja>' + icon('logout') + 'Cerrar sesión</button></div>';
     sheet.onclick = (e) => { if (e.target === sheet || e.target.closest('[data-cerrar-hoja]')) sheet.close(); };
     sheet.showModal();
   }
 
   BG.cambiarRol = (rol) => {
-    BG.sesion = { usuarioId: rol === 'admin' ? 'u1' : 'u2', rol: rol };
+    const u = BG.db.usuarios.find((x) => x.rol === rol) || BG.db.usuarios[0];
+    BG.sesion = { usuarioId: u.id, rol: u.rol };
     BG.guardarSesion();
     renderChrome();
-    BG.toast(rol === 'admin' ? 'Vista de la dueña: se ven costos y márgenes.' : 'Vista de vendedor/a: sin costos, cotización ni márgenes.');
-    const r = ruta();
-    const soloDuena = RUTAS.some((x) => x[2] && x[0].test(r.path));
-    if (rol !== 'admin' && soloDuena) BG.ir('#/inicio'); else BG.render();
+    BG.toast(u.rol === 'admin' ? 'Vista de ' + u.nombre + ' (dueño): se ve y se cambia todo.' : 'Vista de ' + u.nombre + ' (vendedora): sin costos, dólar ni márgenes.');
+    if (BG.rutaPermitida(ruta().path)) BG.render(); else BG.ir('#/inicio');
   };
 
   document.addEventListener('click', (e) => {
@@ -655,7 +699,7 @@
   BG.render = function () {
     const guia = $('#guide');
     if (!BG.sesion) {
-      document.body.classList.remove('route-recibo');
+      document.body.classList.remove('route-print');
       BG.vistas.login();
       return;
     }
@@ -663,9 +707,9 @@
     const r = ruta();
     let nombre = null;
     let args = [];
-    for (const [re, n, soloDuena] of RUTAS) {
+    for (const [re, n, req] of RUTAS) {
       const m = re.exec(r.path);
-      if (m) { nombre = soloDuena && !BG.esDuena() ? 'sinPermiso' : n; args = m.slice(1); break; }
+      if (m) { nombre = permitido(req) ? n : 'sinPermiso'; args = m.slice(1); break; }
     }
     if (!nombre) { location.replace('#/inicio'); return; }
     const vista = BG.vistas[nombre](args, r.params);
@@ -675,7 +719,7 @@
     viejo.replaceWith(main);
     main.innerHTML = vista.html;
     document.title = 'Gestión berry.Glow';
-    document.body.classList.toggle('route-recibo', nombre === 'recibo');
+    document.body.classList.toggle('route-print', nombre === 'recibo' || nombre === 'etiqueta');
     marcarNav(r.path);
     BG.enlazarCampos(main);
     if (vista.mount) vista.mount(main, args, r.params);

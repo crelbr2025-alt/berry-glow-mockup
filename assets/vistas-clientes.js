@@ -22,15 +22,15 @@
       + '<p class="error-text" id="login-error" hidden></p>'
       + '<button class="btn btn-primary btn-lg btn-block" type="submit">Entrar</button></form>'
       + '<div class="demo-hint"><span><strong>Mockup:</strong> el ingreso es de mentira y no pide contraseña. Elegí con qué vista entrar:</span>'
-      + '<div class="row"><button type="button" class="btn btn-sm" data-demo="duena">Entrar como Dueña</button>'
-      + '<button type="button" class="btn btn-sm" data-demo="caja">Entrar como Caja (vendedor/a)</button></div>'
-      + '<span class="small">La vista de caja no muestra costos, cotización ni márgenes.</span></div>'
+      + '<div class="row"><button type="button" class="btn btn-sm" data-demo="ariel">Entrar como Ariel (dueño)</button>'
+      + '<button type="button" class="btn btn-sm" data-demo="jazmin">Entrar como Jazmín (vendedora)</button></div>'
+      + '<span class="small">Jazmín vende, cobra, emite recibos y prepara envíos, pero no ve costos, dólar ni márgenes, y no puede anular. Ariel ve todo y el registro de lo que hace cada una.</span></div>'
       + '</div></div>';
     const entrar = (usuario) => {
       const u = BG.db.usuarios.find((x) => x.usuario === String(usuario || '').trim().toLowerCase());
       if (!u) {
         const er = $('#login-error');
-        er.textContent = 'Ese usuario no existe. En el mockup hay dos: «duena» y «caja».';
+        er.textContent = 'Ese usuario no existe. En el mockup hay dos: «ariel» y «jazmin».';
         er.hidden = false;
         return;
       }
@@ -44,8 +44,9 @@
   };
 
   BG.vistas.sinPermiso = () => ({
-    html: '<div class="page"><div class="callout callout-warn">' + icon('lock') + '<div><strong>Esta pantalla es solo para la dueña.</strong> '
-      + 'Tiene costos, cotización o márgenes. <button type="button" class="linkish" data-action="rol" data-rol="admin">Volver a la vista de la dueña</button></div></div></div>',
+    html: '<div class="page"><div class="callout callout-warn">' + icon('lock') + '<div><strong>Tu usuario no tiene permiso para esta pantalla.</strong> '
+      + 'Puede tener costos, dólar o márgenes, o ' + esc(BG.nombreDuena()) + ' todavía no te habilitó esta tarea (Ajustes → Usuarios y permisos). '
+      + '<button type="button" class="linkish" data-action="rol" data-rol="admin">Ver como ' + esc(BG.nombreDuena()) + '</button></div></div></div>',
   });
 
   /* ── Inicio ──────────────────────────────────────────────────────────── */
@@ -96,39 +97,51 @@
     const cerrada = BG.cajaCerrada(h);
     const cfg = BG.db.config;
 
+    const qb = (href, ic, t, sub, main) => '<a class="quick-btn' + (main ? ' is-main' : '') + '" href="' + href + '"><span class="qi">' + icon(ic) + '</span><span>' + t + '<small>' + sub + '</small></span></a>';
+    const rapidas = [
+      BG.puede('registrarVentas') && qb('#/ventas/nueva', 'bag', 'Nueva venta', 'Uno o varios artículos', true),
+      BG.puede('registrarCobros') && qb('#/cobros/nuevo', 'cash', 'Registrar cobro', 'También pagos mixtos'),
+      duena && qb('#/productos/nuevo', 'tag', 'Cargar producto', 'Calcula el precio de venta'),
+      BG.puede('prepararEnvios') && qb('#/envios/nuevo', 'truck', 'Preparar envío', 'Etiqueta lista para pegar'),
+      BG.puede('editarClientes') && qb('#/clientes/nuevo', 'user', 'Nuevo cliente', 'Avisa si ya existe'),
+      !duena && BG.puede('verPrecios') && qb('#/productos', 'tag', 'Lista de precios', 'Precios y stock'),
+    ].filter(Boolean).slice(0, 4);
+    const pendientes = BG.db.envios.filter((x) => x.estado === 'preparando' || x.estado === 'listo').sort((a, b) => a.creado.localeCompare(b.creado));
+    const cardEnvios = BG.puede('prepararEnvios') ? '<section class="card card-flush" aria-labelledby="t-env"><div class="card-head pad"><h2 id="t-env">Envíos para despachar</h2><a class="small" href="#/envios">Ver envíos</a></div>'
+      + (pendientes.length ? '<ul class="list list-plain">' + pendientes.slice(0, 5).map((x) => '<li><a class="list-row" href="#/envios/' + x.id + '"><span class="avatar">' + icon('truck', 'i-sm') + '</span>'
+        + '<span class="row-main"><span class="row-title">' + esc(x.destinatario.nombre) + ' → ' + esc(x.destinatario.ciudad) + '</span><span class="row-sub">' + esc(x.numero) + ' · ' + esc(x.empresa) + '</span></span>'
+        + '<span class="row-end">' + BG.pillEnvio(x) + '</span></a></li>').join('') + '</ul>' : '<p class="empty">No hay envíos pendientes.</p>') + '</section>' : '';
     const html = '<div class="page">'
       + '<div class="page-head"><div><p class="eyebrow">' + BG.fmtFechaLarga(h) + '</p><h1 class="page-title">' + saludo + ', ' + esc(BG.usuario().nombre) + '</h1></div></div>'
-      + '<section class="quick" aria-label="Acciones rápidas">'
-      + '<a class="quick-btn is-main" href="#/ventas/nueva"><span class="qi">' + icon('bag') + '</span><span>Nueva venta<small>Uno o varios artículos</small></span></a>'
-      + '<a class="quick-btn" href="#/cobros/nuevo"><span class="qi">' + icon('cash') + '</span><span>Registrar cobro<small>También pagos mixtos</small></span></a>'
-      + (duena ? '<a class="quick-btn" href="#/productos/nuevo"><span class="qi">' + icon('tag') + '</span><span>Cargar producto<small>Calcula el precio de venta</small></span></a>'
-        : '<a class="quick-btn" href="#/productos"><span class="qi">' + icon('tag') + '</span><span>Lista de precios<small>Precios y stock</small></span></a>')
-      + '<a class="quick-btn" href="#/clientes/nuevo"><span class="qi">' + icon('user') + '</span><span>Nuevo cliente<small>Avisa si ya existe</small></span></a>'
-      + '</section>'
+      + (rapidas.length ? '<section class="quick" aria-label="Acciones rápidas">' + rapidas.join('') + '</section>' : '')
       + '<section class="tiles" aria-label="Resumen">'
       + '<div class="tile"><span class="tile-label">Vendido hoy</span><span class="tile-value">' + gs(sum(ventasHoy, (v) => v.total)) + '</span><span class="tile-sub">' + ventasHoy.length + (ventasHoy.length === 1 ? ' venta' : ' ventas') + '</span></div>'
       + '<div class="tile"><span class="tile-label">Cobrado hoy</span><span class="tile-value">' + gs(cobrado) + '</span><span class="tile-sub">' + desglose + '</span></div>'
       + '<div class="tile"><span class="tile-label">Por cobrar</span><span class="tile-value">' + gs(sum(deudores, (d) => d.saldo)) + '</span><span class="tile-sub">' + deudores.length + ' clientes con saldo</span></div>'
       + (duena ? '<div class="tile"><span class="tile-label">Ganancia de ' + BG.MESES[Number(mes.slice(5, 7)) - 1] + '</span><span class="tile-value">' + gs(sum(ventasMes, BG.gananciaVenta)) + '</span>'
-        + '<span class="tile-sub">Precio de venta − costo congelado · solo la dueña la ve</span></div>' : '')
+        + '<span class="tile-sub">Precio de venta − costo congelado · solo ' + esc(BG.nombreDuena()) + ' la ve</span></div>' : '')
       + '</section>'
       + '<div class="grid-2">'
       + '<section class="card card-flush" aria-labelledby="t-deben"><div class="card-head pad"><h2 id="t-deben">Clientes que deben</h2><a class="small" href="#/clientes?filtro=deben">Ver los ' + deudores.length + '</a></div>'
       + (deudores.length ? '<ul class="list list-plain">' + deudores.slice(0, 6).map((d) => '<li><a class="list-row" href="#/clientes/' + d.c.id + '">' + BG.filaCliente(d.c) + '</a></li>').join('') + '</ul>'
         : '<p class="empty">Nadie debe nada.</p>')
       + '</section>'
-      + '<section class="card card-flush" aria-labelledby="t-hoy"><div class="card-head pad"><h2 id="t-hoy">Movimientos de hoy</h2><a class="small" href="#/caja">Caja del día</a></div>'
+      + '<section class="card card-flush" aria-labelledby="t-hoy"><div class="card-head pad"><h2 id="t-hoy">Movimientos de hoy</h2>'
+      + (BG.puede('verCaja') ? '<a class="small" href="#/caja">Caja del día</a>' : '<a class="small" href="#/ventas?periodo=hoy">Ventas de hoy</a>') + '</div>'
       + (movs.length ? '<ul class="list list-plain">' + movs.slice(0, 7).map(filaMovimiento).join('') + '</ul>' : '<p class="empty">Todavía no hay ventas ni cobros hoy.</p>')
       + '</section></div>'
-      + '<div class="grid-2">'
+      + '<div class="grid-2">' + cardEnvios
+      + '<div class="stack">'
       + '<div class="callout ' + (cu.ok ? 'callout-good' : 'callout-bad') + '">' + icon(cu.ok ? 'shield' : 'alert') + '<div><strong>'
       + (cu.ok ? 'Las cuentas por cobrar cuadran.' : 'Hay un descuadre en las cuentas por cobrar.') + '</strong> La suma de saldos cliente por cliente (' + gs(cu.porClientes) + ') '
       + (cu.ok ? 'coincide con' : 'no coincide con') + ' el total por cobrar del sistema (' + gs(cu.libro) + '). Se controla solo, cada vez que se abre esta pantalla.</div></div>'
-      + '<div class="callout">' + icon(cerrada ? 'lock' : 'register') + '<div><strong>Caja de hoy: ' + (cerrada ? 'cerrada' : 'abierta') + '.</strong> '
-      + (cerrada ? 'Los movimientos de hoy ya no se pueden anular sin autorización.' : 'Al terminar el día hacé el arqueo: el sistema compara el efectivo contado con lo cobrado.')
-      + ' <a href="#/caja">Ir a la caja</a>'
-      + (duena ? '<br><span class="small">Dólar ' + C.fmtCot(cfg.cotizacion.valor) + ' desde el ' + BG.fmtFecha(cfg.cotizacion.fecha) + ' · Courier ' + C.fmtUSD(cfg.tarifa.valor) + '/kg · <a href="#/ajustes">cambiar</a></span>' : '')
-      + '</div></div></div>'
+      + (BG.puede('verCaja') ? '<div class="callout">' + icon(cerrada ? 'lock' : 'register') + '<div><strong>Caja de hoy: ' + (cerrada ? 'cerrada' : 'abierta') + '.</strong> '
+        + (cerrada ? 'Los movimientos de hoy ya no se pueden anular sin autorización.' : 'Al terminar el día hacé el arqueo: el sistema compara el efectivo contado con lo cobrado.')
+        + ' <a href="#/caja">Ir a la caja</a>'
+        + (duena ? '<br><span class="small">Dólar ' + C.fmtCot(cfg.cotizacion.valor) + ' desde el ' + BG.fmtFecha(cfg.cotizacion.fecha) + ' · Courier ' + C.fmtUSD(cfg.tarifa.valor) + '/kg · <a href="#/ajustes">cambiar</a></span>' : '')
+        + '</div></div>' : '')
+      + (duena ? '<a class="callout callout-link" href="#/resumen">' + icon('pie') + '<div><strong>Resumen gráfico</strong> Ventas y cobros por semana, deudas por antigüedad, envíos por ciudad y lo que hizo cada usuario.</div></a>' : '')
+      + '</div></div>'
       + '</div>';
     return { html: html };
   };
@@ -143,7 +156,7 @@
     const chip = (f, t, n) => '<button type="button" class="chip" data-filtro="' + f + '" aria-pressed="' + (e.filtro === f) + '">' + t + ' <span class="count">' + n + '</span></button>';
     const html = '<div class="page">'
       + '<div class="page-head"><div><h1 class="page-title">Clientes</h1><p class="page-sub">' + todos.length + ' clientes · ' + gs(sum(BG.listaDeudores(), (d) => d.saldo)) + ' por cobrar</p></div>'
-      + '<div class="page-actions"><a class="btn btn-primary" href="#/clientes/nuevo">' + icon('plus') + 'Nuevo cliente</a></div></div>'
+      + (BG.puede('editarClientes') ? '<div class="page-actions"><a class="btn btn-primary" href="#/clientes/nuevo">' + icon('plus') + 'Nuevo cliente</a></div>' : '') + '</div>'
       + '<div class="toolbar">'
       + '<div class="search-box grow"><label class="sr-only" for="q-clientes">Buscar cliente</label>' + icon('search')
       + '<input id="q-clientes" class="search-input" type="search" autocomplete="off" placeholder="Nombre, CI/RUC o teléfono (tolera errores de tipeo)" value="' + esc(e.q) + '"></div>'
@@ -221,6 +234,7 @@
     const ventas = BG.ventasDeCliente(c.id).slice().sort((a, b) => b.ts.localeCompare(a.ts));
     const libro = libroCliente(c.id);
     const creditos = BG.db.creditos.filter((x) => x.clienteId === c.id);
+    const envios = BG.db.envios.filter((x) => x.clienteId === c.id).sort((a, b) => b.creado.localeCompare(a.creado));
     const primerNombre = c.nombre.split(' ')[0];
     const textoWa = saldo > 0
       ? 'Hola ' + primerNombre + ', te escribimos de ' + BG.db.config.tienda.nombre + '. Tu saldo pendiente es de ' + gs(saldo) + '. ¡Gracias!'
@@ -233,23 +247,29 @@
       + '<span>' + icon('phone', 'i-sm') + esc(c.telefono) + '</span>'
       + (c.direccion ? '<span>' + esc(c.direccion) + '</span>' : '') + (c.email ? '<span>' + esc(c.email) + '</span>' : '')
       + '<span class="muted">Cliente desde el ' + BG.fmtFecha(c.alta) + '</span></p></div>'
-      + '<div class="page-actions"><a class="btn btn-quiet" href="#/clientes/' + c.id + '/editar">' + icon('edit') + 'Editar</a></div></div>'
+      + (BG.puede('editarClientes') ? '<div class="page-actions"><a class="btn btn-quiet" href="#/clientes/' + c.id + '/editar">' + icon('edit') + 'Editar</a></div>' : '') + '</div>'
       + '<section class="balance' + (saldo > 0 ? '' : ' is-clear') + '" aria-label="Saldo">'
       + '<div><p class="balance-label">' + (saldo > 0 ? 'Saldo pendiente' : 'Cuenta al día') + '</p><p class="hero-figure">' + gs(saldo) + '</p>'
       + '<p class="balance-sub">' + (pend.length ? 'En ' + pend.length + (pend.length === 1 ? ' compra' : ' compras') + ' · la más antigua ' + BG.haceDias(pend[0].fecha) : 'No debe nada.')
       + (aFavor > 0 ? ' · <strong class="pill pill-good">' + icon('check') + 'Saldo a favor ' + gs(aFavor) + '</strong>' : '') + '</p></div>'
       + '<div class="balance-actions">'
-      + (saldo > 0 ? '<a class="btn btn-primary" href="#/cobros/nuevo?cliente=' + c.id + '">' + icon('cash') + 'Registrar cobro</a>' : '')
-      + '<a class="btn' + (saldo > 0 ? '' : ' btn-primary') + '" href="#/ventas/nueva?cliente=' + c.id + '">' + icon('bag') + 'Nueva venta</a>'
-      + '<a class="btn" href="#/recibo/c/' + c.id + '">' + icon('receipt') + 'Estado de cuenta</a>'
+      + (saldo > 0 && BG.puede('registrarCobros') ? '<a class="btn btn-primary" href="#/cobros/nuevo?cliente=' + c.id + '">' + icon('cash') + 'Registrar cobro</a>' : '')
+      + (BG.puede('registrarVentas') ? '<a class="btn' + (saldo > 0 ? '' : ' btn-primary') + '" href="#/ventas/nueva?cliente=' + c.id + '">' + icon('bag') + 'Nueva venta</a>' : '')
+      + (BG.puede('emitirRecibos') ? '<a class="btn" href="#/recibo/c/' + c.id + '">' + icon('receipt') + 'Estado de cuenta</a>' : '')
+      + (BG.puede('prepararEnvios') ? '<a class="btn" href="#/envios/nuevo?cliente=' + c.id + '">' + icon('truck') + 'Preparar envío</a>' : '')
       + '<a class="btn" href="' + BG.waLink(c, textoWa) + '" target="_blank" rel="noopener">' + icon('chat') + 'WhatsApp</a>'
       + '</div></section>'
       + (c.notas ? '<div class="callout">' + icon('info') + '<div>' + esc(c.notas) + '</div></div>' : '')
       + '<div><div class="tabs" role="tablist">'
       + '<button type="button" class="tab-btn" role="tab" aria-selected="true" data-tab="compras">Compras (' + ventas.length + ')</button>'
       + '<button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="movs">Movimientos</button>'
+      + (envios.length ? '<button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="envios">Envíos (' + envios.length + ')</button>' : '')
       + (creditos.length ? '<button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="favor">Saldo a favor</button>' : '')
       + '</div>'
+      + (envios.length ? '<div data-panel="envios" hidden><ul class="list list-top">' + envios.map((x) => '<li><a class="list-row" href="' + (BG.puede('prepararEnvios') ? '#/envios/' + x.id : '#/clientes/' + c.id) + '">'
+        + '<span class="avatar">' + icon('truck', 'i-sm') + '</span><span class="row-main"><span class="row-title">' + esc(x.numero) + ' → ' + esc(x.destinatario.ciudad) + '</span>'
+        + '<span class="row-sub">' + esc(x.empresa) + (x.guia ? ' · guía ' + esc(x.guia) : '') + ' · ' + BG.fmtFecha(x.creado.slice(0, 10)) + '</span></span>'
+        + '<span class="row-end">' + BG.pillEnvio(x) + '</span></a></li>').join('') + '</ul></div>' : '')
       + '<div data-panel="compras">' + (ventas.length ? '<ul class="list list-top">' + ventas.map(filaVenta).join('') + '</ul>' : '<p class="empty">Todavía no compró nada.</p>') + '</div>'
       + '<div data-panel="movs" hidden><div class="table-wrap list-top"><table class="table"><thead><tr><th>Fecha</th><th>Concepto</th><th class="num">Compra</th><th class="num">Pago</th><th class="num">Saldo</th></tr></thead><tbody>'
       + libro.map((m) => '<tr><td class="nowrap">' + BG.fmtFecha(m.fecha) + '</td><td><span class="' + (m.anulado ? 'strike' : '') + '">' + esc(m.concepto) + '</span>'
