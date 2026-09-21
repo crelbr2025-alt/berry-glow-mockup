@@ -881,6 +881,22 @@ dialog { color: var(--ink); }
 .act-nums dd { margin: 0; font-size: 20px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .act-monto { display: block; font-size: 12.5px; font-weight: 500; color: var(--muted); white-space: nowrap; }
 @media (max-width: 520px) { .act-nums { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ── Precios especiales ───────────────────────────────────────────────── */
+
+.precio-lista { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 12px; }
+.especial { display: flex; flex-direction: column; gap: 12px; padding: 12px; border: 1.5px dashed var(--berry); border-radius: 12px; }
+.precio-info { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; font-size: 13.5px; }
+.precio-info:empty { display: none; }
+.precio-info .pill { white-space: nowrap; }
+.card-sub { margin: 0; font-size: 13px; font-weight: 700; color: var(--ink-2); }
+.t-especial { color: var(--berry); font-weight: 700; }
+/* Artículos de una venta en el celular: las cuatro columnas entran sin deslizar. */
+@media (max-width: 520px) {
+  .table-venta { font-size: 13px; }
+  .table-venta th, .table-venta td { padding-left: 6px; padding-right: 6px; }
+  .table-venta th { letter-spacing: 0.02em; }
+}
 a.callout-link { color: inherit; }
 a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 .tile-link { color: inherit; }

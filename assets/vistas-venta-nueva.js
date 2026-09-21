@@ -125,7 +125,7 @@
       + '<div class="lines" id="s-items"></div><div id="s-desc" class="stack"></div></section>'
       + '</div><div class="stack sticky-col">'
       + '<section class="card stack" aria-labelledby="t-cob"><h2 class="card-title" id="t-cob">3 · Cobro</h2>'
-      + '<dl class="summary" id="s-totales"></dl><div id="s-credito"></div>'
+      + '<dl class="summary" id="s-totales"></dl><div id="s-ganancia"></div><div id="s-credito"></div>'
       + '<div class="row"><span class="field-label grow">¿Cuánto paga ahora?</span>'
       + '<button type="button" class="chip" data-accion="todo">Paga todo</button><button type="button" class="chip" data-accion="nada">A cuenta</button></div>'
       + '<div class="lines" id="s-pagos"></div>'
@@ -143,7 +143,14 @@
       if (p.precioVenta && !ops.some((o) => o.precio === p.precioVenta)) ops.unshift({ id: 'lista', etiqueta: 'Lista', precio: p.precioVenta, margen: p.margen });
       return ops;
     };
-    const descuento = () => (!b.desc.activo || !b.desc.valor ? null : { tipo: b.desc.tipo, valor: b.desc.valor });
+    const descuento = () => (!b.desc.activo || !b.desc.valor ? null : { tipo: b.desc.tipo, valor: b.desc.valor, motivo: b.desc.motivo || null, nota: b.desc.nota || '' });
+    // Precio especial: cualquier precio distinto del de lista. La vendedora lo pone con motivo; el dueño, con motivo opcional.
+    const puedeEspecial = duena || BG.puede('preciosEspeciales');
+    const esEspecial = (it) => it.precio !== BG.producto(it.productoId).precioVenta;
+    const costoDe = (it) => BG.producto(it.productoId).costoTotalGs || 0;
+    const infoItem = (it) => (esEspecial(it) && it.precio > 0 ? BG.infoPrecio(BG.evaluarPrecio(it.precio, costoDe(it)), true) : '');
+    const camposMotivo = BG.camposMotivo;
+    const actualizarInfo = (i) => { const el = $('#pi-' + i, root); if (el) el.innerHTML = infoItem(b.items[i]); };
     const calc = () => {
       const t = C.totalesVenta(b.items.map((it) => ({ precio: it.precio || 0, cantidad: it.cantidad })), descuento());
       const favor = b.clienteId ? BG.creditoCliente(b.clienteId) : 0;
@@ -164,9 +171,21 @@
         precio = '<div class="price-opts" role="radiogroup" aria-label="Precio de ' + esc(p.descripcion) + '">'
           + opcionesDe(p).map((o) => '<label class="price-opt"><input type="radio" name="precio-' + i + '" value="' + o.id + '"' + (it.opcion === o.id ? ' checked' : '') + '><small>' + o.etiqueta + '</small><strong>' + gs(o.precio) + '</strong></label>').join('')
           + '<label class="price-opt"><input type="radio" name="precio-' + i + '" value="otro"' + (it.opcion === 'otro' ? ' checked' : '') + '><small>Otro</small><strong>A mano</strong></label></div>'
-          + (it.opcion === 'otro' ? '<div class="field"><label for="otro-' + i + '">Precio para esta venta</label>' + BG.campoGs('otro-' + i, it.precio, 'data-i="' + i + '" data-otro="1"') + '</div>' : '');
-      } else {
+          + (it.opcion === 'otro' ? '<div class="field"><label for="otro-' + i + '">Precio para esta venta</label>' + BG.campoGs('otro-' + i, it.precio, 'data-i="' + i + '" data-otro="1"') + '</div>' : '')
+          + (it.opcion === 'otro' || esEspecial(it) ? camposMotivo(i, it, false) : '')
+          + '<p class="precio-info" id="pi-' + i + '">' + infoItem(it) + '</p>';
+      } else if (!puedeEspecial) {
         precio = '<p class="small muted">Precio de lista ' + gs(it.precio) + '</p>';
+      } else if (!it.abierto) {
+        precio = '<div class="precio-lista"><span class="small muted">Precio de lista ' + gs(p.precioVenta) + '</span>'
+          + '<button type="button" class="btn-link" data-accion="especial" data-i="' + i + '">' + icon('tag', 'i-sm') + 'Poner precio especial</button></div>';
+      } else {
+        precio = '<div class="especial">'
+          + '<div class="precio-lista"><span class="small muted">Precio de lista <span class="strike">' + gs(p.precioVenta) + '</span></span>'
+          + '<button type="button" class="btn-link" data-accion="lista" data-i="' + i + '">Volver al precio de lista</button></div>'
+          + '<div class="field"><label for="esp-' + i + '">Precio especial por unidad</label>' + BG.campoGs('esp-' + i, it.precio, 'data-i="' + i + '" data-otro="1"') + '</div>'
+          + camposMotivo(i, it, true)
+          + '<p class="precio-info" id="pi-' + i + '">' + infoItem(it) + '</p></div>';
       }
       return '<div class="line"><div class="line-top"><div class="grow"><div class="row-title">' + esc(p.descripcion) + '</div>'
         + '<div class="row-sub">' + esc(p.categoria) + ' · quedan ' + BG.disponibles(p) + '</div></div>'
@@ -186,14 +205,14 @@
     };
     const pintarDescuento = () => {
       const host = $('#s-desc', root);
-      if (!b.items.length) { host.innerHTML = ''; return; }
+      if (!b.items.length || !puedeEspecial) { host.innerHTML = ''; return; }
       host.innerHTML = '<label class="check-inline"><input type="checkbox" id="d-activo"' + (b.desc.activo ? ' checked' : '') + '> Aplicar un descuento a esta venta</label>'
         + (b.desc.activo ? '<div class="row"><div class="seg" role="radiogroup" aria-label="Tipo de descuento">'
           + '<label><input type="radio" name="d-tipo" value="monto"' + (b.desc.tipo === 'monto' ? ' checked' : '') + '>En ₲</label>'
           + '<label><input type="radio" name="d-tipo" value="porcentaje"' + (b.desc.tipo === 'porcentaje' ? ' checked' : '') + '>En %</label></div>'
           + '<div class="grow">' + (b.desc.tipo === 'monto' ? BG.campoGs('d-valor', b.desc.valor, 'aria-label="Descuento en guaraníes"')
             : '<div class="suffix-wrap"><input id="d-valor" class="input" inputmode="decimal" autocomplete="off" value="' + esc(b.desc.valor ? C.fmtNum(b.desc.valor, 0, 2) : '') + '" aria-label="Descuento en porcentaje"><span class="suffix">%</span></div>')
-          + '</div></div>' : '');
+          + '</div></div>' + camposMotivo('d', b.desc, !duena) : '');
       BG.enlazarCampos(host);
     };
     const pintarPagos = () => {
@@ -212,6 +231,10 @@
           : '<dt><strong>Pagó de más</strong></dt><dd class="big due">' + gs(-t.resto) + '</dd><dd class="span hint">Al registrar vas a elegir si es vuelto o saldo a favor.</dd>');
       $('#ss-total', root).textContent = gs(t.total);
       b.items.forEach((it, i) => { const s = $('#sub-' + i, root); if (s) s.textContent = gs((it.precio || 0) * it.cantidad); });
+      // Ganancia de toda la venta: el dueño la ve siempre; la vendedora, cuando cambió algún precio o hizo descuento.
+      const conCambios = b.items.some(esEspecial) || t.descuento > 0;
+      const ev = b.items.length && t.total > 0 && (duena || (puedeEspecial && conCambios)) ? BG.evaluarPrecio(t.total, sum(b.items, (it) => costoDe(it) * it.cantidad)) : null;
+      $('#s-ganancia', root).innerHTML = ev ? '<p class="precio-info"><span class="muted">En toda la venta:</span> ' + BG.infoPrecio(ev) + '</p>' : '';
     };
 
     const agregar = (p) => {
@@ -222,7 +245,7 @@
       if (ya) ya.cantidad++;
       else {
         const op = opcionesDe(p).find((o) => o.precio === p.precioVenta);
-        b.items.push({ productoId: p.id, cantidad: 1, opcion: duena && op ? op.id : 'lista', precio: p.precioVenta, margen: p.margen });
+        b.items.push({ productoId: p.id, cantidad: 1, opcion: duena && op ? op.id : 'lista', precio: p.precioVenta, margen: p.margen, motivo: null, nota: '', abierto: false });
       }
       pintarItems();
       pintarTotales();
@@ -241,9 +264,29 @@
       }
       if (b.fecha > BG.hoy()) return fallar('La fecha de la venta no puede ser futura.');
       if (b.desc.activo && b.desc.tipo === 'porcentaje' && b.desc.valor && C.cmp(C.asQ(b.desc.valor), C.Q(100n)) > 0) return fallar('El descuento no puede pasar del 100 %.');
+      for (const it of b.items.filter(esEspecial)) {
+        const nombre = BG.producto(it.productoId).descripcion;
+        if (!duena && !it.motivo) return fallar('Elegí el motivo del precio especial de «' + nombre + '».');
+        if (it.motivo === 'Otro' && !(it.nota || '').trim()) return fallar('Contá en «Detalle» el motivo del precio especial de «' + nombre + '».');
+      }
+      if (descuento() && !duena && !b.desc.motivo) return fallar('Elegí el motivo del descuento.');
+      if (descuento() && b.desc.motivo === 'Otro' && !(b.desc.nota || '').trim()) return fallar('Contá en «Detalle» el motivo del descuento.');
       const t = calc();
       if (t.total <= 0) return fallar('El total quedó en ₲ 0: revisá el descuento.');
       if (BG.cajaCerrada(b.fecha) && !(await BG.pedirPin('La venta tiene fecha ' + BG.fmtFecha(b.fecha) + ', un día con la caja cerrada.'))) return;
+      // Si la vendedora baja del margen mínimo (o vende a pérdida), la venta necesita el PIN del dueño.
+      let autorizadoPor = null;
+      if (!duena) {
+        const bajos = b.items.filter((it) => esEspecial(it) && BG.pideAutorizacion(BG.evaluarPrecio(it.precio, costoDe(it))));
+        const ventaBaja = t.descuento > 0 && BG.pideAutorizacion(BG.evaluarPrecio(t.total, sum(b.items, (it) => costoDe(it) * it.cantidad)));
+        if (bajos.length || ventaBaja) {
+          const que = bajos.length
+            ? 'Precio especial debajo del mínimo que fijó ' + BG.nombreDuena() + ': ' + bajos.map((it) => BG.producto(it.productoId).descripcion).join(', ') + '.'
+            : 'El descuento deja la venta debajo del mínimo que fijó ' + BG.nombreDuena() + '.';
+          if (!(await BG.pedirPin(que))) return;
+          autorizadoPor = BG.nombreDuena();
+        }
+      }
       let partes = b.partes.filter((p) => p.monto > 0);
       let aCredito = 0;
       if (t.resto < 0) {
@@ -251,10 +294,18 @@
         if (!r) return;
         if (r === 'vuelto') partes = aplicarVuelto(partes, -t.resto); else aCredito = -t.resto;
       }
-      const res = BG.registrarVenta({
-        clienteId: b.clienteId, fecha: b.fecha, descuento: descuento(), partes: partes, usarCredito: t.credito, excedenteACredito: aCredito,
-        items: b.items.map((it) => ({ productoId: it.productoId, cantidad: it.cantidad, precio: it.precio, margen: it.margen })),
-      });
+      let res;
+      try {
+        res = BG.registrarVenta({
+          clienteId: b.clienteId, fecha: b.fecha, descuento: descuento(), partes: partes, usarCredito: t.credito, excedenteACredito: aCredito, autorizadoPor: autorizadoPor,
+          items: b.items.map((it) => ({
+            productoId: it.productoId, cantidad: it.cantidad, precio: it.precio, margen: it.margen,
+            motivo: esEspecial(it) ? it.motivo : null, nota: esEspecial(it) ? it.nota : '',
+          })),
+        });
+      } catch (er) {
+        return fallar(er.message);
+      }
       BG.ir('#/ventas/' + res.venta.id + '?nueva=1');
     };
 
@@ -285,6 +336,7 @@
           if (t.id === 'usar-credito') { b.usarCredito = t.checked; pintarTotales(); return; }
           if (t.id === 'd-activo') { b.desc.activo = t.checked; pintarDescuento(); pintarTotales(); return; }
           if (t.name === 'd-tipo') { b.desc.tipo = t.value; b.desc.valor = ''; pintarDescuento(); pintarTotales(); return; }
+          if (t.name && t.name.startsWith('motivo-')) { const k = t.name.slice(7); (k === 'd' ? b.desc : b.items[Number(k)]).motivo = t.value; return; }
           if (t.name && t.name.startsWith('precio-')) {
             const it = b.items[Number(t.name.slice(7))];
             it.opcion = t.value;
@@ -307,7 +359,8 @@
         });
         root.addEventListener('input', (e) => {
           const t = e.target;
-          if (t.dataset && t.dataset.otro) { b.items[Number(t.dataset.i)].precio = BG.leerGs(t); pintarTotales(); }
+          if (t.dataset && t.dataset.otro) { const i = Number(t.dataset.i); b.items[i].precio = BG.leerGs(t); actualizarInfo(i); pintarTotales(); }
+          if (t.dataset && t.dataset.nota != null) { const k = t.dataset.nota; (k === 'd' ? b.desc : b.items[Number(k)]).nota = t.value; }
           if (t.id === 'd-valor') {
             if (b.desc.tipo === 'monto') b.desc.valor = BG.leerGs(t);
             else { const q = C.parseNum(t.value, 'decimal'); b.desc.valor = q ? C.qToString(q) : ''; }
@@ -321,6 +374,17 @@
           const i = Number(btn.dataset.i);
           if (a === 'cambiar-cliente') { b.clienteId = null; pintarCliente(); pintarTotales(); $('#q-cli', root).focus(); }
           else if (a === 'quitar-item') { b.items.splice(i, 1); pintarItems(); pintarTotales(); }
+          else if (a === 'especial') {
+            b.items[i].abierto = true;
+            pintarItems();
+            const f = $('#esp-' + i, root);
+            if (f) { f.focus(); f.select(); }
+          } else if (a === 'lista') {
+            const it = b.items[i];
+            Object.assign(it, { abierto: false, precio: BG.producto(it.productoId).precioVenta, motivo: null, nota: '' });
+            pintarItems();
+            pintarTotales();
+          }
           else if (a === 'mas' || a === 'menos') {
             const it = b.items[i];
             const max = BG.disponibles(BG.producto(it.productoId));

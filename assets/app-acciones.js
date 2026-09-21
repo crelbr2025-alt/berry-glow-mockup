@@ -76,26 +76,50 @@
   }
   const textoPartes = (partes) => partes.map((x) => BG.FORMAS[x.forma] + ' ' + gs(x.monto)).join(' + ');
 
+  /** Texto de un cambio de precio para la auditoría (solo la ve el dueño, así que lleva el margen). */
+  const textoMargen = (precio, costo) => { const ev = BG.evaluarPrecio(precio, costo); return ev ? ' · margen ' + BG.fmtMargen(ev.margen) : ''; };
+  const textoMotivo = (motivo, nota) => (motivo ? ' · ' + motivo : '') + (nota ? ' (' + nota + ')' : '');
+
   /**
    * Registra una venta con su pago inicial (puede ser cero, parcial, total o mixto).
-   * d = { clienteId, fecha, items: [{ productoId, cantidad, precio, margen }], descuento: { tipo, valor },
-   *       partes: [{ forma, monto }] (lo que se queda la tienda), usarCredito, excedenteACredito }
+   * d = { clienteId, fecha, items: [{ productoId, cantidad, precio, margen, motivo, nota }], descuento: { tipo, valor, motivo, nota },
+   *       partes: [{ forma, monto }] (lo que se queda la tienda), usarCredito, excedenteACredito, autorizadoPor }
+   * Un precio distinto del de lista queda como «precio especial», con el precio de lista, el motivo y quién lo puso.
    */
   BG.registrarVenta = (d) => {
     const cli = BG.cliente(d.clienteId);
+    const quien = BG.usuario().nombre;
     const items = d.items.map((it) => {
       const p = BG.producto(it.productoId);
-      return { productoId: p.id, descripcion: p.descripcion, cantidad: it.cantidad, precio: it.precio, costoUnitGs: p.costoTotalGs, margen: it.margen == null ? null : it.margen };
+      const especial = it.precio !== p.precioVenta ? { motivo: it.motivo || null, nota: limpiar(it.nota), usuario: quien } : null;
+      return {
+        productoId: p.id, descripcion: p.descripcion, cantidad: it.cantidad, precio: it.precio, costoUnitGs: p.costoTotalGs,
+        margen: it.margen == null ? null : it.margen, precioLista: p.precioVenta, especial: especial,
+      };
     });
+    const conDescuento = !!(d.descuento && d.descuento.valor);
+    if (!BG.puede('preciosEspeciales') && (conDescuento || items.some((it) => it.especial))) {
+      throw new Error('Tu usuario vende con el precio de lista: ' + BG.nombreDuena() + ' no te habilitó los precios especiales.');
+    }
     const t = C.totalesVenta(items, d.descuento);
     const recibo = BG.nuevoRecibo();
     const v = {
       id: BG.uid('v'), recibo: recibo, clienteId: d.clienteId, fecha: d.fecha, ts: BG.ahora(), items: items,
-      descuento: { tipo: d.descuento ? d.descuento.tipo : 'monto', valor: d.descuento ? d.descuento.valor : 0, monto: t.descuento },
-      subtotal: t.subtotal, total: t.total, anulada: null, usuario: BG.usuario().nombre,
+      descuento: {
+        tipo: d.descuento ? d.descuento.tipo : 'monto', valor: d.descuento ? d.descuento.valor : 0, monto: t.descuento,
+        motivo: conDescuento ? d.descuento.motivo || null : null, nota: conDescuento ? limpiar(d.descuento.nota) : '',
+      },
+      subtotal: t.subtotal, total: t.total, anulada: null, usuario: quien, autorizadoPor: d.autorizadoPor || null, ajustes: [],
     };
     BG.db.ventas.push(v);
     BG.auditar('ventas', 'Venta registrada', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · ' + items.length + ' artículo(s) · ' + gs(v.total));
+    items.filter((it) => it.especial).forEach((it) => BG.auditar('precios', 'Precio especial', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + it.descripcion + ': lista ' + gs(it.precioLista) + ' → ' + gs(it.precio)
+      + textoMotivo(it.especial.motivo, it.especial.nota) + textoMargen(it.precio, it.costoUnitGs) + (v.autorizadoPor ? ' · autorizó ' + v.autorizadoPor : '')));
+    if (t.descuento) {
+      const costo = sum(items, (it) => (it.costoUnitGs || 0) * it.cantidad);
+      BG.auditar('precios', 'Descuento', 'Recibo ' + BG.fmtRecibo(recibo) + ' · −' + gs(t.descuento) + (v.descuento.tipo === 'porcentaje' ? ' (' + C.fmtNum(v.descuento.valor, 0, 2) + ' %)' : '')
+        + textoMotivo(v.descuento.motivo, v.descuento.nota) + textoMargen(t.total, costo) + ' en la venta' + (v.autorizadoPor ? ' · autorizó ' + v.autorizadoPor : ''));
+    }
 
     const partes = (d.partes || []).filter((x) => x.monto > 0).map((x) => ({ forma: x.forma, monto: x.monto }));
     if (d.usarCredito > 0) {
@@ -171,9 +195,59 @@
     return { pagos: pagos, recibo: recibo };
   };
 
+  /* ── Ajuste de precio después de vender ──────────────────────────────── */
+
+  /**
+   * Cambia el precio de un artículo de una venta ya registrada: el total y el saldo se recalculan y el cambio
+   * queda en la venta con el antes, el después, el motivo y quién lo hizo. No toca pagos ni la caja:
+   * si el cliente ya pagó más que el total nuevo, hay que devolver plata, y eso lo decide el dueño anulando el pago.
+   * d = { ventaId, item, precio, motivo, nota, autorizadoPor }
+   */
+  BG.ajustarPrecio = (d) => {
+    if (!BG.puede('preciosEspeciales')) throw new Error(BG.nombreDuena() + ' no te habilitó los precios especiales.');
+    const v = BG.venta(d.ventaId);
+    if (!v || v.anulada) throw new Error('Esa venta está anulada: no se le puede cambiar el precio.');
+    const it = v.items[d.item];
+    const precio = Math.round(Number(d.precio));
+    if (!it || !(precio > 0)) throw new Error('Escribí el precio nuevo.');
+    if (precio === it.precio) throw new Error('Es el mismo precio que ya tiene.');
+    if (!d.motivo) throw new Error('Elegí el motivo del cambio.');
+    const nuevos = v.items.map((x, i) => (i === d.item ? Object.assign({}, x, { precio: precio }) : x));
+    const t = C.totalesVenta(nuevos, v.descuento.valor ? { tipo: v.descuento.tipo, valor: v.descuento.valor } : null);
+    const pagado = BG.pagadoVenta(v);
+    if (t.total <= 0) throw new Error('Con ese precio el total de la venta quedaría en ' + gs(0) + '.');
+    if (t.total < pagado) {
+      throw new Error('Con ese precio la venta quedaría en ' + gs(t.total) + ', menos de lo que ya pagó (' + gs(pagado) + '). Para devolver plata, ' + BG.nombreDuena() + ' tiene que anular el pago.');
+    }
+    const cli = BG.cliente(v.clienteId);
+    const ajuste = {
+      id: BG.uid('aj'), fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, item: d.item, descripcion: it.descripcion, cantidad: it.cantidad,
+      antes: it.precio, despues: precio, totalAntes: v.total, totalDespues: t.total, motivo: d.motivo, nota: limpiar(d.nota), autorizadoPor: d.autorizadoPor || null,
+    };
+    if (it.precioLista == null) it.precioLista = it.precio;
+    it.precio = precio;
+    it.margen = null;
+    v.subtotal = t.subtotal;
+    v.descuento.monto = t.descuento;
+    v.total = t.total;
+    (v.ajustes || (v.ajustes = [])).push(ajuste);
+    BG.auditar('precios', 'Precio ajustado', 'Recibo ' + BG.fmtRecibo(v.recibo) + ' · ' + cli.nombre + ' · ' + it.descripcion + ': ' + gs(ajuste.antes) + ' → ' + gs(precio)
+      + textoMotivo(ajuste.motivo, ajuste.nota) + textoMargen(precio, it.costoUnitGs) + ' · total de la venta ' + gs(ajuste.totalAntes) + ' → ' + gs(t.total)
+      + (ajuste.autorizadoPor ? ' · autorizó ' + ajuste.autorizadoPor : ''));
+    BG.guardar();
+    return ajuste;
+  };
+
   /* ── Anulaciones (nunca se borra nada) ───────────────────────────────── */
 
   const soloDuenio = (que) => { if (!BG.esDuena()) throw new Error('Solo ' + BG.nombreDuena() + ' (dueño) puede ' + que + '.'); };
+
+  BG.cambiarMargenMinimo = (m) => {
+    soloDuenio('cambiar el margen mínimo');
+    BG.db.config.precios = Object.assign({}, BG.db.config.precios, { margenMinimo: m });
+    BG.auditar('parametros', 'Margen mínimo sin autorización', m + ' % sobre el costo');
+    BG.guardar();
+  };
 
   BG.anularVenta = (id, motivo) => {
     soloDuenio('anular ventas');

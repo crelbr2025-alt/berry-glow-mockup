@@ -104,7 +104,7 @@
   BG.vistas.reportes = (args, params) => {
     const e = { tab: params.get('tab') || 'ventas', periodo: params.get('periodo') || 'mes' };
     const tabs = [['ventas', 'Ventas'], ['deudores', 'Deudores'], ['stock', 'Stock'], ['ganancia', 'Ganancia']];
-    const html = '<div class="page"><div class="page-head"><div><h1 class="page-title">Reportes</h1><p class="page-sub">Vista interna: solo la dueña ve costos y ganancias.</p></div></div>'
+    const html = '<div class="page"><div class="page-head"><div><h1 class="page-title">Reportes</h1><p class="page-sub">Vista interna: solo ' + esc(BG.nombreDuena()) + ' ve costos y ganancias.</p></div></div>'
       + '<div class="tabs" role="tablist">' + tabs.map(([k, t]) => '<button type="button" class="tab-btn" role="tab" data-tab="' + k + '" aria-selected="' + (e.tab === k) + '">' + t + '</button>').join('') + '</div>'
       + '<div id="rep-filtro"></div><div id="rep-cuerpo" class="stack"></div></div>';
     let root = null;
@@ -208,7 +208,7 @@
       + '<label class="sr-only" for="c-fecha">Fecha</label><input id="c-fecha" class="input input-date" type="date" value="' + f + '" max="' + h + '">'
       + (f < h ? '<a class="btn btn-quiet" href="#/caja?fecha=' + BG.sumarDias(f, 1) + '" aria-label="Día siguiente">' + icon('right') + '</a>' : '') + '</div></div>'
       + (cerrada ? '<div class="callout callout-good">' + icon('lock') + '<div><strong>Caja cerrada' + (cierre ? ' el ' + BG.fmtFecha(cierre.ts.slice(0, 10)) + ' a las ' + BG.fmtHora(cierre.ts) + ' por ' + esc(cierre.usuario) : '') + '.</strong> '
-        + 'Los movimientos de este día ya no se pueden anular ni cambiar sin la autorización de la dueña.'
+        + 'Los movimientos de este día ya no se pueden anular ni cambiar sin la autorización de ' + esc(BG.nombreDuena()) + '.'
         + (BG.esDuena() ? ' <button type="button" class="linkish" data-accion="reabrir">Reabrir con PIN</button>' : '') + '</div></div>' : '')
       + '<div class="grid-2"><section class="card"><div class="card-head"><h2>Lo que entró</h2><span class="small muted">' + pagos.length + ' cobros</span></div>'
       + '<div class="table-wrap table-bare"><table class="table"><thead><tr><th>Forma de pago</th><th class="num">Cobros</th><th class="num">Monto</th></tr></thead><tbody>'
@@ -224,7 +224,7 @@
       + (!cerrada ? '<div class="field"><label for="c-contado">Efectivo contado en la caja</label>' + BG.campoGs('c-contado', 0, 'placeholder="0"') + '</div>'
         + '<p class="summary-line" id="c-dif"></p><div class="field"><label for="c-nota">Nota (si hay diferencia)</label><input id="c-nota" class="input" autocomplete="off" placeholder="Ej.: se dio mal un vuelto"></div>'
         + '<button type="button" class="btn btn-primary" data-accion="cerrar">' + icon('lock') + 'Cerrar la caja del ' + BG.fmtFechaCorta(f) + '</button>'
-        + '<p class="hint">Al cerrar, los movimientos de ese día quedan bloqueados: para anular algo hace falta la autorización de la dueña (PIN).</p>' : '')
+        + '<p class="hint">Al cerrar, los movimientos de ese día quedan bloqueados: para anular algo hace falta la autorización de ' + esc(BG.nombreDuena()) + ' (PIN).</p>' : '')
       + '</section></div>'
       + '<section class="card card-flush"><div class="card-head pad"><h2>Movimientos del día</h2></div>'
       + (movs.length ? '<ul class="list list-plain">' + movs.map((m) => '<li><a class="list-row" href="' + m.href + '"><span class="avatar">' + icon(m.icono, 'i-sm') + '</span><span class="row-main"><span class="row-title' + (m.anulado ? ' strike' : '') + '">' + m.titulo + '</span><span class="row-sub">' + m.sub + '</span></span><span class="row-end"><span class="amount' + (m.anulado ? ' strike' : '') + '">' + gs(m.monto) + '</span>' + (m.extra || '') + '</span></a></li>').join('') + '</ul>'
@@ -328,8 +328,11 @@
         : '<div class="stack"><p><strong>' + esc(u.nombre) + ' · vendedora</strong> <span class="small muted">(usuario «' + esc(u.usuario) + '»)</span></p><div class="perm-list">'
           + '<label class="perm is-fixed"><input type="checkbox" checked disabled><strong>Ver ventas, clientes y cuánto debe cada uno</strong><span>Siempre, es la base de su perfil.</span></label>'
           + BG.PERMISOS.map(([k, t, desc]) => '<label class="perm"><input type="checkbox" data-permiso="' + k + '" data-usuario="' + u.id + '"' + (u.permisos && u.permisos[k] ? ' checked' : '') + '><strong>' + esc(t) + '</strong><span>' + esc(desc) + '</span></label>').join('')
-          + '<label class="perm is-fixed"><input type="checkbox" disabled><strong>Costos, dólar, márgenes, anular, resumen y ajustes</strong><span>Nunca: son solo del dueño.</span></label>'
+          + '<label class="perm is-fixed"><input type="checkbox" disabled><strong>Costos, dólar, márgenes sugeridos, anular, resumen y ajustes</strong><span>Nunca: son solo del dueño.</span></label>'
           + '</div></div>').join('')
+      + '<div class="field"><span class="field-label" id="aj-min">Margen mínimo sin tu autorización</span><div class="seg" role="radiogroup" aria-labelledby="aj-min">'
+      + [0, 20, 30, 40, 50].map((m) => '<label><input type="radio" name="aj-minimo" value="' + m + '"' + (BG.margenMinimo() === m ? ' checked' : '') + '>' + m + ' %</label>').join('') + '</div>'
+      + '<span class="hint">Sobre el costo, como los precios sugeridos. Si un precio especial o un descuento de la vendedora deja menos margen, la venta pide tu PIN. Vender por debajo del costo siempre lo pide.</span></div>'
       + '<p class="hint">Probalo con «Ver como» arriba (o en «Más» desde el celular). Cada cambio de permisos queda en la auditoría.</p></section>'
       + '<section class="card stack"><div class="card-head"><h2>Envíos</h2></div>'
       + '<p class="small">Salen de <strong>' + esc(cfg.envios.origen.ciudad) + ' (' + esc(cfg.envios.origen.departamento) + ')</strong>. Empresas con las que mandan (aparecen al preparar un envío):</p>'
@@ -356,6 +359,7 @@
         root.addEventListener('change', async (e) => {
           const t = e.target;
           if (t.name === 'aj-margen') { BG.cambiarMargenDefecto(Number(t.value)); BG.toast('Margen preseleccionado: ' + t.value + ' %.'); }
+          if (t.name === 'aj-minimo') { BG.cambiarMargenMinimo(Number(t.value)); BG.toast('Margen mínimo sin autorización: ' + t.value + ' %.'); }
           if (t.dataset && t.dataset.permiso) {
             const u = BG.db.usuarios.find((x) => x.id === t.dataset.usuario);
             BG.actualizarPermiso(u.id, t.dataset.permiso, t.checked);
@@ -417,10 +421,11 @@
 
   /* ── Auditoría ───────────────────────────────────────────────────────── */
 
-  BG.vistas.auditoria = () => {
-    const e = { tipo: 'todo', usuario: 'todos', q: '', max: 120 };
-    const tipos = [['todo', 'Todo'], ['ventas', 'Ventas'], ['cobros', 'Cobros'], ['recibos', 'Recibos'], ['envios', 'Envíos'], ['anulaciones', 'Anulaciones'], ['productos', 'Productos'], ['parametros', 'Parámetros'], ['caja', 'Caja'], ['clientes', 'Clientes'], ['seguridad', 'Permisos y PIN']];
-    const html = '<div class="page"><div class="page-head"><div><h1 class="page-title">Auditoría</h1><p class="page-sub">Cada venta, cobro, recibo emitido, envío, anulación y cambio de parámetros queda con fecha, hora y usuario. No se puede editar.</p></div></div>'
+  BG.vistas.auditoria = (args, params) => {
+    const tipos = [['todo', 'Todo'], ['ventas', 'Ventas'], ['precios', 'Precios especiales'], ['cobros', 'Cobros'], ['recibos', 'Recibos'], ['envios', 'Envíos'], ['anulaciones', 'Anulaciones'], ['productos', 'Productos'], ['parametros', 'Parámetros'], ['caja', 'Caja'], ['clientes', 'Clientes'], ['seguridad', 'Permisos y PIN']];
+    const pedido = params && params.get('tipo');
+    const e = { tipo: tipos.some((x) => x[0] === pedido) ? pedido : 'todo', usuario: 'todos', q: '', max: 120 };
+    const html = '<div class="page"><div class="page-head"><div><h1 class="page-title">Auditoría</h1><p class="page-sub">Cada venta, precio especial, cobro, recibo emitido, envío, anulación y cambio de parámetros queda con fecha, hora y usuario. No se puede editar.</p></div></div>'
       + '<div class="toolbar"><div class="search-box grow"><label class="sr-only" for="q-aud">Buscar en la auditoría</label>' + icon('search') + '<input id="q-aud" class="search-input" type="search" autocomplete="off" placeholder="Buscar (cliente, recibo, motivo…)"></div>'
       + '<div class="chips" role="group" aria-label="Usuario">' + [['todos', 'Todos']].concat(BG.db.usuarios.map((u) => [u.nombre, u.nombre]))
         .map(([k, t]) => '<button type="button" class="chip" data-usuario="' + esc(k) + '" aria-pressed="' + (e.usuario === k) + '">' + esc(t) + '</button>').join('') + '</div></div>'

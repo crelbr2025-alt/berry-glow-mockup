@@ -55,6 +55,72 @@
     return true;
   };
 
+  /* ── Ajustar el precio después de vender ─────────────────────────────── */
+
+  BG.ajustarPrecioUI = async (v) => {
+    const pagado = BG.pagadoVenta(v);
+    const st = { item: v.items.length === 1 ? 0 : null, precio: 0, motivo: null, nota: '' };
+    const totalCon = (precio) => BG.C.totalesVenta(v.items.map((x, i) => (i === st.item ? Object.assign({}, x, { precio: precio }) : x)),
+      v.descuento.valor ? { tipo: v.descuento.tipo, valor: v.descuento.valor } : null).total;
+    const pintarInfo = (form) => {
+      const host = $('#aj-info', form);
+      if (st.item == null || !(st.precio > 0)) { host.innerHTML = ''; return; }
+      const total = totalCon(st.precio);
+      const ev = BG.evaluarPrecio(st.precio, v.items[st.item].costoUnitGs);
+      host.innerHTML = '<dl class="summary"><dt>Total de la venta</dt><dd>' + gs(v.total) + ' → ' + gs(total) + '</dd><dt>Ya pagó</dt><dd>' + gs(pagado) + '</dd><div class="sep"></div>'
+        + (total >= pagado ? '<dt><strong>Saldo nuevo</strong></dt><dd class="big ' + (total > pagado ? 'due' : 'clear') + '">' + gs(total - pagado) + '</dd>'
+          : '<dd class="span error-text">Quedaría menos de lo que ya pagó: para devolver plata, ' + esc(BG.nombreDuena()) + ' tiene que anular el pago.</dd>') + '</dl>'
+        + (ev ? '<p class="precio-info">' + BG.infoPrecio(ev, true) + '</p>' : '');
+    };
+    const r = await BG.modal({
+      titulo: 'Ajustar precio · ' + BG.fmtRecibo(v.recibo),
+      cuerpo: '<p class="small">El total y el saldo de la venta se recalculan. El cambio queda registrado con el motivo y quién lo hizo, y el recibo que se emita después sale con el precio nuevo.</p>'
+        + (v.items.length > 1
+          ? '<div class="field"><span class="field-label" id="aj-item-l">Artículo</span><div class="dests" role="radiogroup" aria-labelledby="aj-item-l">'
+            + v.items.map((it, i) => '<label class="dest"><input type="radio" name="aj-item" value="' + i + '"><span class="grow"><span class="row-title">' + esc(it.descripcion) + '</span>'
+              + '<span class="row-sub">' + it.cantidad + ' × ' + gs(it.precio) + '</span></span></label>').join('') + '</div></div>'
+          : '<p><strong>' + esc(v.items[0].descripcion) + '</strong> · ' + v.items[0].cantidad + ' × ' + gs(v.items[0].precio) + '</p>')
+        + '<div class="field"><label for="aj-precio">Precio nuevo por unidad</label>' + BG.campoGs('aj-precio', '', '') + '</div>'
+        + BG.camposMotivo('aj', st, true)
+        + '<div id="aj-info"></div><p class="error-text" id="aj-error" role="alert" hidden></p>',
+      acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Guardar precio nuevo', valor: 'ok', clase: 'btn-primary', submit: true }],
+      validar: (val, dlg) => {
+        const er = $('#aj-error', dlg);
+        const falla = (m) => { er.textContent = m; er.hidden = false; return false; };
+        if (st.item == null) return falla('Elegí el artículo.');
+        if (!(st.precio > 0)) return falla('Escribí el precio nuevo.');
+        if (st.precio === v.items[st.item].precio) return falla('Es el mismo precio que ya tiene.');
+        if (!st.motivo) return falla('Elegí el motivo del cambio.');
+        if (st.motivo === 'Otro' && !st.nota.trim()) return falla('Contá el motivo en «Detalle».');
+        if (totalCon(st.precio) < pagado) return falla('Con ese precio la venta quedaría en menos de lo que ya pagó (' + gs(pagado) + ').');
+        return true;
+      },
+      onMount: (dlg) => {
+        // Los manejadores van en el formulario, que se crea de nuevo en cada modal (el <dialog> es siempre el mismo).
+        const form = $('form', dlg);
+        form.addEventListener('change', (e) => {
+          if (e.target.name === 'aj-item') { st.item = Number(e.target.value); pintarInfo(form); }
+          if (e.target.name === 'motivo-aj') st.motivo = e.target.value;
+        });
+        form.addEventListener('input', (e) => {
+          if (e.target.id === 'aj-precio') { st.precio = BG.leerGs(e.target); pintarInfo(form); }
+          if (e.target.id === 'nota-aj') st.nota = e.target.value;
+        });
+        $('#aj-precio', form).focus();
+      },
+    });
+    if (r !== 'ok') return false;
+    const it = v.items[st.item];
+    let autorizadoPor = null;
+    if (BG.pideAutorizacion(BG.evaluarPrecio(st.precio, it.costoUnitGs))) {
+      if (!(await BG.pedirPin('Precio ajustado debajo del mínimo que fijó ' + BG.nombreDuena() + ': ' + it.descripcion + '.'))) return false;
+      autorizadoPor = BG.nombreDuena();
+    }
+    BG.ajustarPrecio({ ventaId: v.id, item: st.item, precio: st.precio, motivo: st.motivo, nota: st.nota, autorizadoPor: autorizadoPor });
+    BG.toast('Precio ajustado. La venta quedó en ' + gs(v.total) + '.');
+    return true;
+  };
+
   /* ── Listado ─────────────────────────────────────────────────────────── */
 
   function filaVentaConCliente(v, q) {
@@ -122,6 +188,29 @@
     const envio = BG.envioDeVenta ? BG.envioDeVenta(v.id) : null;
     const costo = sum(v.items, (it) => (it.costoUnitGs || 0) * it.cantidad);
     const ganancia = v.total - costo;
+    const evVenta = BG.evaluarPrecio(v.total, costo);
+    const cambios = BG.cambiosDePrecio(v);
+    // Debajo de cada artículo: si tuvo precio especial y, para quien la puede ver, la ganancia.
+    const subItem = (it) => {
+      const esp = it.precioLista != null && it.precio !== it.precioLista;
+      const ev = BG.evaluarPrecio(it.precio, it.costoUnitGs);
+      const partes = [];
+      if (esp) partes.push('<span class="t-especial">Precio especial</span> · lista <span class="strike">' + gs(it.precioLista) + '</span>');
+      if (duena) partes.push((!esp && it.margen ? 'Margen ' + it.margen + ' %' : ev ? 'margen ' + BG.fmtMargen(ev.margen) : 'Precio a mano') + ' · costo ' + gs(it.costoUnitGs) + '/u');
+      else if (esp && ev && BG.veGanancia()) partes.push('gana ' + gs(ev.ganancia) + '/u · margen ' + BG.fmtMargen(ev.margen));
+      return partes.length ? '<div class="t-sub">' + partes.join(' · ') + '</div>' : '';
+    };
+    const lineaCambio = (c) => {
+      const titulo = c.tipo === 'descuento'
+        ? 'Descuento' + (c.porcentaje ? ' del ' + BG.C.fmtNum(c.porcentaje, 0, 2) + ' %' : '') + ': −' + gs(c.monto)
+        : esc(c.descripcion) + ': ' + gs(c.antes) + ' → ' + gs(c.despues) + (c.cantidad > 1 ? ' c/u' : '');
+      const cuando = c.tipo === 'ajuste' ? 'Después de vender, el ' + BG.fmtFecha(c.fecha) + ' a las ' + BG.fmtHora(c.ts) : c.tipo === 'descuento' ? 'Al vender' : 'Al vender (precio de lista → especial)';
+      const ev = c.tipo === 'descuento' ? null : BG.evaluarPrecio(c.despues, c.costo);
+      return '<li class="line"><div class="row-title">' + titulo + '</div>'
+        + '<div class="row-sub">' + cuando + ' · por ' + esc(c.usuario) + ' · ' + (c.motivo ? '<strong>' + esc(c.motivo) + '</strong>' : 'sin motivo') + (c.nota ? ': ' + esc(c.nota) : '') + '</div>'
+        + (c.tipo === 'ajuste' ? '<div class="row-sub">Total de la venta ' + gs(c.totalAntes) + ' → ' + gs(c.totalDespues) + (c.autorizadoPor ? ' · autorizó ' + esc(c.autorizadoPor) + ' con PIN' : '') + '</div>' : '')
+        + (ev ? '<p class="precio-info">' + BG.infoPrecio(ev, true, true) + '</p>' : '') + '</li>';
+    };
     const textoWa = 'Hola ' + cli.nombre.split(' ')[0] + ', gracias por tu compra en ' + BG.db.config.tienda.nombre + '. Total ' + gs(v.total)
       + ', pagado ' + gs(BG.pagadoVenta(v)) + (saldo > 0 ? ', saldo pendiente ' + gs(saldo) : ', ¡quedó saldada!') + '. Recibo ' + BG.fmtRecibo(v.recibo) + '.';
 
@@ -139,20 +228,21 @@
       + (BG.puede('emitirRecibos') ? '<a class="btn" href="#/recibo/v/' + v.id + '">' + icon('receipt') + 'Recibo</a>' : '')
       + (!v.anulada && BG.puede('prepararEnvios') ? (envio ? '<a class="btn" href="#/envios/' + envio.id + '">' + icon('truck') + 'Envío ' + esc(envio.numero) + '</a>'
         : '<a class="btn" href="#/envios/nuevo?venta=' + v.id + '">' + icon('truck') + 'Preparar envío</a>') : '')
+      + (!v.anulada && BG.puede('preciosEspeciales') ? '<button type="button" class="btn" data-accion="ajustar-precio">' + icon('tag') + 'Ajustar precio</button>' : '')
       + (v.anulada || !BG.esDuena() ? '' : '<button type="button" class="btn btn-danger" data-accion="anular-venta">' + icon('ban') + 'Anular venta</button>')
       + '</div></div>'
       + (v.anulada ? '<div class="callout callout-bad">' + icon('ban') + '<div><strong>Venta anulada el ' + BG.fmtFecha(v.anulada.fecha) + ' a las ' + BG.fmtHora(v.anulada.ts) + ' por ' + esc(v.anulada.usuario) + '.</strong> Motivo: ' + esc(v.anulada.motivo) + '</div></div>' : '')
       + '<div class="grid-2">'
       + '<section class="card"><div class="card-head"><h2>Artículos</h2><span class="small muted">Precios congelados al vender</span></div>'
-      + '<div class="table-wrap table-bare"><table class="table table-compact"><thead><tr><th>Artículo</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Subtotal</th></tr></thead><tbody>'
-      + v.items.map((it) => '<tr><td><div class="t-title">' + esc(it.descripcion) + '</div>'
-        + (duena ? '<div class="t-sub">' + (it.margen ? 'Margen ' + it.margen + ' %' : 'Precio a mano') + ' · costo ' + gs(it.costoUnitGs) + '/u</div>' : '') + '</td>'
+      + '<div class="table-wrap table-bare"><table class="table table-compact table-venta"><thead><tr><th>Artículo</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Importe</th></tr></thead><tbody>'
+      + v.items.map((it) => '<tr><td><div class="t-title">' + esc(it.descripcion) + '</div>' + subItem(it) + '</td>'
         + '<td class="num">' + it.cantidad + '</td><td class="num">' + gs(it.precio) + '</td><td class="num">' + gs(it.precio * it.cantidad) + '</td></tr>').join('')
       + '</tbody><tfoot>'
       + (v.descuento.monto ? '<tr><td colspan="3">Subtotal</td><td class="num">' + gs(v.subtotal) + '</td></tr><tr><td colspan="3">Descuento' + (v.descuento.tipo === 'porcentaje' ? ' (' + BG.C.fmtNum(v.descuento.valor, 0, 2) + ' %)' : '') + '</td><td class="num">−' + gs(v.descuento.monto) + '</td></tr>' : '')
       + '<tr><td colspan="3">Total</td><td class="num">' + gs(v.total) + '</td></tr></tfoot></table></div>'
-      + (duena ? '<div class="card-foot"><span class="small muted">Solo la dueña ve esto</span><span class="small">Costo congelado <strong>' + gs(costo) + '</strong> · Ganancia real <strong>' + gs(ganancia) + '</strong>'
-        + (costo ? ' (' + Math.round((ganancia / costo) * 100) + ' % sobre el costo)' : '') + '</span></div>' : '')
+      + (duena ? '<div class="card-foot"><span class="small muted">Solo ' + esc(BG.nombreDuena()) + ' ve esto</span><span class="small">Costo congelado <strong>' + gs(costo) + '</strong> · Ganancia real <strong>' + gs(ganancia) + '</strong>'
+        + (evVenta ? ' (' + BG.fmtMargen(evVenta.margen) + ' sobre el costo)' : '') + '</span></div>'
+        : cambios.length && evVenta && BG.veGanancia() ? '<div class="card-foot"><span class="small muted">Por los precios especiales</span><span class="small">' + BG.infoPrecio(evVenta, false, true) + '</span></div>' : '')
       + '</section>'
       + '<section class="card"><div class="card-head"><h2>Pagos</h2>' + (v.anulada ? '' : '<span class="amount">' + (saldo > 0 ? 'Debe ' + gs(saldo) : 'Saldada') + '</span>') + '</div>'
       + (pagos.length ? '<ul class="lines">' + pagos.map((p) => '<li class="line"><div class="line-top"><div class="grow">'
@@ -164,7 +254,11 @@
         + '</div></li>').join('') + '</ul>' : '<p class="empty">Todavía no hay pagos: la venta quedó a cuenta.</p>')
       + '<dl class="summary list-top"><dt>Total de la venta</dt><dd>' + gs(v.total) + '</dd><dt>Pagado</dt><dd>' + gs(BG.pagadoVenta(v)) + '</dd><div class="sep"></div>'
       + '<dt><strong>Saldo</strong></dt><dd class="big ' + (saldo > 0 ? 'due' : 'clear') + '">' + gs(saldo) + '</dd></dl>'
-      + '</section></div></div>';
+      + '</section></div>'
+      + (cambios.length ? '<section class="card stack"><div class="card-head"><h2>Cambios de precio</h2>'
+        + (v.autorizadoPor ? '<span class="pill pill-warn">Autorizó ' + esc(v.autorizadoPor) + ' con PIN</span>' : '<span class="small muted">Quedan en la auditoría</span>') + '</div>'
+        + '<ul class="lines">' + cambios.map(lineaCambio).join('') + '</ul></section>' : '')
+      + '</div>';
     return {
       html: html,
       mount: (root) => {
@@ -173,6 +267,7 @@
           if (!b) return;
           try {
             if (b.dataset.accion === 'anular-venta' && (await BG.anularVentaUI(v))) BG.render();
+            if (b.dataset.accion === 'ajustar-precio' && (await BG.ajustarPrecioUI(v))) BG.render();
             if (b.dataset.accion === 'anular-pago') {
               const pg = BG.db.pagos.find((x) => x.id === b.dataset.id);
               if (await BG.anularPagoUI(pg)) BG.render();

@@ -24,7 +24,7 @@
       + '<div class="demo-hint"><span><strong>Mockup:</strong> el ingreso es de mentira y no pide contraseña. Elegí con qué vista entrar:</span>'
       + '<div class="row"><button type="button" class="btn btn-sm" data-demo="ariel">Entrar como Ariel (dueño)</button>'
       + '<button type="button" class="btn btn-sm" data-demo="jazmin">Entrar como Jazmín (vendedora)</button></div>'
-      + '<span class="small">Jazmín vende, cobra, emite recibos y prepara envíos, pero no ve costos, dólar ni márgenes, y no puede anular. Ariel ve todo y el registro de lo que hace cada una.</span></div>'
+      + '<span class="small">Jazmín vende, cobra, emite recibos, prepara envíos y puede poner precios especiales (ve la ganancia de ese precio); no ve costos ni dólar y no puede anular. Ariel ve todo y el registro de lo que hace cada una.</span></div>'
       + '</div></div>';
     const entrar = (usuario) => {
       const u = BG.db.usuarios.find((x) => x.usuario === String(usuario || '').trim().toLowerCase());
@@ -96,6 +96,8 @@
     const movs = BG.movimientosDelDia(h);
     const cerrada = BG.cajaCerrada(h);
     const cfg = BG.db.config;
+    const conCambiosMes = ventasMes.filter((v) => BG.cambiosDePrecio(v).length);
+    const nCambiosMes = sum(conCambiosMes, (v) => BG.cambiosDePrecio(v).length);
 
     const qb = (href, ic, t, sub, main) => '<a class="quick-btn' + (main ? ' is-main' : '') + '" href="' + href + '"><span class="qi">' + icon(ic) + '</span><span>' + t + '<small>' + sub + '</small></span></a>';
     const rapidas = [
@@ -140,7 +142,9 @@
         + ' <a href="#/caja">Ir a la caja</a>'
         + (duena ? '<br><span class="small">Dólar ' + C.fmtCot(cfg.cotizacion.valor) + ' desde el ' + BG.fmtFecha(cfg.cotizacion.fecha) + ' · Courier ' + C.fmtUSD(cfg.tarifa.valor) + '/kg · <a href="#/ajustes">cambiar</a></span>' : '')
         + '</div></div>' : '')
-      + (duena ? '<a class="callout callout-link" href="#/resumen">' + icon('pie') + '<div><strong>Resumen gráfico</strong> Ventas y cobros por semana, deudas por antigüedad, envíos por ciudad y lo que hizo cada usuario.</div></a>' : '')
+      + (duena && nCambiosMes ? '<a class="callout callout-link" href="#/resumen">' + icon('tag') + '<div><strong>Precios especiales este mes: ' + nCambiosMes + '</strong> '
+        + gs(sum(conCambiosMes, BG.rebajaVenta)) + ' menos que el precio de lista. Mirá quién los puso, el motivo y cómo quedó la ganancia.</div></a>' : '')
+      + (duena ? '<a class="callout callout-link" href="#/resumen">' + icon('pie') + '<div><strong>Resumen gráfico</strong> Ventas y cobros por semana, precios especiales, deudas por antigüedad, envíos por ciudad y lo que hizo cada usuario.</div></a>' : '')
       + '</div></div>'
       + '</div>';
     return { html: html };

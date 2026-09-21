@@ -57,7 +57,7 @@
   BG.reiniciarDatos = () => { BG.db = window.BGSeed.crear(hoy()); BG.guardar(); };
 
   BG.db = BG.leer(KEY_DB);
-  if (!BG.db || BG.db.version !== 2) BG.reiniciarDatos();
+  if (!BG.db || BG.db.version !== 3) BG.reiniciarDatos();
   BG.sesion = BG.leer(KEY_SESION);
   if (BG.sesion && !BG.db.usuarios.some((u) => u.id === BG.sesion.usuarioId)) BG.sesion = null;
   BG.guardarSesion = () => { if (BG.sesion) BG.escribir(KEY_SESION, BG.sesion); else { try { localStorage.removeItem(KEY_SESION); } catch (e) { /* sin almacenamiento */ } } };
@@ -69,7 +69,9 @@
   /** Lo que el dueño puede habilitar o quitar a la vendedora (Ajustes → Usuarios y permisos). */
   BG.PERMISOS = [
     ['emitirRecibos', 'Emitir recibos', 'Imprimir, guardar en PDF y mandar por WhatsApp.'],
-    ['registrarVentas', 'Registrar ventas', 'Nueva venta con el precio de lista; sin ver costos ni márgenes.'],
+    ['registrarVentas', 'Registrar ventas', 'Nueva venta con el precio de lista, sin ver costos.'],
+    ['preciosEspeciales', 'Poner precios especiales', 'Cambiar el precio de lista al vender o ajustarlo después (promoción, cliente frecuente…), siempre con el motivo.'],
+    ['verGanancia', 'Ver la ganancia de sus precios especiales', 'Ve cuánto gana la tienda y el margen del precio que pone. Con eso puede deducir el costo.'],
     ['registrarCobros', 'Registrar cobros', 'Pagos, pagos mixtos y señas.'],
     ['editarClientes', 'Crear y editar clientes', 'Alta de clientes nuevos y corrección de datos.'],
     ['verPrecios', 'Ver la lista de precios', 'Precios de venta y stock, sin costos.'],
@@ -134,6 +136,74 @@
       return { margen: m, exacto: exacto, precio: Number(C.redondear(exacto, BG.db.config.redondeo)) };
     });
   };
+  /* Precios especiales: el margen se mide sobre el costo congelado, igual que los sugeridos (50, 80, 100 y 120 %). */
+  BG.MOTIVOS_PRECIO = ['Promoción', 'Cliente frecuente', 'Detalle en la prenda', 'Liquidación', 'Otro'];
+  BG.margenMinimo = () => { const p = BG.db.config.precios; return p && p.margenMinimo != null ? p.margenMinimo : 30; };
+  /**
+   * Ganancia y margen de vender a `precio` lo que costó `costo` (sirve por unidad o para toda la venta).
+   * El margen se muestra truncado a un decimal, así nunca parece más alto que el umbral que no alcanza.
+   * estado: 'bien' (desde el menor sugerido), 'bajo', 'minimo' (debajo del mínimo sin autorización) o 'perdida'.
+   */
+  BG.evaluarPrecio = (precio, costo) => {
+    if (!(costo > 0) || !(precio > 0)) return null;
+    const ganancia = precio - costo;
+    const margen = Math.floor((ganancia * 1000) / costo) / 10;
+    let estado = 'bien';
+    if (precio < costo) estado = 'perdida';
+    else if (precio * 100 < costo * (100 + BG.margenMinimo())) estado = 'minimo';
+    else if (precio * 100 < costo * (100 + C.MARGENES[0])) estado = 'bajo';
+    return { ganancia: ganancia, margen: margen, estado: estado };
+  };
+  BG.fmtMargen = (m) => (Number.isInteger(m) ? String(m) : m.toFixed(1).replace('.', ',')) + ' %';
+  /** ¿Hace falta el PIN del dueño? Solo cuando la vendedora baja del mínimo; el dueño decide solo. */
+  BG.pideAutorizacion = (ev) => !BG.esDuena() && !!ev && (ev.estado === 'minimo' || ev.estado === 'perdida');
+  /** ¿El usuario ve ganancia y margen? El dueño siempre; la vendedora, si tiene el permiso. */
+  BG.veGanancia = () => BG.esDuena() || BG.puede('verGanancia');
+  /** registrado: el precio ya quedó guardado (y autorizado si hacía falta), así que no se pide nada. */
+  BG.pillPrecio = (ev, registrado) => {
+    if (!ev) return '';
+    const t = {
+      bien: ['pill-good', 'Buen margen'],
+      bajo: ['pill-warn', 'Margen bajo'],
+      minimo: ['pill-bad', BG.esDuena() || registrado ? 'Debajo del mínimo (' + BG.margenMinimo() + ' %)' : 'Necesita autorización de ' + BG.nombreDuena()],
+      perdida: ['pill-bad', 'Pérdida: menos que el costo'],
+    }[ev.estado];
+    return '<span class="pill ' + t[0] + '">' + t[1] + '</span>';
+  };
+  /** Línea con lo que gana la tienda a ese precio; sin el permiso, solo el aviso de color. */
+  BG.infoPrecio = (ev, unidad, registrado) => {
+    if (!ev) return '';
+    if (!BG.veGanancia()) return BG.pillPrecio(ev, registrado);
+    return '<span>' + (ev.ganancia < 0 ? 'La tienda pierde <strong>' + gs(-ev.ganancia) + '</strong>' : 'La tienda gana <strong>' + gs(ev.ganancia) + '</strong>')
+      + (unidad ? ' por unidad' : '') + ' · margen <strong>' + BG.fmtMargen(ev.margen) + '</strong></span> ' + BG.pillPrecio(ev, registrado);
+  };
+  /** Motivo (obligatorio o no) y detalle de un precio especial, descuento o ajuste. sel = { motivo, nota }. */
+  BG.camposMotivo = (clave, sel, req) => '<div class="field"><span class="field-label" id="mot-l-' + clave + '">Motivo '
+    + (req ? '<span class="req">*</span>' : '<span class="small muted">(opcional)</span>') + '</span>'
+    + '<div class="seg" role="radiogroup" aria-labelledby="mot-l-' + clave + '">'
+    + BG.MOTIVOS_PRECIO.map((m) => '<label><input type="radio" name="motivo-' + clave + '" value="' + esc(m) + '"' + (sel.motivo === m ? ' checked' : '') + '>' + esc(m) + '</label>').join('') + '</div></div>'
+    + '<div class="field"><label for="nota-' + clave + '">Detalle <span class="small muted">(obligatorio si el motivo es «Otro»)</span></label>'
+    + '<input id="nota-' + clave + '" class="input" autocomplete="off" maxlength="120" data-nota="' + clave + '" value="' + esc(sel.nota || '') + '" placeholder="Ej.: promo de la semana"></div>';
+  /** Cambios de precio de una venta (al vender y después), en orden, para la venta, el resumen y la auditoría. */
+  BG.cambiosDePrecio = (v) => {
+    const out = [];
+    v.items.forEach((it, i) => {
+      if (it.especial) {
+        const lista = it.precioLista;
+        const alVender = (v.ajustes || []).filter((a) => a.item === i).map((a) => a.antes)[0];
+        out.push({ tipo: 'especial', ts: v.ts, usuario: it.especial.usuario, item: i, descripcion: it.descripcion, cantidad: it.cantidad, costo: it.costoUnitGs,
+          antes: lista, despues: alVender != null ? alVender : it.precio, motivo: it.especial.motivo, nota: it.especial.nota });
+      }
+    });
+    if (v.descuento && v.descuento.monto) {
+      out.push({ tipo: 'descuento', ts: v.ts, usuario: v.descuento.usuario || v.usuario, monto: v.descuento.monto, porcentaje: v.descuento.tipo === 'porcentaje' ? v.descuento.valor : null,
+        motivo: v.descuento.motivo || null, nota: v.descuento.nota || '' });
+    }
+    (v.ajustes || []).forEach((a) => out.push(Object.assign({ tipo: 'ajuste', costo: v.items[a.item] ? v.items[a.item].costoUnitGs : 0 }, a)));
+    return out;
+  };
+  /** Cuánto se dejó de cobrar frente al precio de lista (descuentos incluidos). */
+  BG.rebajaVenta = (v) => sum(v.items, (it) => (it.precioLista != null ? (it.precioLista - it.precio) * it.cantidad : 0)) + (v.descuento ? v.descuento.monto : 0);
   BG.detalleProducto = (p) => (p.costoUSD == null ? null : C.calcularProducto({
     costoUSD: p.costoUSD, envioUnitUSD: p.envioUnitUSD, cotizacion: p.cotizacion, redondeo: BG.db.config.redondeo,
   }));
@@ -379,7 +449,7 @@
 
   BG.pedirPin = async (motivo) => {
     const v = await BG.modal({
-      titulo: 'Autorización de la dueña',
+      titulo: 'Autorización de ' + BG.nombreDuena(),
       cuerpo: '<p>' + esc(motivo) + '</p>'
         + '<div class="field"><label for="pin">PIN de autorización</label>'
         + '<input id="pin" class="input" type="password" inputmode="numeric" autocomplete="off" maxlength="6">'

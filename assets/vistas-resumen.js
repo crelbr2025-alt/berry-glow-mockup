@@ -183,6 +183,39 @@
       const top = Object.values(unidades).sort((a, b) => b.valor - a.valor || b.monto - a.monto).slice(0, 6)
         .map((x) => ({ etiqueta: x.etiqueta, sub: gs(x.monto), valor: x.valor, texto: x.valor + (x.valor === 1 ? ' u' : ' u') }));
 
+      // Precios especiales, descuentos y ajustes de las ventas del período: cuánto se rebajó y cómo quedó el margen.
+      const costoDe = (vs) => sum(vs, (v) => sum(v.items, (it) => (it.costoUnitGs || 0) * it.cantidad));
+      const conCambios = ventas.filter((v) => BG.cambiosDePrecio(v).length);
+      const sinCambios = ventas.filter((v) => !BG.cambiosDePrecio(v).length);
+      const evCon = BG.evaluarPrecio(sum(conCambios, (v) => v.total), costoDe(conCambios));
+      const evSin = BG.evaluarPrecio(sum(sinCambios, (v) => v.total), costoDe(sinCambios));
+      const cambios = [];
+      conCambios.forEach((v) => BG.cambiosDePrecio(v).forEach((c) => cambios.push({ v: v, c: c })));
+      cambios.sort((a, b) => b.c.ts.localeCompare(a.c.ts));
+      const rebajaDe = (c) => (c.tipo === 'descuento' ? c.monto : (c.antes - c.despues) * c.cantidad);
+      const porUsuario = {};
+      cambios.forEach(({ c }) => { const u = porUsuario[c.usuario] || (porUsuario[c.usuario] = { n: 0, monto: 0 }); u.n++; u.monto += rebajaDe(c); });
+      const barrasUsuario = Object.keys(porUsuario).map((k) => ({ etiqueta: k, sub: porUsuario[k].n + (porUsuario[k].n === 1 ? ' cambio' : ' cambios'), valor: Math.max(0, porUsuario[k].monto), texto: gs(porUsuario[k].monto) }))
+        .sort((a, b) => b.valor - a.valor);
+      const filaCambio = ({ v, c }) => {
+        const ev = c.tipo === 'descuento' ? BG.evaluarPrecio(v.total, costoDe([v])) : BG.evaluarPrecio(c.despues, c.costo);
+        const autorizo = c.tipo === 'ajuste' ? c.autorizadoPor : v.autorizadoPor;
+        return '<li class="line"><a class="row-title" href="#/ventas/' + v.id + '">' + (c.tipo === 'descuento' ? 'Descuento ' + gs(c.monto) + ' · ' + esc(BG.cliente(v.clienteId).nombre)
+          : esc(c.descripcion) + ': ' + gs(c.antes) + ' → ' + gs(c.despues)) + '</a>'
+          + '<span class="row-sub">' + esc(c.usuario) + ' · ' + BG.fmtFecha(c.ts.slice(0, 10)) + (c.tipo === 'ajuste' ? ' · después de vender' : '') + ' · ' + (c.motivo ? esc(c.motivo) : 'sin motivo')
+          + (autorizo ? ' · autorizó ' + esc(autorizo) : '') + '</span>'
+          + (ev ? '<p class="precio-info">' + (c.tipo === 'descuento' ? '<span class="muted">La venta:</span> ' : '') + BG.infoPrecio(ev, c.tipo !== 'descuento', true) + '</p>' : '') + '</li>';
+      };
+      const cardPrecios = '<section class="card stack"><div class="card-head"><h2>Precios especiales</h2><a class="small" href="#/auditoria?tipo=precios">Ver en la auditoría</a></div>'
+        + (cambios.length
+          ? '<p class="small">' + cambios.length + (cambios.length === 1 ? ' cambio' : ' cambios') + ' de precio en ' + conCambios.length + (conCambios.length === 1 ? ' venta' : ' ventas')
+            + ' · <strong>' + gs(sum(conCambios, BG.rebajaVenta)) + '</strong> menos que el precio de lista.'
+            + (evCon ? ' Margen de esas ventas: <strong>' + BG.fmtMargen(evCon.margen) + '</strong>' + (evSin ? ' (el resto: ' + BG.fmtMargen(evSin.margen) + ')' : '') + '.' : '') + '</p>'
+            + '<div class="grid-2 grid-charts"><div class="stack"><h3 class="card-sub">Quién los puso</h3>' + barrasH(barrasUsuario) + '</div>'
+            + '<div class="stack"><h3 class="card-sub">Últimos cambios</h3><ul class="lines">' + cambios.slice(0, 5).map(filaCambio).join('') + '</ul></div></div>'
+          : '<p class="empty">Nadie cambió precios en este período: todo se vendió al precio de lista.</p>')
+        + '</section>';
+
       const actividad = BG.db.usuarios.map((u) => {
         const vs = ventas.filter((v) => v.usuario === u.nombre);
         const ps = pagos.filter((p) => p.usuario === u.nombre);
@@ -196,6 +229,7 @@
         + '<div class="tiles tiles-5 tiles-compact">' + tile('Vendido', gs(vendido), ventas.length + (ventas.length === 1 ? ' venta' : ' ventas'))
         + tile('Cobrado', gs(cobrado), 'plata que entró en el período') + tile('Ganancia real', gs(ganancia), 'precio de venta − costo congelado')
         + tile('Por cobrar hoy', gs(sum(deudores, (d) => d.saldo)), deudores.length + ' clientes') + tile('Envíos', String(envios.length), fleteTienda ? 'fletes pagados por la tienda: ' + gs(fleteTienda) : 'en el período') + '</div>'
+        + cardPrecios
         + '<div class="grid-2 grid-charts">'
         + '<section class="card stack"><div class="card-head"><h2>Ventas y cobros por semana</h2><a class="small" href="#/reportes">Detalle</a></div>' + columnas('rs-semanas', sem, series) + '</section>'
         + '<section class="card stack"><div class="card-head"><h2>Cobrado por forma de pago</h2><span class="small muted">' + gs(cobrado) + '</span></div>' + barrasH(formas, 'Sin cobros en el período.')
