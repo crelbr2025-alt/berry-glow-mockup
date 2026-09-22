@@ -137,7 +137,7 @@
 
   BG.vistas.reportes = (args, params) => {
     const e = { tab: params.get('tab') || 'ventas', periodo: params.get('periodo') || 'mes', dias: 30, rot: 30 };
-    const tabs = [['ventas', 'Ventas'], ['deudores', 'Deudores y saldos a favor'], ['stock', 'Stock y rotación'], ['ganancia', 'Ganancia']];
+    const tabs = [['ventas', 'Ventas'], ['deudores', 'Deudores y saldos a favor'], ['stock', 'Stock y rotación'], ['clientas', 'Clientas'], ['ganancia', 'Ganancia']];
     const html = '<div class="page"><div class="page-head"><div><h1 class="page-title">Reportes</h1><p class="page-sub">Vista interna: solo ' + esc(BG.nombreDuena()) + ' ve costos y ganancias.</p></div></div>'
       + '<div class="tabs" role="tablist">' + tabs.map(([k, t]) => '<button type="button" class="tab-btn" role="tab" data-tab="' + k + '" aria-selected="' + (e.tab === k) + '">' + t + '</button>').join('') + '</div>'
       + '<div id="rep-filtro"></div><div id="rep-cuerpo" class="stack"></div></div>';
@@ -265,14 +265,59 @@
             + '<td class="num">' + BG.disponibles(p) + '</td><td class="num">' + (p.costoTotalGs ? gs(p.costoTotalGs) : '—') + '</td><td class="num">' + (p.precioVenta ? gs(p.precioVenta) : '—') + '</td>'
             + '<td class="num">' + gs(BG.disponibles(p) * (p.costoTotalGs || 0)) + '</td><td class="num">' + gs(BG.disponibles(p) * (p.precioVenta || 0)) + '</td></tr>').join('')
           + '</tbody></table></div></details>';
+      } else if (e.tab === 'clientas') {
+        const h = BG.hoy();
+        const fid = BG.configFidelidad();
+        const tienda = BG.db.config.tienda.nombre;
+        const filas = BG.db.clientes.map((c) => {
+          const rec = BG.comprasRecientes(c.id, 90);
+          const todas = BG.db.ventas.filter((v) => v.clienteId === c.id && !v.anulada);
+          return { c: c, n90: rec.length, monto90: sum(rec, (v) => v.total), ultima: todas.map((v) => v.fecha).sort().slice(-1)[0] || null, pts: BG.puntosDe(c.id), k: BG.cumpleDe(c) };
+        });
+        const frecuentes = filas.filter((x) => BG.esFrecuente(x.c.id)).sort((a, b) => b.monto90 - a.monto90);
+        const cumples = filas.filter((x) => x.k && x.k.dias >= -7 && x.k.dias <= 30).sort((a, b) => a.k.dias - b.k.dias);
+        const dormidas = filas.filter((x) => x.ultima && BG.diasEntre(x.ultima, h) >= 60).sort((a, b) => a.ultima.localeCompare(b.ultima));
+        const canjeables = filas.filter((x) => x.pts && x.pts.canjeable);
+        const canjesMes = (BG.db.canjes || []).filter((k) => k.fecha.slice(0, 7) === h.slice(0, 7));
+        const saludo = (x) => '¡Feliz cumpleaños, ' + x.c.nombre.split(' ')[0] + '! Te saludamos de ' + tienda + '.'
+          + (fid.activo && fid.cumple.activo ? ' Tenés ' + fid.cumple.porcentaje + ' % de regalo en tu compra de esta semana.' : '');
+        const extrano = (x) => 'Hola ' + x.c.nombre.split(' ')[0] + ', te extrañamos en ' + tienda + '. Llegaron cosas nuevas.'
+          + (x.pts && x.pts.puntos ? ' Tenés ' + x.pts.puntos + ' puntos (' + gs(x.pts.valor) + ') para usar.' : '') + ' ¡Te esperamos!';
+        cuerpo.innerHTML = '<div class="tiles tiles-compact">' + tile('Clientas frecuentes', String(frecuentes.length), '2 compras o más en 90 días')
+          + tile('Cumpleaños en 30 días', String(cumples.filter((x) => x.k.dias >= 0).length), cumples.filter((x) => x.k.enSemana).length + ' en la semana del regalo')
+          + tile('Puntos para canjear', gs(sum(canjeables, (x) => x.pts.valor)), canjeables.length + ' clientas ya pueden canjear')
+          + tile('Canjeado este mes', gs(sum(canjesMes, (k) => k.monto)), canjesMes.length + ' canjes') + '</div>'
+          + (fid.activo ? '<p class="callout">' + icon('star') + '<span>Programa: 1 punto cada ' + gs(fid.cadaGs) + ' que pagan (cada punto vale ' + gs(fid.valorPunto) + ', canje desde ' + fid.minimo + ' puntos)'
+            + (fid.cumple.activo ? ' y ' + fid.cumple.porcentaje + ' % de regalo en la semana de su cumpleaños' : '') + '. Jazmín solo ve el aviso al venderle. <a href="#/ajustes">Cambiar</a></span></p>'
+            : '<p class="callout callout-warn">' + icon('info') + '<span>El programa de clientas frecuentes está apagado. <a href="#/ajustes">Activarlo en Ajustes</a></span></p>')
+          + '<section class="card stack"><div class="card-head"><h2>' + icon('gift') + 'Cumpleaños próximos</h2></div>'
+          + (cumples.length ? '<ul class="lines">' + cumples.map((x) => '<li class="line"><div class="line-top"><div class="grow"><a class="row-title" href="#/clientes/' + x.c.id + '">' + esc(x.c.nombre) + '</a>'
+            + '<div class="row-sub">' + BG.fmtFechaCorta(x.k.fecha) + ' · ' + BG.textoCumple(x.k) + (x.k.enSemana ? (BG.regaloCumple(x.c.id) ? ' · regalo disponible' : BG.regaloCumpleUsado(x.c.id) ? ' · ya usó el regalo' : '') : '') + '</div></div>'
+            + '<a class="btn btn-sm" href="' + BG.waLink(x.c, saludo(x)) + '" target="_blank" rel="noopener">' + icon('chat', 'i-sm') + 'Saludar</a></div></li>').join('') + '</ul>'
+            : '<p class="empty">Nadie cumple en los próximos 30 días (o faltan fechas: se cargan en la ficha de cada clienta).</p>')
+          + '</section>'
+          + '<section class="card stack"><div class="card-head"><h2>' + icon('star') + 'Clientas frecuentes</h2><span class="small muted">últimos 90 días</span></div>'
+          + (frecuentes.length ? '<div class="table-wrap"><table class="table table-compact table-venta"><thead><tr><th>Clienta</th><th class="num">Compras</th><th class="num">Comprado</th><th class="num col-sm-hide">Última</th><th class="num">Puntos</th></tr></thead><tbody>'
+            + frecuentes.map((x) => '<tr class="is-link" data-href="#/clientes/' + x.c.id + '"><td><div class="t-title">' + esc(x.c.nombre) + '</div><div class="t-sub">' + esc(x.c.telefono) + '</div></td><td class="num">' + x.n90 + '</td><td class="num">' + gs(x.monto90) + '</td>'
+              + '<td class="num col-sm-hide">' + (x.ultima ? BG.fmtFechaCorta(x.ultima) : '—') + '</td><td class="num">' + (x.pts ? x.pts.puntos + (x.pts.canjeable ? ' ' + icon('star', 'i-sm') : '') : '—') + '</td></tr>').join('')
+            + '</tbody></table></div>' : '<p class="empty">Todavía nadie compró dos veces en 90 días.</p>')
+          + '</section>'
+          + '<section class="card stack"><div class="card-head"><h2>' + icon('clock') + 'Hace mucho que no compran</h2><span class="small muted">60 días o más</span></div>'
+          + (dormidas.length ? '<ul class="lines">' + dormidas.map((x) => '<li class="line"><div class="line-top"><div class="grow"><a class="row-title" href="#/clientes/' + x.c.id + '">' + esc(x.c.nombre) + '</a>'
+            + '<div class="row-sub">Última compra ' + BG.fmtFecha(x.ultima) + ' (' + BG.haceDias(x.ultima) + ')' + (x.pts && x.pts.puntos ? ' · ' + x.pts.puntos + ' puntos' : '') + '</div></div>'
+            + '<a class="btn btn-sm" href="' + BG.waLink(x.c, extrano(x)) + '" target="_blank" rel="noopener">' + icon('chat', 'i-sm') + 'Escribirle</a></div></li>').join('') + '</ul>'
+            : '<p class="empty">Todas compraron en los últimos 60 días.</p>')
+          + '</section>';
       } else {
         const ventas = BG.db.ventas.filter((v) => !v.anulada && enRango(v.fecha)).sort((a, b) => b.ts.localeCompare(a.ts));
         const neto = sum(ventas, (v) => v.total);
         const costo = sum(ventas, (v) => v.total - BG.gananciaVenta(v));
         const gan = neto - costo;
-        cuerpo.innerHTML = '<div class="tiles">' + tile('Ventas netas', gs(neto), 'con descuentos') + tile('Costo de lo vendido', gs(costo), 'costo congelado de cada artículo')
-          + tile('Ganancia real', gs(gan)) + tile('Margen real', (costo ? Math.round((gan / costo) * 100) : 0) + ' %', 'sobre el costo') + '</div>'
-          + '<p class="callout">' + icon('info') + '<span>Ganancia real = precio al que se vendió − costo congelado del producto. El 50/80/100/120 % es solo la sugerencia al cargar; acá cuentan los descuentos y los precios editados.</span></p>'
+        const res = BG.resultado(desde, hasta);
+        cuerpo.innerHTML = '<div class="tiles tiles-compact">' + tile('Ventas netas', gs(neto), 'con descuentos') + tile('Costo de lo vendido', gs(costo), 'costo congelado de cada artículo')
+          + tile('Ganancia bruta', gs(gan), (costo ? Math.round((gan / costo) * 100) : 0) + ' % sobre el costo') + tile('Ganancia neta', gs(res.neta), 'después de gastos', res.neta < 0 ? 'tile-bad' : 'tile-good') + '</div>'
+          + '<section class="card stack"><div class="card-head"><h2>De la ganancia bruta a la neta</h2><a class="small" href="#/gastos">Cargar gastos</a></div>' + BG.htmlResultado(res) + '</section>'
+          + '<p class="callout">' + icon('info') + '<span>Ganancia bruta = precio al que se vendió − costo congelado del producto. El 50/80/100/120 % es solo la sugerencia al cargar; acá cuentan los descuentos y los precios editados.</span></p>'
           + '<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Recibo</th><th>Cliente</th><th class="num">Vendido</th><th class="num">Costo</th><th class="num">Ganancia</th><th class="num">%</th></tr></thead><tbody>'
           + ventas.map((v) => { const g = BG.gananciaVenta(v); const c = v.total - g; return '<tr class="is-link" data-href="#/ventas/' + v.id + '"><td class="nowrap">' + BG.fmtFecha(v.fecha) + '</td><td class="nowrap">' + BG.fmtRecibo(v.recibo) + '</td><td>' + esc(BG.cliente(v.clienteId).nombre) + '</td>'
             + '<td class="num">' + gs(v.total) + '</td><td class="num">' + gs(c) + '</td><td class="num"><strong>' + gs(g) + '</strong></td><td class="num">' + (c ? Math.round((g / c) * 100) : 0) + ' %</td></tr>'; }).join('')
@@ -315,10 +360,15 @@
     const cerrada = BG.cajaCerrada(f);
     const cierre = BG.db.cierres.find((c) => c.fecha === f);
     const movs = BG.movimientosDelDia(f);
-    // Plata que salió de la caja: devoluciones en efectivo o transferencia y saldos a favor devueltos.
+    // Plata que salió de la caja: devoluciones y saldos a favor devueltos, y gastos pagados con el efectivo de la caja.
     const egresos = (BG.db.egresos || []).filter((x) => x.fecha === f).sort((a, b) => a.ts.localeCompare(b.ts));
-    const salioEf = sum(egresos.filter((x) => x.forma === 'efectivo'), (x) => x.monto);
-    const salioTr = sum(egresos.filter((x) => x.forma === 'transferencia'), (x) => x.monto);
+    const gastosCaja = BG.gastosVivos().filter((g) => g.fecha === f && g.forma === 'caja');
+    const devueltoEf = sum(egresos.filter((x) => x.forma === 'efectivo'), (x) => x.monto);
+    const gastadoEf = sum(gastosCaja, (g) => g.monto);
+    const salioEf = devueltoEf + gastadoEf;
+    const salidas = egresos.map((x) => ({ ts: x.ts, titulo: BG.cliente(x.clienteId).nombre, sub: x.concepto + ' · ' + BG.FORMAS[x.forma] + ' · por ' + x.usuario + (x.autorizadoPor ? ' · autorizó ' + x.autorizadoPor : ''), monto: x.monto }))
+      .concat(gastosCaja.map((g) => ({ ts: g.ts, titulo: 'Gasto: ' + g.concepto, sub: g.categoria + ' · efectivo de la caja · por ' + g.usuario, monto: g.monto })))
+      .sort((a, b) => a.ts.localeCompare(b.ts));
     const efectivoNeto = t.efectivo - salioEf;
     const html = '<div class="page">'
       + '<div class="page-head"><div><p class="eyebrow">' + BG.fmtFechaLarga(f) + '</p><h1 class="page-title">Caja del día</h1><p class="page-sub">Arqueo: lo que entró por cada forma de pago, para cuadrar la caja física con el sistema.</p></div>'
@@ -334,13 +384,13 @@
       + '</tbody><tfoot><tr><td colspan="2">Total cobrado</td><td class="num">' + gs(cobrado) + '</td></tr></tfoot></table></div>'
       + '<p class="hint list-top">Ventas del día: ' + ventas.length + ' por ' + gs(sum(ventas, (v) => v.total)) + '. Quedó a cuenta: ' + gs(sum(ventas, BG.saldoVenta)) + '.'
       + (t.saldo ? ' Saldo a favor usado: ' + gs(t.saldo) + ' (no es dinero nuevo).' : '') + '</p>'
-      + (egresos.length ? '<h3 class="card-sub list-top">Lo que salió</h3><div class="table-wrap table-bare"><table class="table table-compact"><thead><tr><th>Hora</th><th>Concepto</th><th class="num">Monto</th></tr></thead><tbody>'
-        + egresos.map((x) => '<tr><td class="nowrap">' + BG.fmtHora(x.ts) + '</td><td><div class="t-title">' + esc(BG.cliente(x.clienteId).nombre) + '</div><div class="t-sub">' + esc(x.concepto) + ' · ' + BG.FORMAS[x.forma] + ' · por ' + esc(x.usuario)
-          + (x.autorizadoPor ? ' · autorizó ' + esc(x.autorizadoPor) : '') + '</div></td><td class="num">−' + gs(x.monto) + '</td></tr>').join('')
-        + '</tbody><tfoot><tr><td colspan="2">Total que salió</td><td class="num">−' + gs(salioEf + salioTr) + '</td></tr></tfoot></table></div>' : '')
+      + (salidas.length ? '<h3 class="card-sub list-top">Lo que salió</h3><div class="table-wrap table-bare"><table class="table table-compact"><thead><tr><th>Hora</th><th>Concepto</th><th class="num">Monto</th></tr></thead><tbody>'
+        + salidas.map((x) => '<tr><td class="nowrap">' + BG.fmtHora(x.ts) + '</td><td><div class="t-title">' + esc(x.titulo) + '</div><div class="t-sub">' + esc(x.sub) + '</div></td><td class="num">−' + gs(x.monto) + '</td></tr>').join('')
+        + '</tbody><tfoot><tr><td colspan="2">Total que salió</td><td class="num">−' + gs(sum(salidas, (x) => x.monto)) + '</td></tr></tfoot></table></div>' : '')
       + '</section>'
       + '<section class="card stack"><div class="card-head"><h2>Arqueo del efectivo</h2></div>'
-      + '<dl class="summary">' + (salioEf ? '<dt>Cobrado en efectivo</dt><dd>' + gs(t.efectivo) + '</dd><dt>Devuelto en efectivo</dt><dd>−' + gs(salioEf) + '</dd>' : '')
+      + '<dl class="summary">' + (salioEf ? '<dt>Cobrado en efectivo</dt><dd>' + gs(t.efectivo) + '</dd>' + (devueltoEf ? '<dt>Devuelto en efectivo</dt><dd>−' + gs(devueltoEf) + '</dd>' : '')
+        + (gastadoEf ? '<dt>Gastos pagados con la caja</dt><dd>−' + gs(gastadoEf) + '</dd>' : '') : '')
       + '<dt>Efectivo según el sistema</dt><dd>' + gs(cierre ? cierre.efectivoEsperado : efectivoNeto) + '</dd>'
       + (cierre ? '<dt>Efectivo contado</dt><dd>' + gs(cierre.efectivoContado) + '</dd><div class="sep"></div><dt><strong>Diferencia</strong></dt><dd class="big ' + (cierre.efectivoContado === cierre.efectivoEsperado ? 'clear' : 'due') + '">' + gs(cierre.efectivoContado - cierre.efectivoEsperado) + '</dd>' : '')
       + '</dl>'
@@ -437,6 +487,38 @@
         : '<p class="hint">Sin comisión: no se calcula ni se muestra.</p>');
   }
 
+  /** Ventas a cuenta: límite general y atraso permitido. */
+  function htmlCredito() {
+    const c = BG.configCredito();
+    return '<div class="card-head"><h2>' + icon('lock') + 'Ventas a cuenta (límite de crédito)</h2></div>'
+      + '<label class="check-inline"><input type="checkbox" id="cr-activo"' + (c.activo ? ' checked' : '') + '> Controlar el límite al vender a cuenta</label>'
+      + (c.activo
+        ? '<div class="field"><label for="cr-limite">Límite general por clienta</label><div class="row row-nowrap">' + BG.campoGs('cr-limite', c.limite, 'placeholder="0"')
+          + '<button type="button" class="btn" data-accion="guardar-limite">Guardar</button></div><span class="hint">A una clienta puntual le podés poner otro monto, o «solo al contado», desde su ficha.</span></div>'
+          + '<div class="field"><span class="field-label" id="cr-dias-l">No venderle a cuenta si tiene una cuota atrasada hace más de</span><div class="seg" role="radiogroup" aria-labelledby="cr-dias-l">'
+          + [7, 15, 30, 60].map((d) => '<label><input type="radio" name="cr-dias" value="' + d + '"' + (c.diasAtraso === d ? ' checked' : '') + '>' + d + ' días</label>').join('') + '</div></div>'
+          + '<p class="hint">Si una venta pasa el límite, Jazmín ve el aviso y necesita tu PIN; vos podés venderle igual (queda anotado).</p>'
+        : '<p class="hint">Sin control: se puede vender a cuenta sin límite.</p>');
+  }
+  /** Clientas frecuentes: puntos y regalo de cumpleaños. */
+  function htmlFidelidad() {
+    const f = BG.configFidelidad();
+    const pct = (f.valorPunto * 100) / f.cadaGs;
+    const seg = (name, vals, sel, fmt) => '<div class="seg" role="radiogroup">' + vals.map((v) => '<label><input type="radio" name="' + name + '" value="' + v + '"' + (sel === v ? ' checked' : '') + '>' + fmt(v) + '</label>').join('') + '</div>';
+    return '<div class="card-head"><h2>' + icon('star') + 'Clientas frecuentes</h2><a class="small" href="#/reportes?tab=clientas">Ver clientas</a></div>'
+      + '<label class="check-inline"><input type="checkbox" id="fi-activo"' + (f.activo ? ' checked' : '') + '> Sumar puntos por compras</label>'
+      + (f.activo
+        ? '<div class="field"><span class="field-label">1 punto cada</span>' + seg('fi-cada', [5000, 10000, 20000], f.cadaGs, gs) + '</div>'
+          + '<div class="field"><span class="field-label">Cada punto vale</span>' + seg('fi-valor', [100, 200, 300, 500], f.valorPunto, gs) + '</div>'
+          + '<div class="field"><span class="field-label">Se canjea desde</span>' + seg('fi-min', [20, 50, 100], f.minimo, (v) => v + ' puntos') + '</div>'
+          + '<p class="callout">' + icon('info') + '<span>Devuelve el ' + String(Math.round(pct * 10) / 10).replace('.', ',') + ' % de lo que pagan: una compra de ' + gs(300000) + ' suma ' + Math.floor(300000 / f.cadaGs) + ' puntos = ' + gs(Math.floor(300000 / f.cadaGs) * f.valorPunto) + '. '
+            + 'Al canjear, pasa a su saldo a favor y en la ganancia neta cuenta como gasto de beneficios.</span></p>'
+        : '')
+      + '<label class="check-inline"><input type="checkbox" id="fi-cumple"' + (f.activo && f.cumple.activo ? ' checked' : '') + (f.activo ? '' : ' disabled') + '> Regalo de cumpleaños</label>'
+      + (f.activo && f.cumple.activo ? '<div class="field"><span class="field-label">Descuento en la semana de su cumpleaños</span>' + seg('fi-pct', [5, 10, 15, 20], f.cumple.porcentaje, (v) => v + ' %') + '</div>' : '')
+      + '<p class="hint">Jazmín no ve esta configuración: al elegir la clienta le aparece el aviso con un botón para aplicar el beneficio.</p>';
+  }
+
   BG.vistas.ajustes = () => {
     const cfg = BG.db.config;
     const hist = (lista, fmt) => '<ul class="hist">' + lista.slice().reverse().slice(0, 5).map((h) => '<li><span>' + fmt(h.valor) + '</span><span class="muted small">' + BG.fmtFecha(h.fecha) + ' · ' + esc(h.usuario) + '</span></li>').join('') + '</ul>';
@@ -475,13 +557,15 @@
         : '<div class="stack"><p><strong>' + esc(u.nombre) + ' · vendedora</strong> <span class="small muted">(usuario «' + esc(u.usuario) + '»)</span></p><div class="perm-list">'
           + '<label class="perm is-fixed"><input type="checkbox" checked disabled><strong>Ver ventas, clientes y cuánto debe cada uno</strong><span>Siempre, es la base de su perfil.</span></label>'
           + BG.PERMISOS.map(([k, t, desc]) => '<label class="perm"><input type="checkbox" data-permiso="' + k + '" data-usuario="' + u.id + '"' + (u.permisos && u.permisos[k] ? ' checked' : '') + '><strong>' + esc(t) + '</strong><span>' + esc(desc) + '</span></label>').join('')
-          + '<label class="perm is-fixed"><input type="checkbox" disabled><strong>Costos, dólar, márgenes sugeridos, anular, resumen y ajustes</strong><span>Nunca: son solo del dueño.</span></label>'
+          + '<label class="perm is-fixed"><input type="checkbox" disabled><strong>Costos, dólar, márgenes, anular, gastos y ganancia neta, pedidos, conteo, límites de crédito, puntos, resumen y ajustes</strong><span>Nunca: son solo del dueño. Ella solo ve los avisos al vender.</span></label>'
           + '</div></div>').join('')
       + '<div class="field"><span class="field-label" id="aj-min">Margen mínimo sin tu autorización</span><div class="seg" role="radiogroup" aria-labelledby="aj-min">'
       + [0, 20, 30, 40, 50].map((m) => '<label><input type="radio" name="aj-minimo" value="' + m + '"' + (BG.margenMinimo() === m ? ' checked' : '') + '>' + m + ' %</label>').join('') + '</div>'
       + '<span class="hint">Sobre el costo, como los precios sugeridos. Si un precio especial o un descuento de la vendedora deja menos margen, la venta pide tu PIN. Vender por debajo del costo siempre lo pide.</span></div>'
       + '<p class="hint">Probalo con «Ver como» arriba (o en «Más» desde el celular). Cada cambio de permisos queda en la auditoría.</p></section>'
       + BG.db.usuarios.filter((u) => u.rol === 'vendedor').map((u) => '<section class="card stack" id="com-' + u.id + '">' + htmlComision(u) + '</section>').join('')
+      + '<section class="card stack" id="aj-credito">' + htmlCredito() + '</section>'
+      + '<section class="card stack" id="aj-fidelidad">' + htmlFidelidad() + '</section>'
       + '<section class="card stack"><div class="card-head"><h2>Envíos</h2></div>'
       + '<p class="small">Salen de <strong>' + esc(cfg.envios.origen.ciudad) + ' (' + esc(cfg.envios.origen.departamento) + ')</strong>. Empresas con las que mandan (aparecen al preparar un envío):</p>'
       + '<ul class="list" id="aj-empresas">' + cfg.envios.empresas.map((x, i) => '<li class="list-row"><span class="row-main"><span class="row-title">' + esc(x.nombre) + '</span><span class="row-sub">' + esc(x.servicio) + '</span></span>'
@@ -509,8 +593,20 @@
           const u = BG.db.usuarios.find((x) => x.id === uid);
           if (host && u) { host.innerHTML = htmlComision(u); BG.enlazarCampos(host); }
         };
+        const repintar = (id, fn) => { const host = $('#' + id, root); if (host) { host.innerHTML = fn(); BG.enlazarCampos(host); } };
         root.addEventListener('change', async (e) => {
           const t = e.target;
+          if (t.id === 'cr-activo') { BG.guardarCredito({ activo: t.checked }); BG.toast(t.checked ? 'Límite de crédito activado.' : 'Sin control de límite.'); repintar('aj-credito', htmlCredito); return; }
+          if (t.name === 'cr-dias') { BG.guardarCredito({ diasAtraso: Number(t.value) }); BG.toast('Atraso permitido: ' + t.value + ' días.'); return; }
+          if (t.id === 'fi-activo') { BG.guardarFidelidad({ activo: t.checked }); BG.toast(t.checked ? 'Programa de clientas frecuentes activado.' : 'Programa desactivado.'); repintar('aj-fidelidad', htmlFidelidad); return; }
+          if (t.id === 'fi-cumple') { BG.guardarFidelidad({ cumple: { activo: t.checked } }); BG.toast(t.checked ? 'Regalo de cumpleaños activado.' : 'Sin regalo de cumpleaños.'); repintar('aj-fidelidad', htmlFidelidad); return; }
+          if (t.name === 'fi-cada' || t.name === 'fi-valor' || t.name === 'fi-min') {
+            BG.guardarFidelidad(t.name === 'fi-cada' ? { cadaGs: Number(t.value) } : t.name === 'fi-valor' ? { valorPunto: Number(t.value) } : { minimo: Number(t.value) });
+            BG.toast('Programa actualizado.');
+            repintar('aj-fidelidad', htmlFidelidad);
+            return;
+          }
+          if (t.name === 'fi-pct') { BG.guardarFidelidad({ cumple: { porcentaje: Number(t.value) } }); BG.toast('Regalo de cumpleaños: ' + t.value + ' %.'); return; }
           if (t.dataset && t.dataset.com) {
             BG.guardarComision(t.dataset.usuario, { [t.dataset.com]: t.checked });
             BG.toast(t.dataset.com === 'activa' ? (t.checked ? 'Meta y comisión activadas.' : 'Comisión desactivada.') : (t.checked ? 'Ella ve su avance en Inicio.' : 'Su avance queda oculto para ella.'));
@@ -553,6 +649,13 @@
           }
           const b = e.target.closest('[data-accion], [data-exportar]');
           if (!b) return;
+          if (b.dataset.accion === 'guardar-limite') {
+            const lim = BG.leerGs($('#cr-limite', root));
+            if (!(lim > 0)) { BG.toast('Escribí el límite general (por ejemplo ₲ 1.000.000).', 'error'); return; }
+            BG.guardarCredito({ limite: lim });
+            BG.toast('Límite general: ' + gs(lim) + ' por clienta.');
+            return;
+          }
           if (b.dataset.accion === 'guardar-meta') {
             const meta = BG.leerGs($('#com-meta', root));
             BG.guardarComision(b.dataset.usuario, { meta: meta });
@@ -596,7 +699,7 @@
 
   BG.vistas.auditoria = (args, params) => {
     const tipos = [['todo', 'Todo'], ['ventas', 'Ventas'], ['precios', 'Precios especiales'], ['cobros', 'Cobros'], ['cuotas', 'Cuotas'], ['devoluciones', 'Devoluciones'], ['recibos', 'Recibos'], ['envios', 'Envíos'],
-      ['anulaciones', 'Anulaciones'], ['productos', 'Productos'], ['parametros', 'Parámetros'], ['caja', 'Caja'], ['clientes', 'Clientes'], ['seguridad', 'Permisos y PIN']];
+      ['anulaciones', 'Anulaciones'], ['productos', 'Productos'], ['gastos', 'Gastos'], ['fidelidad', 'Clientas frecuentes'], ['parametros', 'Parámetros'], ['caja', 'Caja'], ['clientes', 'Clientes'], ['seguridad', 'Permisos y PIN']];
     const pedido = params && params.get('tipo');
     const e = { tipo: tipos.some((x) => x[0] === pedido) ? pedido : 'todo', usuario: 'todos', q: '', max: 120 };
     const html = '<div class="page"><div class="page-head"><div><h1 class="page-title">Auditoría</h1><p class="page-sub">Cada venta, precio especial, cobro, recibo emitido, envío, anulación y cambio de parámetros queda con fecha, hora y usuario. No se puede editar.</p></div></div>'

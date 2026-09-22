@@ -165,6 +165,12 @@
     const [mDesde, mHasta] = BG.mesActual();
     const meta = !duena && u.comision && u.comision.activa && u.comision.ve ? BG.htmlMeta(u, BG.comisionDe(u, mDesde, mHasta), 'Tu mes: meta y comisión') : '';
     const quietos = duena ? BG.db.productos.filter((p) => BG.disponibles(p) > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO) : [];
+    const resMes = duena ? BG.resultado(mDesde, mHasta) : null;
+    const cumples = duena ? BG.db.clientes.map((c) => ({ c: c, k: BG.cumpleDe(c) })).filter((x) => x.k && x.k.enSemana && x.k.dias >= -1).sort((a, b) => a.k.dias - b.k.dias) : [];
+    const pedidosCamino = duena ? BG.db.pedidos.filter((p) => BG.estadoPedido(p) === 'en_camino') : [];
+    const ultimoConteo = (BG.db.conteos || []).slice().sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
+    const conteoViejo = !duena ? '' : !ultimoConteo ? 'todavía no se hizo ninguno; conviene contar una vez por mes.'
+      : BG.diasEntre(ultimoConteo.fecha, BG.hoy()) > 30 ? 'el último fue hace ' + BG.diasEntre(ultimoConteo.fecha, BG.hoy()) + ' días; conviene contar de nuevo.' : '';
 
     const qb = (href, ic, t, sub, main) => '<a class="quick-btn' + (main ? ' is-main' : '') + '" href="' + href + '"><span class="qi">' + icon(ic) + '</span><span>' + t + '<small>' + sub + '</small></span></a>';
     const rapidas = [
@@ -190,8 +196,7 @@
       + '<div class="tile"><span class="tile-label">Cobrado hoy</span><span class="tile-value">' + gs(cobrado) + '</span><span class="tile-sub">' + desglose + (devueltoHoy ? ' · devuelto ' + gs(devueltoHoy) : '') + '</span></div>'
       + tileLink('#/clientes?filtro=deben', 'Por cobrar', gs(sum(deudores, (d) => d.saldo)), deudores.length + ' clientes con saldo')
       + tileLink('#/clientes?filtro=favor', icon('wallet', 'i-sm') + 'Saldo a favor', gs(sum(aFavor, (x) => x.favor)), aFavor.length + (aFavor.length === 1 ? ' cliente: la tienda le debe' : ' clientes: la tienda les debe'), 'tile-favor')
-      + (duena ? '<div class="tile"><span class="tile-label">Ganancia de ' + BG.MESES[Number(mes.slice(5, 7)) - 1] + '</span><span class="tile-value">' + gs(sum(ventasMes, BG.gananciaVenta)) + '</span>'
-        + '<span class="tile-sub">Precio de venta − costo congelado · solo ' + esc(BG.nombreDuena()) + ' la ve</span></div>' : '')
+      + (duena ? tileLink('#/gastos', 'Ganancia neta de ' + BG.MESES[Number(mes.slice(5, 7)) - 1], gs(resMes.neta), 'bruta ' + gs(resMes.bruta) + ' − gastos ' + gs(resMes.totalGastos), resMes.neta < 0 ? 'tile-bad' : '') : '')
       + '</section>'
       + '<div class="grid-2">' + cardCuotas() + cardFavor() + '</div>'
       + '<div class="grid-2">'
@@ -205,12 +210,13 @@
       + '</section></div>'
       + '<div class="grid-2">' + cardEnvios
       + '<div class="stack">'
-      + '<div class="callout ' + (cu.ok ? 'callout-good' : 'callout-bad') + '">' + icon(cu.ok ? 'shield' : 'alert') + '<div><strong>'
-      + (cu.ok ? 'Las cuentas por cobrar cuadran.' : 'Hay un descuadre en las cuentas por cobrar.') + '</strong> La suma de saldos cliente por cliente (' + gs(cu.porClientes) + ') '
-      + (cu.ok ? 'coincide con' : 'no coincide con') + ' el total por cobrar del sistema (' + gs(cu.libro) + '). Se controla solo, cada vez que se abre esta pantalla.</div></div>'
-      + '<div class="callout ' + (cf.ok ? 'callout-good' : 'callout-bad') + '">' + icon(cf.ok ? 'shield' : 'alert') + '<div><strong>'
-      + (cf.ok ? 'Los saldos a favor cuadran.' : 'Hay un descuadre en los saldos a favor.') + '</strong> Registrado: ' + gs(cf.registro) + ' · reconstruido desde pagos de más, señas, devoluciones, anulaciones y plata devuelta: ' + gs(cf.reconstruido)
-      + (cf.negativos.length ? ' · <strong>' + cf.negativos.length + ' en negativo</strong>' : ' · ninguno en negativo') + '.</div></div>'
+      // Los controles contables son del dueño: a la vendedora no le suman nada para vender.
+      + (duena ? '<div class="callout ' + (cu.ok ? 'callout-good' : 'callout-bad') + '">' + icon(cu.ok ? 'shield' : 'alert') + '<div><strong>'
+        + (cu.ok ? 'Las cuentas por cobrar cuadran.' : 'Hay un descuadre en las cuentas por cobrar.') + '</strong> La suma de saldos cliente por cliente (' + gs(cu.porClientes) + ') '
+        + (cu.ok ? 'coincide con' : 'no coincide con') + ' el total por cobrar del sistema (' + gs(cu.libro) + '). Se controla solo, cada vez que se abre esta pantalla.</div></div>'
+        + '<div class="callout ' + (cf.ok ? 'callout-good' : 'callout-bad') + '">' + icon(cf.ok ? 'shield' : 'alert') + '<div><strong>'
+        + (cf.ok ? 'Los saldos a favor cuadran.' : 'Hay un descuadre en los saldos a favor.') + '</strong> Registrado: ' + gs(cf.registro) + ' · reconstruido desde pagos de más, señas, devoluciones, canjes, anulaciones y plata devuelta: ' + gs(cf.reconstruido)
+        + (cf.negativos.length ? ' · <strong>' + cf.negativos.length + ' en negativo</strong>' : ' · ninguno en negativo') + '.</div></div>' : '')
       + (BG.puede('verCaja') ? '<div class="callout">' + icon(cerrada ? 'lock' : 'register') + '<div><strong>Caja de hoy: ' + (cerrada ? 'cerrada' : 'abierta') + '.</strong> '
         + (cerrada ? 'Los movimientos de hoy ya no se pueden anular sin autorización.' : 'Al terminar el día hacé el arqueo: el sistema compara el efectivo contado con lo cobrado (menos la plata devuelta).')
         + ' <a href="#/caja">Ir a la caja</a>'
@@ -220,6 +226,13 @@
         + gs(sum(conCambiosMes, BG.rebajaVenta)) + ' menos que el precio de lista. Mirá quién los puso, el motivo y cómo quedó la ganancia.</div></a>' : '')
       + (quietos.length ? '<a class="callout callout-link" href="#/reportes?tab=stock">' + icon('pause') + '<div><strong>Stock sin movimiento: ' + quietos.length + (quietos.length === 1 ? ' producto' : ' productos') + '</strong> '
         + 'con ' + BG.DIAS_QUIETO + ' días o más sin venderse (' + gs(sum(quietos, (p) => BG.disponibles(p) * (p.costoTotalGs || 0))) + ' parados al costo). Candidatos a liquidación.</div></a>' : '')
+      + (cumples.length ? '<a class="callout callout-link" href="#/reportes?tab=clientas">' + icon('gift') + '<div><strong>Cumpleaños de esta semana: ' + cumples.map((x) => esc(x.c.nombre.split(' ')[0]) + ' (' + BG.textoCumple(x.k) + ')').join(', ') + '.</strong> '
+        + 'Mandales un saludo; si compran esta semana tienen su regalo del ' + BG.configFidelidad().cumple.porcentaje + ' %.</div></a>' : '')
+      + pedidosCamino.map((p) => { const dias = p.llegaEstimada ? BG.diasEntre(BG.hoy(), p.llegaEstimada) : null;
+        return '<a class="callout callout-link" href="#/pedidos/' + p.id + '">' + icon('box2') + '<div><strong>Pedido en camino: ' + esc(p.proveedor) + '</strong> '
+          + (dias == null ? '' : dias > 0 ? 'llega en ' + dias + (dias === 1 ? ' día' : ' días') + ' (' + BG.fmtFecha(p.llegaEstimada) + ')' : dias === 0 ? 'llega hoy' : 'tendría que haber llegado el ' + BG.fmtFecha(p.llegaEstimada))
+          + '. Cuando llegue, «Llegó: cargar al stock».</div></a>'; }).join('')
+      + (conteoViejo ? '<a class="callout callout-link" href="#/productos/conteo">' + icon('count') + '<div><strong>Conteo de inventario:</strong> ' + conteoViejo + '</div></a>' : '')
       + (duena ? '<a class="callout callout-link" href="#/resumen">' + icon('pie') + '<div><strong>Resumen gráfico</strong> Ventas y cobros por semana, meta y comisión de ' + esc((BG.db.usuarios.find((x) => x.rol === 'vendedor') || { nombre: 'la vendedora' }).nombre) + ', precios especiales, devoluciones, deudas por antigüedad y lo que hizo cada usuario.</div></a>' : '')
       + '</div></div>'
       + '</div>';
@@ -370,6 +383,31 @@
     return true;
   };
 
+  /** Solo para el dueño: límite de crédito, puntos, cumpleaños y compras recientes de la clienta. */
+  function cardCreditoBeneficios(c) {
+    const cfg = BG.configCredito();
+    const limite = BG.limiteDe(c);
+    const debe = BG.saldoCliente(c.id);
+    const ec = BG.estadoCredito(c.id, 1);
+    const pts = BG.puntosDe(c.id);
+    const k = BG.cumpleDe(c);
+    const recientes = BG.comprasRecientes(c.id, 90);
+    const pct = limite > 0 ? Math.min(100, Math.floor((debe * 100) / limite)) : 0;
+    return '<section class="card stack" aria-labelledby="t-cb"><div class="card-head"><h2 id="t-cb">Crédito y beneficios</h2><a class="small" href="#/clientes/' + c.id + '/editar">Cambiar</a></div>'
+      + '<div class="grid-2 grid-mini">'
+      + '<div class="stack-sm"><span class="field-label">Crédito</span>'
+      + (!cfg.activo ? '<p class="small">Sin límite de crédito (se activa en Ajustes).</p>'
+        : limite === 0 ? '<p><span class="pill pill-warn">' + icon('lock') + 'Solo al contado</span></p>'
+          : '<p class="small">Debe <strong>' + gs(debe) + '</strong> de <strong>' + gs(limite) + '</strong> ' + (c.limite != null ? '(límite propio)' : '(límite general)') + '</p>'
+            + '<div class="progress' + (pct >= 100 ? ' progress-bad' : pct >= 80 ? ' progress-warn' : '') + '" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-label="Crédito usado"><span style="width:' + pct + '%"></span></div>')
+      + (ec.motivos.indexOf('atraso') >= 0 ? '<p class="small t-devuelto">No puede llevar a cuenta: cuota atrasada hace ' + ec.atraso + ' días.</p>' : '') + '</div>'
+      + '<div class="stack-sm"><span class="field-label">Clienta frecuente</span>'
+      + '<p class="small">' + recientes.length + (recientes.length === 1 ? ' compra' : ' compras') + ' en 90 días por ' + gs(sum(recientes, (v) => v.total)) + (BG.esFrecuente(c.id) ? ' <span class="pill pill-berry">' + icon('star') + 'Frecuente</span>' : '') + '</p>'
+      + (pts ? '<p class="small">' + icon('star', 'i-sm') + ' <strong>' + pts.puntos + ' puntos</strong> = ' + gs(pts.valor) + (pts.canjeable ? ' · se pueden canjear al venderle' : ' · canjea desde ' + BG.configFidelidad().minimo) + '</p>' : '')
+      + '<p class="small">' + icon('gift', 'i-sm') + ' ' + (k ? 'Cumple el ' + BG.fmtFechaCorta(k.fecha) + (k.enSemana ? ' (' + BG.textoCumple(k) + ')' + (BG.regaloCumple(c.id) ? ' · regalo disponible' : BG.regaloCumpleUsado(c.id) ? ' · ya usó el regalo' : '') : '') : 'Sin fecha de cumpleaños: agregala en «Cambiar».') + '</p></div>'
+      + '</div></section>';
+  }
+
   BG.vistas.cliente = (args) => {
     const c = BG.cliente(args[0]);
     if (!c) return { html: '<div class="page"><p class="empty">No encontramos ese cliente. <a href="#/clientes">Volver a clientes</a></p></div>' };
@@ -415,6 +453,7 @@
       + '<a class="btn" href="' + BG.waLink(c, textoWa) + '" target="_blank" rel="noopener">' + icon('chat') + 'WhatsApp</a>'
       + '</div></section>'
       + (c.notas ? '<div class="callout">' + icon('info') + '<div>' + esc(c.notas) + '</div></div>' : '')
+      + (BG.esDuena() ? cardCreditoBeneficios(c) : '')
       + (cuotas.length ? '<section class="card card-flush" aria-labelledby="t-cc"><div class="card-head pad"><h2 id="t-cc">Cuotas acordadas</h2><a class="small" href="#/cuotas">Todas las cuotas</a></div>'
         + '<ul class="list list-plain">' + cuotas.map((x) => '<li class="list-row"><span class="avatar">' + icon('calendar', 'i-sm') + '</span>'
           + '<span class="row-main"><a class="row-title" href="#/ventas/' + x.venta.id + '">Cuota ' + x.cuota.n + ' de ' + x.cuota.de + ' · ' + BG.fmtRecibo(x.venta.recibo) + '</a>'
@@ -436,7 +475,7 @@
       + '<div data-panel="movs" hidden><div class="table-wrap list-top"><table class="table"><thead><tr><th>Fecha</th><th>Concepto</th><th class="num">Compra</th><th class="num">Pago</th><th class="num">Saldo</th></tr></thead><tbody>'
       + libro.map((m) => '<tr><td class="nowrap">' + BG.fmtFecha(m.fecha) + '</td><td><span class="' + (m.anulado ? 'strike' : '') + '">' + esc(m.concepto) + '</span>'
         + (m.anulado ? '<div class="t-sub">' + esc(m.anulado) + '</div>' : '') + '</td><td class="num">' + (m.cargo ? gs(m.cargo) : '') + '</td><td class="num">' + (m.abono ? gs(m.abono) : '') + '</td><td class="num"><strong>' + gs(m.saldo) + '</strong></td></tr>').join('')
-      + '</tbody></table></div><p class="hint list-top">En «Pago» también van las devoluciones y rebajas; lo que pasó a saldo a favor figura como cargo porque sale de esta cuenta y queda en la de saldo a favor.</p></div>'
+      + '</tbody></table></div>' + (BG.esDuena() ? '<p class="hint list-top">En «Pago» también van las devoluciones y rebajas; lo que pasó a saldo a favor figura como cargo porque sale de esta cuenta y queda en la de saldo a favor.</p>' : '') + '</div>'
       + (creditos.length ? '<div data-panel="favor" hidden><div class="table-wrap list-top"><table class="table"><thead><tr><th>Fecha</th><th>Motivo</th><th class="num">Monto</th></tr></thead><tbody>'
         + creditos.map((x) => '<tr><td class="nowrap">' + BG.fmtFecha(x.fecha) + '</td><td>' + esc(x.motivo) + '</td><td class="num ' + (x.monto > 0 ? 't-favor' : '') + '">' + (x.monto > 0 ? '+' : '') + gs(x.monto) + '</td></tr>').join('')
         + '</tbody><tfoot><tr><td colspan="2">Disponible</td><td class="num">' + gs(aFavor) + '</td></tr></tfoot></table></div>'
@@ -463,8 +502,11 @@
   BG.vistas.clienteForm = (args, params) => {
     const id = args[0];
     const c = id ? BG.cliente(id) : null;
-    const v = c || { nombre: params.get('nombre') || '', ci: '', telefono: '', direccion: '', email: '', notas: '' };
+    const v = c || { nombre: params.get('nombre') || '', ci: '', telefono: '', direccion: '', email: '', notas: '', cumple: '' };
     const volver = params.get('volver');
+    const cumpleM = v.cumple ? v.cumple.slice(0, 2) : '';
+    const cumpleD = v.cumple ? v.cumple.slice(3, 5) : '';
+    const limiteSel = v.limite == null ? 'general' : v.limite === 0 ? 'contado' : 'propio';
     const campo = (k, label, req, extra) => '<div class="field' + (extra && extra.span ? ' span-2' : '') + '"><label for="f-' + k + '">' + label + (req ? ' <span class="req">*</span>' : '') + '</label>'
       + (k === 'notas' ? '<textarea id="f-' + k + '" class="textarea" rows="3">' + esc(v[k]) + '</textarea>'
         : '<input id="f-' + k + '" class="input" value="' + esc(v[k]) + '" ' + ((extra && extra.attrs) || '') + '>')
@@ -480,6 +522,16 @@
       + campo('telefono', 'Teléfono / WhatsApp', true, { attrs: 'type="tel" inputmode="tel" autocomplete="off"', hint: 'Ej.: 0981 123 456' })
       + campo('direccion', 'Dirección', false, { span: true })
       + campo('email', 'Correo electrónico', false, { span: true, attrs: 'type="email" autocomplete="off"' })
+      + '<div class="field span-2"><span class="field-label" id="f-cumple-l">Cumpleaños <span class="small muted">(opcional: para el saludo y su regalo)</span></span><div class="row row-nowrap" role="group" aria-labelledby="f-cumple-l">'
+      + '<select id="f-cumple-d" class="select select-auto" aria-label="Día"><option value="">Día</option>' + Array.from({ length: 31 }, (x, i) => i + 1).map((d) => '<option value="' + BG.pad(d) + '"' + (cumpleD === BG.pad(d) ? ' selected' : '') + '>' + d + '</option>').join('') + '</select>'
+      + '<select id="f-cumple-m" class="select select-auto" aria-label="Mes"><option value="">Mes</option>' + BG.MESES.map((m, i) => '<option value="' + BG.pad(i + 1) + '"' + (cumpleM === BG.pad(i + 1) ? ' selected' : '') + '>' + m + '</option>').join('') + '</select></div></div>'
+      + (BG.esDuena() ? '<div class="field span-2"><span class="field-label" id="f-lim-l">Límite de crédito <span class="small muted">(solo lo ves vos)</span></span>'
+        + '<div class="seg" role="radiogroup" aria-labelledby="f-lim-l">'
+        + '<label><input type="radio" name="f-lim" value="general"' + (limiteSel === 'general' ? ' checked' : '') + '>General (' + gs(BG.configCredito().limite) + ')</label>'
+        + '<label><input type="radio" name="f-lim" value="propio"' + (limiteSel === 'propio' ? ' checked' : '') + '>Otro monto</label>'
+        + '<label><input type="radio" name="f-lim" value="contado"' + (limiteSel === 'contado' ? ' checked' : '') + '>Solo al contado</label></div>'
+        + '<div id="f-lim-monto"' + (limiteSel === 'propio' ? '' : ' hidden') + '>' + BG.campoGs('f-limite', v.limite > 0 ? v.limite : '', 'aria-label="Límite de crédito propio" placeholder="0"') + '</div>'
+        + '<span class="hint">Si una venta a cuenta pasa el límite, o tiene cuotas atrasadas, Jazmín ve el aviso y necesita tu PIN.</span></div>' : '')
       + campo('notas', 'Notas', false, { span: true })
       + '</div>'
       + '<p class="hint">' + (c ? 'Cliente desde el ' + BG.fmtFecha(c.alta) + '.' : 'La fecha de alta la pone el sistema: ' + BG.fmtFecha(BG.hoy()) + '.') + '</p>'
@@ -490,10 +542,18 @@
       + '<div class="note-mock">' + icon('info') + '<span>La búsqueda compara la CI/RUC, el teléfono (con o sin 0 o 595) y el nombre aunque tenga errores de tipeo.</span></div></aside>'
       + '</div></div>';
 
-    const leer = (root) => ({
-      nombre: $('#f-nombre', root).value, ci: $('#f-ci', root).value, telefono: $('#f-telefono', root).value,
-      direccion: $('#f-direccion', root).value, email: $('#f-email', root).value, notas: $('#f-notas', root).value,
-    });
+    const leer = (root) => {
+      const d = $('#f-cumple-d', root).value;
+      const m = $('#f-cumple-m', root).value;
+      const datos = {
+        nombre: $('#f-nombre', root).value, ci: $('#f-ci', root).value, telefono: $('#f-telefono', root).value,
+        direccion: $('#f-direccion', root).value, email: $('#f-email', root).value, notas: $('#f-notas', root).value,
+        cumple: d && m ? m + '-' + d : '',
+      };
+      const lim = $('input[name="f-lim"]:checked', root);
+      if (lim) datos.limite = lim.value === 'general' ? null : lim.value === 'contado' ? 0 : BG.leerGs($('#f-limite', root)) || null;
+      return datos;
+    };
     const pintarDuplicados = (root) => {
       const dup = BG.posiblesDuplicados(leer(root), id);
       $('#duplicados', root).innerHTML = dup.length
@@ -507,6 +567,11 @@
       mount: (root) => {
         pintarDuplicados(root);
         ['nombre', 'ci', 'telefono'].forEach((k) => $('#f-' + k, root).addEventListener('input', () => pintarDuplicados(root)));
+        root.addEventListener('change', (ev) => {
+          if (ev.target.name !== 'f-lim') return;
+          $('#f-lim-monto', root).hidden = ev.target.value !== 'propio';
+          if (ev.target.value === 'propio') $('#f-limite', root).focus();
+        });
         $('#f-nombre', root).focus();
         $('#form-cliente', root).addEventListener('submit', async (ev) => {
           ev.preventDefault();

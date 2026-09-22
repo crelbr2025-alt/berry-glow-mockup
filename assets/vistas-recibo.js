@@ -65,6 +65,7 @@
       }),
       saldoCuenta: BG.saldoCliente(cli.id),
       aFavor: BG.creditoCliente(cli.id),
+      puntos: BG.puntosDe(cli.id),
       clienteRef: cli,
     };
   }
@@ -107,6 +108,7 @@
       + '<div class="r-saldo' + (saldoPrincipal > 0 ? '' : ' is-paid') + '"><span>' + etiquetaSaldo + '</span><strong>' + gs(saldoPrincipal) + '</strong></div>'
       + (deUnaCompra && d.saldoCuenta !== saldoPrincipal ? '<p class="r-account"><span>Saldo total de tu cuenta (todas las compras)</span><strong>' + gs(d.saldoCuenta) + '</strong></p>' : '')
       + (d.aFavor > 0 ? '<div class="r-favor"><span>Saldo a tu favor para la próxima compra</span><strong>' + gs(d.aFavor) + '</strong></div>' : '')
+      + (d.puntos && d.puntos.puntos > 0 ? '<p class="r-account"><span>Tus puntos: ' + d.puntos.puntos + (d.puntos.canjeable ? ' · ya los podés usar' : '') + '</span><strong>' + gs(d.puntos.valor) + '</strong></p>' : '')
       + '<footer class="r-foot"><p class="r-thanks">' + esc(t.mensaje || '¡Gracias por tu compra!') + '</p><p class="r-legal">' + esc(t.nombre) + ' · Comprobante interno de pago, no válido como factura.</p></footer>'
       + '</article>';
   }
@@ -221,7 +223,14 @@
       + CRITERIOS.map((c) => '<div class="check' + (hechos.indexOf(c.id) >= 0 ? ' is-done' : '') + '"><input type="checkbox" id="g-' + c.id + '" data-check="' + c.id + '"' + (hechos.indexOf(c.id) >= 0 ? ' checked' : '') + '>'
         + '<label class="check-title" for="g-' + c.id + '">' + esc(c.titulo) + '</label><p class="check-how">' + esc(c.como) + '</p>'
         + '<button type="button" class="btn btn-sm check-go" data-ir="' + c.ir + '">Probarlo</button></div>').join('') + '</div>'
-      + '<h3>Lo nuevo de esta versión</h3><ul class="bullets">'
+      + '<h3>Lo nuevo: perfil de Ariel</h3><ul class="bullets">'
+      + '<li><strong>Gastos y ganancia neta:</strong> menú «Gastos». Cargá alquiler, bolsas, servicios, publicidad…; el sistema suma solo los fletes de Envíos, la comisión de Jazmín y los puntos canjeados, y muestra cuánto queda de verdad. Lo pagado con la caja baja el efectivo del arqueo.</li>'
+      + '<li><strong>Límite de crédito:</strong> en Ajustes (general) y en la ficha de cada clienta (otro monto o solo al contado). Probá vender a cuenta a Lorena Giménez (tiene una cuota atrasada) o a Mirian Báez (solo contado): Jazmín ve el aviso y necesita el PIN 1234.</li>'
+      + '<li><strong>Conteo de inventario:</strong> Productos → «Conteo de inventario». Escribí lo que contaste; las diferencias corrigen el stock con su motivo. Hay un conteo de ejemplo con dos faltantes.</li>'
+      + '<li><strong>Pedidos al proveedor:</strong> menú «Pedidos»: pedido → en camino → llegó. En el que está en camino, «Llegó: cargar al stock» abre la carga con los artículos del pedido.</li>'
+      + '<li><strong>Clientas frecuentes:</strong> Reportes → «Clientas»: cumpleaños (con saludo por WhatsApp), frecuentes, puntos y las que hace mucho no compran. Camila Acosta cumple hoy: al venderle aparece el regalo del 10 %; María José Benítez tiene puntos para canjear.</li>'
+      + '<li><strong>Jazmín, más simple:</strong> no ve nada de esto; solo los avisos al vender (solo contado, regalo de cumpleaños, puntos para canjear) y ya no ve los controles contables internos.</li></ul>'
+      + '<h3>Versión anterior</h3><ul class="bullets">'
       + '<li><strong>Tema claro u oscuro:</strong> el botón del sol/luna de arriba cambia entre automático, claro y oscuro (en el celular también está en «Más»).</li>'
       + '<li><strong>Saldo a favor bien a la vista:</strong> pastilla dorada en la lista de clientes, recuadro en la ficha, en Inicio y al vender o cobrar (viene marcado para usarlo). Tamara tiene una seña de ₲ 100.000 y además debe: probá «Registrar cobro» con «Usarlo para pagar». Desde su ficha se puede devolver en plata (sale de la caja).</li>'
       + '<li><strong>Control del saldo a favor:</strong> en Inicio y en Reportes → Deudores el sistema reconstruye cada saldo a favor desde los pagos de más, señas, devoluciones, anulaciones y la plata devuelta, y avisa si algo no cuadra o queda negativo.</li>'

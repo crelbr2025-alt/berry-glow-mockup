@@ -57,7 +57,7 @@
   BG.reiniciarDatos = () => { BG.db = window.BGSeed.crear(hoy()); BG.guardar(); };
 
   BG.db = BG.leer(KEY_DB);
-  if (!BG.db || BG.db.version !== 4) BG.reiniciarDatos();
+  if (!BG.db || BG.db.version !== 5) BG.reiniciarDatos();
   BG.sesion = BG.leer(KEY_SESION);
   if (BG.sesion && !BG.db.usuarios.some((u) => u.id === BG.sesion.usuarioId)) BG.sesion = null;
   BG.guardarSesion = () => { if (BG.sesion) BG.escribir(KEY_SESION, BG.sesion); else { try { localStorage.removeItem(KEY_SESION); } catch (e) { /* sin almacenamiento */ } } };
@@ -132,7 +132,9 @@
   /** Unidades que la clienta se quedó de un artículo (las devueltas vuelven al stock). */
   BG.cantidadViva = (it) => it.cantidad - (it.devueltas || 0);
   BG.vendidas = (pid) => sum(BG.db.ventas.filter((v) => !v.anulada), (v) => sum(v.items.filter((it) => it.productoId === pid), BG.cantidadViva));
-  BG.disponibles = (p) => p.cantidad - BG.vendidas(p.id);
+  /** Diferencias de los conteos de inventario (faltantes negativos, sobrantes positivos). */
+  BG.ajusteStock = (pid) => sum((BG.db.ajustesStock || []).filter((a) => a.productoId === pid), (a) => a.diferencia);
+  BG.disponibles = (p) => p.cantidad - BG.vendidas(p.id) + BG.ajusteStock(p.id);
   BG.cajaCerrada = (fecha) => !!BG.db.config.cajaCerradaHasta && fecha <= BG.db.config.cajaCerradaHasta;
   BG.costoVenta = (v) => sum(v.items, (it) => (it.costoUnitGs || 0) * BG.cantidadViva(it));
   BG.gananciaVenta = (v) => v.total - BG.costoVenta(v);
@@ -195,6 +197,7 @@
       if (v.anulada) sumar(v.clienteId, BG.pagadoVenta(v));
     }
     for (const e of BG.db.egresos || []) sumar(e.clienteId, -e.monto);
+    for (const k of BG.db.canjes || []) sumar(k.clienteId, k.monto);
     const negativos = [];
     const diferencias = [];
     for (const c of BG.db.clientes) {
@@ -348,6 +351,138 @@
   BG.mesActual = () => { const h = hoy(); return [h.slice(0, 8) + '01', h]; };
   BG.mesAnterior = () => { const fin = sumarDias(hoy().slice(0, 8) + '01', -1); return [fin.slice(0, 8) + '01', fin]; };
 
+  /* ── Límite de crédito (lo configura el dueño; en el mostrador solo se ve el aviso) ── */
+
+  BG.configCredito = () => Object.assign({ activo: false, limite: 0, diasAtraso: 15 }, BG.db.config.credito);
+  /** Límite de la clienta: el suyo si Ariel le puso uno (0 = solo contado), si no el general. */
+  BG.limiteDe = (c) => (c && c.limite != null ? c.limite : BG.configCredito().limite);
+  /**
+   * ¿Puede llevar a cuenta `extra` guaraníes más? Mira lo que ya debe contra su límite y si tiene cuotas atrasadas
+   * más días de los permitidos. Devuelve { ok, motivos: ['sinCredito'|'limite'|'atraso'], limite, debe, nuevo, atraso }.
+   */
+  BG.estadoCredito = (cid, extra) => {
+    const cfg = BG.configCredito();
+    const c = BG.cliente(cid);
+    const debe = BG.saldoCliente(cid);
+    const nuevo = debe + (extra || 0);
+    const limite = BG.limiteDe(c);
+    let atraso = 0;
+    for (const x of BG.cuotasPendientes()) if (x.cliente.id === cid && x.cuota.estado === 'vencida') atraso = Math.max(atraso, -x.cuota.dias);
+    const motivos = [];
+    if (cfg.activo && (extra || 0) > 0) {
+      if (limite === 0) motivos.push('sinCredito');
+      else if (limite > 0 && nuevo > limite) motivos.push('limite');
+      if (atraso > cfg.diasAtraso) motivos.push('atraso');
+    }
+    return { ok: !motivos.length, motivos: motivos, limite: limite, debe: debe, nuevo: nuevo, atraso: atraso, activo: cfg.activo };
+  };
+  /** Aviso corto y concreto para el mostrador. */
+  BG.textoCredito = (e) => {
+    const partes = [];
+    if (e.motivos.indexOf('sinCredito') >= 0) partes.push('compra solo al contado');
+    if (e.motivos.indexOf('limite') >= 0) partes.push('con esta venta debería ' + gs(e.nuevo) + ' y su límite es ' + gs(e.limite));
+    if (e.motivos.indexOf('atraso') >= 0) partes.push('tiene una cuota atrasada hace ' + e.atraso + ' días');
+    return partes.join(' y ');
+  };
+
+  /* ── Clientas frecuentes: puntos, cumpleaños y compras ─────────────── */
+
+  BG.configFidelidad = () => {
+    const f = Object.assign({ activo: false, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: '0000-00-00' }, BG.db.config.fidelidad);
+    f.cumple = Object.assign({ activo: false, porcentaje: 10 }, f.cumple);
+    return f;
+  };
+  /** Puntos: 1 cada `cadaGs` de plata que pagó (sin contar saldo a favor usado ni lo que se le devolvió), menos los canjeados. */
+  BG.puntosDe = (cid) => {
+    const f = BG.configFidelidad();
+    if (!f.activo) return null;
+    const pagado = sum(BG.db.pagos.filter((p) => p.clienteId === cid && !p.anulado && p.fecha >= f.desde), (p) => sum(p.partes.filter((x) => x.forma !== 'saldo'), (x) => x.monto));
+    const devuelto = sum((BG.db.egresos || []).filter((e) => e.clienteId === cid && e.fecha >= f.desde), (e) => e.monto);
+    const ganados = Math.max(0, Math.floor((pagado - devuelto) / f.cadaGs));
+    const canjeados = sum((BG.db.canjes || []).filter((k) => k.clienteId === cid), (k) => k.puntos);
+    const puntos = Math.max(0, ganados - canjeados);
+    return { puntos: puntos, valor: puntos * f.valorPunto, canjeable: puntos >= f.minimo, ganados: ganados, canjeados: canjeados };
+  };
+  /** Próximo cumpleaños: días que faltan (negativo si fue hace poco) y si está en la semana del regalo (7 días antes o después). */
+  BG.cumpleDe = (c) => {
+    if (!c || !c.cumple) return null;
+    const h = hoy();
+    const md = c.cumple.split('-').map(Number);
+    const y = Number(h.slice(0, 4));
+    let fecha = isoLocal(new Date(y, md[0] - 1, md[1]));
+    let dias = diasEntre(h, fecha);
+    if (dias < -7) { fecha = isoLocal(new Date(y + 1, md[0] - 1, md[1])); dias = diasEntre(h, fecha); }
+    return { fecha: fecha, dias: dias, enSemana: Math.abs(dias) <= 7, hoy: dias === 0 };
+  };
+  BG.textoCumple = (k) => (k.hoy ? 'hoy' : k.dias === 1 ? 'mañana' : k.dias === -1 ? 'ayer' : k.dias > 0 ? 'en ' + k.dias + ' días' : 'hace ' + (-k.dias) + ' días');
+  /** ¿Ya usó el regalo de este cumpleaños? (una venta viva con el descuento de cumpleaños dentro de la semana del regalo). */
+  BG.regaloCumpleUsado = (cid) => {
+    const k = BG.cumpleDe(BG.cliente(cid));
+    if (!k) return false;
+    const desde = sumarDias(k.fecha, -7);
+    const hasta = sumarDias(k.fecha, 7);
+    return BG.db.ventas.some((v) => v.clienteId === cid && !v.anulada && v.fecha >= desde && v.fecha <= hasta && v.descuento && v.descuento.motivo === 'Cumpleaños');
+  };
+  /** Regalo de cumpleaños disponible ahora ({ porcentaje, cumple }) o null. */
+  BG.regaloCumple = (cid) => {
+    const f = BG.configFidelidad();
+    const k = BG.cumpleDe(BG.cliente(cid));
+    if (!f.activo || !f.cumple.activo || !k || !k.enSemana || BG.regaloCumpleUsado(cid)) return null;
+    return { porcentaje: f.cumple.porcentaje, cumple: k };
+  };
+  BG.comprasRecientes = (cid, dias) => BG.db.ventas.filter((v) => v.clienteId === cid && !v.anulada && v.fecha >= sumarDias(hoy(), -(dias || 90)));
+  /** Frecuente: 2 compras o más en los últimos 90 días. */
+  BG.esFrecuente = (cid) => BG.comprasRecientes(cid, 90).length >= 2;
+
+  /* ── Gastos y ganancia neta ────────────────────────────────────────── */
+
+  BG.CATEGORIAS_GASTO = ['Alquiler', 'Servicios (luz, agua, internet)', 'Bolsas y empaque', 'Envíos y courier', 'Publicidad', 'Sueldos', 'Otros'];
+  BG.FORMAS_GASTO = { caja: 'Efectivo de la caja', transferencia: 'Transferencia', tarjeta: 'Tarjeta', otro: 'Otro (fuera de la caja)' };
+  BG.gastosVivos = () => (BG.db.gastos || []).filter((g) => !g.anulado);
+  /**
+   * Estado de resultados de un período: ventas netas − costo congelado = ganancia bruta; menos los gastos cargados, los fletes
+   * que pagó la tienda (de Envíos), la comisión estimada de la vendedora y los puntos canjeados = ganancia neta.
+   */
+  BG.resultado = (desde, hasta) => {
+    const en = (f) => f >= desde && f <= hasta;
+    const ventas = BG.db.ventas.filter((v) => !v.anulada && en(v.fecha));
+    const ventasNetas = sum(ventas, (v) => v.total);
+    const costo = sum(ventas, BG.costoVenta);
+    const gastos = BG.gastosVivos().filter((g) => en(g.fecha));
+    const porCategoria = {};
+    gastos.forEach((g) => { porCategoria[g.categoria] = (porCategoria[g.categoria] || 0) + g.monto; });
+    const fletes = sum(BG.db.envios.filter((x) => x.flete.paga === 'tienda' && x.estado !== 'cancelado' && en(x.creado.slice(0, 10))), (x) => x.flete.monto);
+    const comision = sum(BG.db.usuarios.filter((u) => u.comision && u.comision.activa), (u) => BG.comisionDe(u, desde, hasta).comision);
+    const beneficios = sum((BG.db.canjes || []).filter((k) => en(k.fecha)), (k) => k.monto);
+    const cargados = sum(gastos, (g) => g.monto);
+    const totalGastos = cargados + fletes + comision + beneficios;
+    return {
+      ventas: ventas.length, ventasNetas: ventasNetas, costo: costo, bruta: ventasNetas - costo, gastos: gastos, porCategoria: porCategoria,
+      cargados: cargados, fletes: fletes, comision: comision, beneficios: beneficios, totalGastos: totalGastos, neta: ventasNetas - costo - totalGastos,
+    };
+  };
+
+  /* ── Pedidos al proveedor ──────────────────────────────────────────── */
+
+  BG.ESTADOS_PEDIDO = { pedido: 'Pedido', en_camino: 'En camino', recibido: 'Llegó', cancelado: 'Cancelado' };
+  BG.estadoPedido = (p) => p.estado || 'recibido';
+  BG.pillPedido = (p) => {
+    const e = BG.estadoPedido(p);
+    const cls = { pedido: 'pill-muted', en_camino: 'pill-warn', recibido: 'pill-good', cancelado: 'pill-muted' }[e];
+    const ic = { pedido: 'clock', en_camino: 'truck', recibido: 'check', cancelado: 'ban' }[e];
+    return '<span class="pill ' + cls + '">' + BG.icon(ic) + BG.ESTADOS_PEDIDO[e] + '</span>';
+  };
+  /** Costo en dólares de las filas de un pedido (costo × cantidad), con los números como se escriben acá (coma decimal). */
+  BG.totalUSDPedido = (items) => {
+    let t = C.Q(0n);
+    for (const it of items || []) {
+      const q = C.parseNum(it.costo, 'decimal');
+      const n = C.parseEntero(it.cant) || 0;
+      if (q) t = C.add(t, C.mul(q, C.Q(BigInt(n))));
+    }
+    return t;
+  };
+
   /** Los cuatro precios sugeridos sobre el costo congelado del producto, con el redondeo vigente. */
   BG.preciosProducto = (p) => {
     if (p.costoTotalGs == null) return [];
@@ -357,7 +492,7 @@
     });
   };
   /* Precios especiales: el margen se mide sobre el costo congelado, igual que los sugeridos (50, 80, 100 y 120 %). */
-  BG.MOTIVOS_PRECIO = ['Promoción', 'Cliente frecuente', 'Detalle en la prenda', 'Liquidación', 'Otro'];
+  BG.MOTIVOS_PRECIO = ['Promoción', 'Cliente frecuente', 'Cumpleaños', 'Detalle en la prenda', 'Liquidación', 'Otro'];
   BG.margenMinimo = () => { const p = BG.db.config.precios; return p && p.margenMinimo != null ? p.margenMinimo : 30; };
   /**
    * Ganancia y margen de vender a `precio` lo que costó `costo` (sirve por unidad o para toda la venta).
@@ -580,6 +715,10 @@
     target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor"/>',
     trend: '<path d="M3.5 17 9 11.5l4 4 7.5-8"/><path d="M15 7.5h5.5V13"/>',
     pause: '<circle cx="12" cy="12" r="8.5"/><path d="M10 9v6M14 9v6"/>',
+    gasto: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M8 12h8"/>',
+    count: '<path d="M8 4h8M8 4a2 2 0 0 0-2 2v14h12V6a2 2 0 0 0-2-2"/><path d="m9 11 2 2 4-4M9 17h6"/>',
+    gift: '<rect x="3.5" y="9" width="17" height="11.5" rx="1.5"/><path d="M2.5 9h19V6h-19zM12 6v14.5"/><path d="M12 6c-1.5-3-5.5-3.5-5.5-1S10 6 12 6Zm0 0c1.5-3 5.5-3.5 5.5-1S14 6 12 6Z"/>',
+    star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9L12 3.5Z"/>',
   };
   BG.icon = (nombre, cls) => '<svg class="i ' + (cls || '') + '" viewBox="0 0 24 24" aria-hidden="true">' + (ICONOS[nombre] || '') + '</svg>';
   const icon = BG.icon;
@@ -814,6 +953,12 @@
     [/^\/productos\/nuevo$/, 'productoNuevo', true],
     [/^\/productos\/pedido$/, 'pedido', true],
     [/^\/productos\/importar$/, 'importar', true],
+    [/^\/productos\/conteo$/, 'conteo', true],
+    [/^\/pedidos$/, 'pedidos', true],
+    [/^\/pedidos\/nuevo$/, 'pedidoForm', true],
+    [/^\/pedidos\/([\w-]+)\/editar$/, 'pedidoForm', true],
+    [/^\/pedidos\/([\w-]+)$/, 'pedidoDetalle', true],
+    [/^\/gastos$/, 'gastos', true],
     [/^\/envios$/, 'envios', 'prepararEnvios'],
     [/^\/envios\/nuevo$/, 'envioForm', 'prepararEnvios'],
     [/^\/envios\/([\w-]+)\/editar$/, 'envioForm', 'prepararEnvios'],
@@ -849,6 +994,8 @@
       BG.puede('verCaja') && ['caja', 'Caja del día', 'register'],
       ['-'],
       BG.puede('verPrecios') && ['productos', d ? 'Productos' : 'Lista de precios', 'box'],
+      d && ['pedidos', 'Pedidos', 'box2'],
+      d && ['gastos', 'Gastos', 'gasto'],
       d && ['resumen', 'Resumen', 'pie'],
       d && ['reportes', 'Reportes', 'chart'],
       d && ['auditoria', 'Auditoría', 'audit'],
@@ -962,7 +1109,8 @@
       + (BG.puede('prepararEnvios') ? item('#/envios', 'truck', 'Envíos') : '')
       + (BG.puede('verPrecios') ? item('#/productos', 'box', d ? 'Productos' : 'Lista de precios') : '')
       + (BG.puede('verCaja') ? item('#/caja', 'register', 'Caja del día') : '')
-      + (d ? item('#/resumen', 'pie', 'Resumen') + item('#/reportes', 'chart', 'Reportes') + item('#/auditoria', 'audit', 'Auditoría') + item('#/ajustes', 'sliders', 'Ajustes') : '')
+      + (d ? item('#/pedidos', 'box2', 'Pedidos al proveedor') + item('#/gastos', 'gasto', 'Gastos y ganancia neta')
+        + item('#/resumen', 'pie', 'Resumen') + item('#/reportes', 'chart', 'Reportes') + item('#/auditoria', 'audit', 'Auditoría') + item('#/ajustes', 'sliders', 'Ajustes') : '')
       + '<div class="sheet-sep"></div>'
       + '<div class="sheet-tema"><span class="small muted">Tema</span>' + BG.selectorTema() + '</div>'
       + '<button type="button" class="sheet-item" data-action="guia" data-cerrar-hoja>' + icon('guide') + 'Guía de prueba</button>'

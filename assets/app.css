@@ -1157,3 +1157,66 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 @media (max-width: 899px) { .topbar-actions { gap: 2px; } }
 /* Tablas de reportes en el celular: se ocultan las columnas secundarias para que entren sin deslizar tanto. */
 @media (max-width: 560px) { .col-sm-hide { display: none; } }
+
+/* ── Perfil del dueño: gastos, conteo, pedidos, crédito y clientas frecuentes ── */
+
+/* Avisos cortos al vender (lo único que ve la vendedora de estos temas) */
+.avisos:empty { display: none; }
+.aviso { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 12px; border-radius: 10px; font-size: 14px; background: var(--surface-2); color: var(--ink); }
+.aviso > .i { flex: none; }
+.aviso .grow { min-width: 0; }
+.aviso-warn { background: var(--warn-soft); color: var(--warn); }
+.aviso-warn strong { color: inherit; }
+.aviso-regalo { background: var(--berry-soft); }
+.aviso-regalo > .i { color: var(--berry); }
+.aviso-puntos { background: var(--glow-soft); }
+.aviso-puntos > .i { color: var(--favor); }
+
+/* Estado de resultados */
+.pyl { display: flex; flex-direction: column; margin: 0; }
+.pyl-fila { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 7px 0; border-top: 1px solid var(--line); }
+.pyl-fila:first-child { border-top: 0; }
+.pyl-fila dt { font-size: 14px; color: var(--ink-2); }
+.pyl-fila dt small { display: block; font-size: 12px; color: var(--muted); }
+.pyl-fila dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pyl-sub dt, .pyl-sub dd { color: var(--ink); font-weight: 800; }
+.pyl-total { border-top: 2px solid var(--line-strong); margin-top: 4px; padding-top: 10px; }
+.pyl-total dt { color: var(--ink); font-weight: 800; font-size: 15px; }
+.pyl-total dd { font-size: 20px; font-weight: 800; color: var(--good); }
+.pyl-neg dd { color: var(--bad); }
+.tile-good .tile-value { color: var(--good); }
+
+/* Conteo de inventario */
+.conteo-fila { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); }
+.conteo-fila:first-child { border-top: 0; }
+.conteo-fila .grow { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.conteo-fin { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
+.conteo-input { width: 76px; min-height: 40px; text-align: center; }
+.conteo-motivo { max-width: 260px; min-height: 36px; font-size: 14px; padding: 6px 8px; }
+.conteo .empty { border-top: 0; }
+
+/* Pedidos: tres pasos */
+.steps-track.steps-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 620px) { .steps-track.steps-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 10px; } }
+
+/* Ficha: crédito y beneficios */
+.grid-mini { gap: 14px 22px; }
+.stack-sm { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.stack-sm p .i { vertical-align: -3px; color: var(--muted); }
+.progress-warn > span { background: var(--warn); }
+.progress-bad > span { background: var(--bad); }
+
+/* Tablas para cargar artículos: en el celular cada fila es una tarjeta con sus etiquetas. */
+@media (max-width: 620px) {
+  .table-tarjetas thead { display: none; }
+  .table-tarjetas, .table-tarjetas tbody { display: block; }
+  .table-tarjetas tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; padding: 12px; border-bottom: 1px solid var(--line); position: relative; }
+  .table-tarjetas td { display: flex; flex-direction: column; gap: 4px; padding: 0 !important; border: 0 !important; text-align: left; min-width: 0; }
+  .table-tarjetas td::before { content: attr(data-label); font-size: 12px; font-weight: 700; color: var(--muted); }
+  .table-tarjetas td.te-desc { grid-column: 1 / -1; padding-right: 44px !important; }
+  .table-tarjetas td.te-desc .input { min-width: 0 !important; }
+  .table-tarjetas td.te-nota { grid-column: 1 / -1; }
+  .table-tarjetas td.te-quitar { position: absolute; top: 12px; right: 8px; }
+  .table-tarjetas td.num { text-align: left; font-weight: 700; }
+  .table-tarjetas .w-xs, .table-tarjetas .w-sm { width: 100%; }
+}

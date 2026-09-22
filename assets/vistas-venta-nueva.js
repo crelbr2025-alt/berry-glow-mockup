@@ -118,7 +118,7 @@
     const html = '<div class="page">'
       + '<div class="page-head"><div><h1 class="page-title">Nueva venta</h1><p class="page-sub">Cliente, artículos y cobro en una sola pantalla. Al registrar, el precio y el saldo quedan congelados.</p></div></div>'
       + '<div class="grid-form has-sticky"><div class="stack">'
-      + '<section class="card stack" aria-labelledby="t-cli"><h2 class="card-title" id="t-cli">1 · Cliente</h2><div id="s-cliente" class="stack"></div><div id="s-fecha"></div></section>'
+      + '<section class="card stack" aria-labelledby="t-cli"><h2 class="card-title" id="t-cli">1 · Cliente</h2><div id="s-cliente" class="stack"></div><div id="s-avisos" class="stack avisos"></div><div id="s-fecha"></div></section>'
       + '<section class="card stack" aria-labelledby="t-art"><h2 class="card-title" id="t-art">2 · Artículos</h2>'
       + '<div class="search" id="s-buscar"><label class="sr-only" for="q-prod">Buscar producto</label><div class="search-box">' + icon('search')
       + '<input id="q-prod" class="search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Buscar producto para agregar" role="combobox" aria-expanded="false" aria-controls="q-prod-lista" aria-autocomplete="list"></div>'
@@ -132,6 +132,7 @@
       + '<div class="lines" id="s-pagos"></div>'
       + '<button type="button" class="btn-link" data-accion="agregar-forma">' + icon('plus', 'i-sm') + 'Dividir en otra forma de pago (pago mixto)</button>'
       + '<dl class="summary" id="s-resto"></dl>'
+      + '<div id="s-cred"></div>'
       + '<div id="s-plan" class="stack"></div>'
       + '<p class="error-text" id="err-venta" role="alert" hidden></p>'
       + '<button type="button" class="btn btn-primary btn-lg btn-block hide-sticky" data-accion="registrar">' + icon('check') + 'Registrar venta</button>'
@@ -164,8 +165,31 @@
     const pintarCliente = () => {
       const host = $('#s-cliente', root);
       if (b.clienteId) host.innerHTML = clienteElegido(b.clienteId);
-      else buscadorCliente(host, (id) => { b.clienteId = id; pintarCliente(); pintarTotales(); }, 'venta');
+      else buscadorCliente(host, (id) => { b.clienteId = id; quitarRegalo(); pintarCliente(); pintarDescuento(); pintarTotales(); }, 'venta');
+      pintarAvisos();
     };
+    // Avisos cortos de la clienta: solo aparecen cuando sirven para esta venta (lo demás lo ve Ariel en su perfil).
+    const pintarAvisos = () => {
+      const host = $('#s-avisos', root);
+      if (!b.clienteId) { host.innerHTML = ''; return; }
+      const avisos = [];
+      const cr = BG.estadoCredito(b.clienteId, 1);
+      if (!cr.ok && (cr.motivos.indexOf('sinCredito') >= 0 || cr.motivos.indexOf('atraso') >= 0)) {
+        avisos.push('<div class="aviso aviso-warn">' + icon('lock') + '<div><strong>Solo al contado por ahora:</strong> ' + esc(BG.textoCredito(cr)) + '.</div></div>');
+      }
+      const regalo = BG.regaloCumple(b.clienteId);
+      if (regalo || b.regalo) {
+        avisos.push('<div class="aviso aviso-regalo">' + icon('gift') + '<div class="grow"><strong>' + (b.regalo ? 'Regalo de cumpleaños aplicado: ' + b.regalo + ' %.' : 'Cumple ' + BG.textoCumple(regalo.cumple) + ': tiene ' + regalo.porcentaje + ' % de regalo en esta compra.') + '</strong></div>'
+          + (b.regalo ? '<button type="button" class="btn btn-sm btn-quiet" data-accion="quitar-regalo">Quitar</button>' : '<button type="button" class="btn btn-sm" data-accion="regalo">Aplicar</button>') + '</div>');
+      }
+      const pts = BG.puntosDe(b.clienteId);
+      if (pts && pts.canjeable) {
+        avisos.push('<div class="aviso aviso-puntos">' + icon('star') + '<div class="grow"><strong>Tiene ' + pts.puntos + ' puntos = ' + gs(pts.valor) + '</strong> <span class="small">para usar en esta compra.</span></div>'
+          + '<button type="button" class="btn btn-sm" data-accion="canjear">Canjear</button></div>');
+      }
+      host.innerHTML = avisos.join('');
+    };
+    const quitarRegalo = () => { if (b.regalo) { b.regalo = null; b.desc = { activo: false, tipo: 'monto', valor: '' }; } };
     const htmlLinea = (it, i) => {
       const p = BG.producto(it.productoId);
       let precio = '';
@@ -207,6 +231,8 @@
     };
     const pintarDescuento = () => {
       const host = $('#s-desc', root);
+      // El regalo de cumpleaños queda fijo (no se edita el %), así sigue valiendo como beneficio del programa.
+      if (b.regalo && b.items.length) { host.innerHTML = '<p class="precio-info">' + icon('gift', 'i-sm') + '<span>Descuento de cumpleaños: <strong>' + b.regalo + ' %</strong></span></p>'; return; }
       if (!b.items.length || !puedeEspecial) { host.innerHTML = ''; return; }
       host.innerHTML = '<label class="check-inline"><input type="checkbox" id="d-activo"' + (b.desc.activo ? ' checked' : '') + '> Aplicar un descuento a esta venta</label>'
         + (b.desc.activo ? '<div class="row"><div class="seg" role="radiogroup" aria-label="Tipo de descuento">'
@@ -243,6 +269,13 @@
       const ev = b.items.length && t.total > 0 && (duena || (puedeEspecial && conCambios)) ? BG.evaluarPrecio(t.total, sum(b.items, (it) => costoDe(it) * it.cantidad)) : null;
       $('#s-ganancia', root).innerHTML = ev ? '<p class="precio-info"><span class="muted">En toda la venta:</span> ' + BG.infoPrecio(ev) + '</p>' : '';
       pintarPlan(t.resto);
+      // Límite de crédito: aviso concreto cuando lo que queda debiendo no entra en su límite.
+      const ec = b.clienteId && t.resto > 0 ? BG.estadoCredito(b.clienteId, t.resto) : null;
+      const credAviso = ec && !ec.ok ? '<div class="aviso aviso-warn">' + icon('alert') + '<div>' + (duena
+        ? '<strong>Fuera del límite de crédito:</strong> ' + esc(BG.textoCredito(ec)) + '. Podés venderle igual: queda anotado.'
+        : '<strong>No puede llevar a cuenta:</strong> ' + esc(BG.textoCredito(ec)) + '. Que pague todo, o al registrar se pide la autorización de ' + esc(BG.nombreDuena()) + '.') + '</div></div>' : '';
+      const credHost2 = $('#s-cred', root);
+      if (credHost2.innerHTML !== credAviso) credHost2.innerHTML = credAviso;
     };
     // Cuotas al vender: aparece cuando queda algo debiendo. El editor se arma solo cuando cambia lo que se muestra
     // (así no se pierde el foco mientras se escriben los montos); la vista previa se actualiza siempre.
@@ -310,6 +343,23 @@
           autorizadoPor = BG.nombreDuena();
         }
       }
+      // Venta a cuenta fuera del límite: la vendedora necesita el PIN del dueño; el dueño confirma.
+      let creditoAutorizadoPor = null;
+      const ec = t.resto > 0 ? BG.estadoCredito(b.clienteId, t.resto) : null;
+      if (ec && !ec.ok) {
+        const nombre = BG.cliente(b.clienteId).nombre;
+        if (!duena) {
+          if (!(await BG.pedirPin('Venta a cuenta fuera del límite: ' + nombre + ' ' + BG.textoCredito(ec) + '.'))) return;
+        } else {
+          const ok = await BG.modal({
+            titulo: 'Venta a cuenta fuera del límite',
+            cuerpo: '<p><strong>' + esc(nombre) + '</strong>: ' + esc(BG.textoCredito(ec)) + '.</p><p>¿Le vendés a cuenta igual? Queda anotado en la auditoría.</p>',
+            acciones: [{ texto: 'Revisar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Vender a cuenta igual', valor: 'ok', clase: 'btn-primary' }],
+          });
+          if (ok !== 'ok') return;
+        }
+        creditoAutorizadoPor = BG.nombreDuena();
+      }
       let partes = b.partes.filter((p) => p.monto > 0);
       let aCredito = 0;
       if (t.resto < 0) {
@@ -321,7 +371,7 @@
       try {
         res = BG.registrarVenta({
           clienteId: b.clienteId, fecha: b.fecha, descuento: descuento(), partes: partes, usarCredito: t.credito, excedenteACredito: aCredito, autorizadoPor: autorizadoPor,
-          plan: conPlan ? { frecuencia: b.plan.frecuencia, n: b.plan.n, primera: b.plan.primera } : null,
+          plan: conPlan ? { frecuencia: b.plan.frecuencia, n: b.plan.n, primera: b.plan.primera } : null, creditoAutorizadoPor: creditoAutorizadoPor,
           items: b.items.map((it) => ({
             productoId: it.productoId, cantidad: it.cantidad, precio: it.precio, margen: it.margen,
             motivo: esEspecial(it) ? it.motivo : null, nota: esEspecial(it) ? it.nota : '',
@@ -407,7 +457,33 @@
           if (!btn) return;
           const a = btn.dataset.accion;
           const i = Number(btn.dataset.i);
-          if (a === 'cambiar-cliente') { b.clienteId = null; pintarCliente(); pintarTotales(); $('#q-cli', root).focus(); }
+          if (a === 'cambiar-cliente') { b.clienteId = null; quitarRegalo(); pintarCliente(); pintarDescuento(); pintarTotales(); $('#q-cli', root).focus(); }
+          else if (a === 'regalo') {
+            const rg = BG.regaloCumple(b.clienteId);
+            if (!rg) return;
+            b.regalo = rg.porcentaje;
+            b.desc = { activo: true, tipo: 'porcentaje', valor: String(rg.porcentaje), motivo: 'Cumpleaños', nota: '' };
+            pintarAvisos();
+            pintarDescuento();
+            pintarTotales();
+          } else if (a === 'quitar-regalo') { quitarRegalo(); pintarAvisos(); pintarDescuento(); pintarTotales(); }
+          else if (a === 'canjear') {
+            const pts = BG.puntosDe(b.clienteId);
+            BG.modal({
+              titulo: 'Canjear puntos',
+              cuerpo: '<p>' + pts.puntos + ' puntos = <strong>' + gs(pts.valor) + '</strong>. Se suman a su saldo a favor y se descuentan de esta compra.</p>',
+              acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Canjear', valor: 'ok', clase: 'btn-primary' }],
+            }).then((ok) => {
+              if (ok !== 'ok') return;
+              try {
+                const k = BG.canjearPuntos(b.clienteId);
+                b.usarCredito = true;
+                pintarCliente();
+                pintarTotales();
+                BG.toast('Canjeó ' + k.puntos + ' puntos: ' + gs(k.monto) + ' para esta compra.');
+              } catch (er) { BG.toast(er.message, 'error'); }
+            });
+          }
           else if (a === 'quitar-item') { b.items.splice(i, 1); pintarItems(); pintarTotales(); }
           else if (a === 'especial') {
             b.items[i].abierto = true;

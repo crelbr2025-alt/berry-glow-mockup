@@ -150,6 +150,7 @@
       const vendido = sum(ventas, (v) => v.total);
       const cobrado = sum(pagos, dinero);
       const ganancia = sum(ventas, BG.gananciaVenta);
+      const res = BG.resultado(desde, hasta);
       const deudores = BG.listaDeudores();
       const envios = BG.db.envios.filter((x) => enR(x.creado.slice(0, 10)));
       const fleteTienda = sum(envios.filter((x) => x.flete.paga === 'tienda' && x.estado !== 'cancelado'), (x) => x.flete.monto);
@@ -261,8 +262,8 @@
 
       $('#rs-cuerpo', root).innerHTML = '<p class="small muted">Del ' + BG.fmtFecha(desde) + ' al ' + BG.fmtFecha(hasta) + '</p>'
         + '<div class="tiles tiles-5 tiles-compact">' + tile('Vendido', gs(vendido), ventas.length + (ventas.length === 1 ? ' venta' : ' ventas'))
-        + tile('Cobrado', gs(cobrado), 'plata que entró en el período') + tile('Ganancia real', gs(ganancia), 'precio de venta − costo congelado')
-        + tile('Por cobrar hoy', gs(sum(deudores, (d) => d.saldo)), deudores.length + ' clientes') + tile('Envíos', String(envios.length), fleteTienda ? 'fletes pagados por la tienda: ' + gs(fleteTienda) : 'en el período') + '</div>'
+        + tile('Cobrado', gs(cobrado), 'plata que entró en el período') + tile('Ganancia bruta', gs(ganancia), 'precio de venta − costo congelado')
+        + tile('Por cobrar hoy', gs(sum(deudores, (d) => d.saldo)), deudores.length + ' clientes') + '<a class="tile tile-link' + (res.neta < 0 ? ' tile-bad' : ' tile-good') + '" href="#/gastos"><span class="tile-label">Ganancia neta</span><span class="tile-value">' + gs(res.neta) + '</span><span class="tile-sub">después de gastos ' + gs(res.totalGastos) + '</span></a>' + '</div>'
         + cardPrecios
         + '<div class="grid-2 grid-charts">' + cardsMeta + cardDevol + '</div>'
         + '<div class="grid-2 grid-charts">'

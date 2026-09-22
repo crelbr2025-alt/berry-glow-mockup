@@ -68,12 +68,21 @@
   function registrarLote(listas, s, origen, proveedorPorDefecto) {
     const cfg = BG.db.config;
     const t = calcularLote(listas, s.modo, s.envioTotal, s.margen);
-    const ped = {
-      id: BG.uid('pd'), fecha: BG.hoy(), ts: BG.ahora(), proveedor: proveedorPorDefecto, cotizacion: cfg.cotizacion.valor,
+    const datos = {
+      fecha: BG.hoy(), ts: BG.ahora(), proveedor: proveedorPorDefecto, cotizacion: cfg.cotizacion.valor,
       envio: s.modo === 'total' ? { modo: 'total', totalUSD: C.qToString(t.envioTotal), pesoKg: C.qToString(t.pesoTotal) } : { modo: 'kg', tarifa: cfg.tarifa.valor },
-      productos: [],
+      productos: [], estado: 'recibido',
     };
-    BG.db.pedidos.push(ped);
+    // Si viene de un pedido al proveedor en seguimiento, se completa ese mismo pedido: llegó y se carga al stock.
+    let ped = s.desde ? BG.db.pedidos.find((x) => x.id === s.desde) : null;
+    if (ped) {
+      Object.assign(ped, datos);
+      (ped.historial || (ped.historial = [])).push({ estado: 'recibido', ts: datos.ts, usuario: BG.usuario().nombre, nota: listas.length + ' artículos cargados al stock' });
+      BG.auditar('productos', 'Pedido recibido', ped.proveedor + ' · ' + listas.length + ' artículos cargados al stock · dólar ' + C.fmtCot(cfg.cotizacion.valor));
+    } else {
+      ped = Object.assign({ id: BG.uid('pd') }, datos);
+      BG.db.pedidos.push(ped);
+    }
     const creados = BG.guardarProductos(listas.map((x) => ({
       descripcion: x.desc, categoria: x.cat, proveedor: x.prov || proveedorPorDefecto, cantidad: x.cant, costoUSD: x.costo, pesoKg: x.peso,
       envioModo: s.modo, envioUnitUSD: x.envioUnit, tarifa: s.modo === 'kg' ? cfg.tarifa.valor : null, cotizacion: cfg.cotizacion.valor,
@@ -86,24 +95,33 @@
 
   /* ── Cargar un pedido entero ─────────────────────────────────────────── */
 
-  BG.vistas.pedido = () => {
-    const s = {
-      proveedor: 'Tienda X, EE. UU.', modo: 'total', envioTotal: '53,00', margen: BG.db.config.margenDefecto, ejemplo: true,
-      filas: [
-        { desc: 'Remera oversize negra', cat: 'Prenda', cant: '3', costo: '12,00', peso: '0,300' },
-        { desc: 'Jean wide leg azul', cat: 'Prenda', cant: '2', costo: '26,50', peso: '0,650' },
-        { desc: 'Aros argolla dorados', cat: 'Accesorio', cant: '10', costo: '3,50', peso: '0,020' },
-      ],
-    };
+  BG.vistas.pedido = (args, params) => {
+    const origen = params && params.get('desde') ? BG.db.pedidos.find((x) => x.id === params.get('desde') && BG.estadoPedido(x) !== 'recibido') : null;
+    const s = origen
+      ? {
+        desde: origen.id, proveedor: origen.proveedor, modo: 'kg', envioTotal: '', margen: BG.db.config.margenDefecto, ejemplo: false,
+        filas: origen.items.map((it) => ({ desc: it.desc, cat: it.cat, cant: String(it.cant), costo: it.costo, peso: it.peso })),
+      }
+      : {
+        proveedor: 'Tienda X, EE. UU.', modo: 'total', envioTotal: '53,00', margen: BG.db.config.margenDefecto, ejemplo: true,
+        filas: [
+          { desc: 'Remera oversize negra', cat: 'Prenda', cant: '3', costo: '12,00', peso: '0,300' },
+          { desc: 'Jean wide leg azul', cat: 'Prenda', cant: '2', costo: '26,50', peso: '0,650' },
+          { desc: 'Aros argolla dorados', cat: 'Accesorio', cant: '10', costo: '3,50', peso: '0,020' },
+        ],
+      };
     const html = '<div class="page">'
-      + '<a class="back-link" href="#/productos">' + icon('left', 'i-sm') + 'Productos</a>'
-      + '<div class="page-head"><div><h1 class="page-title">Cargar un pedido</h1><p class="page-sub">Varios artículos que llegaron juntos por courier. Sirve para las dos formas de cobro del envío.</p></div></div>'
+      + (origen ? '<a class="back-link" href="#/pedidos/' + origen.id + '">' + icon('left', 'i-sm') + 'Pedido a ' + esc(origen.proveedor) + '</a>'
+        : '<a class="back-link" href="#/productos">' + icon('left', 'i-sm') + 'Productos</a>')
+      + '<div class="page-head"><div><h1 class="page-title">' + (origen ? 'Llegó el pedido: cargar al stock' : 'Cargar un pedido') + '</h1><p class="page-sub">'
+      + (origen ? 'Vienen los artículos del pedido. Revisá cantidades y pesos reales, y cómo cobró el courier: al guardar, se calculan los precios y el pedido queda como «Llegó».'
+        : 'Varios artículos que llegaron juntos por courier. Sirve para las dos formas de cobro del envío.') + '</p></div></div>'
       + '<div id="pd-params"></div>'
-      + '<div class="callout callout-warn" id="pd-ejemplo">' + icon('info') + '<div><strong>Estas tres filas son un ejemplo</strong> (envío total de US$ 53,00 repartido por peso). Cambialas o vacialas para cargar tu pedido. '
-      + '<button type="button" class="linkish" data-accion="vaciar">Vaciar la tabla</button></div></div>'
+      + (origen ? '' : '<div class="callout callout-warn" id="pd-ejemplo">' + icon('info') + '<div><strong>Estas tres filas son un ejemplo</strong> (envío total de US$ 53,00 repartido por peso). Cambialas o vacialas para cargar tu pedido. '
+      + '<button type="button" class="linkish" data-accion="vaciar">Vaciar la tabla</button></div></div>')
       + '<div class="grid-form grid-form-wide"><section class="card stack" aria-labelledby="pd-t">'
       + '<div class="card-head"><h2 id="pd-t">Artículos del pedido</h2><div class="field field-inline"><label for="pd-prov">Proveedor / origen</label><input id="pd-prov" class="input" value="' + esc(s.proveedor) + '" autocomplete="off"></div></div>'
-      + '<div class="table-wrap"><table class="table table-compact table-edit"><thead><tr><th>Descripción</th><th>Categoría</th><th class="num">Cant.</th><th class="num">Costo US$</th><th class="num">Peso kg</th>'
+      + '<div class="table-wrap"><table class="table table-compact table-edit table-tarjetas"><thead><tr><th>Descripción</th><th>Categoría</th><th class="num">Cant.</th><th class="num">Costo US$</th><th class="num">Peso kg</th>'
       + '<th class="num">Envío c/u</th><th class="num">Costo ₲ c/u</th><th class="num">Precio</th><th><span class="sr-only">Quitar</span></th></tr></thead><tbody id="pd-filas"></tbody></table></div>'
       + '<button type="button" class="btn-link" data-accion="agregar-fila">' + icon('plus', 'i-sm') + 'Agregar artículo</button></section>'
       + '<section class="card stack sticky-col" aria-labelledby="pd-r"><h2 class="card-title" id="pd-r">Envío y precios</h2><div id="pd-controles"></div><div id="pd-resumen"></div>'
@@ -114,13 +132,13 @@
     const filas = () => s.filas.map((f, i) => ({ i: i, desc: f.desc.trim(), cat: f.cat, cant: C.parseEntero(f.cant), costo: C.parseNum(f.costo, 'decimal'), peso: C.parseNum(f.peso, 'decimal') }));
     const esValida = (x) => x.desc && x.cant >= 1 && x.costo && !C.isZero(x.costo) && x.peso != null;
     const htmlFila = (f, i) => '<tr data-i="' + i + '">'
-      + '<td><input class="input" data-k="desc" value="' + esc(f.desc) + '" autocomplete="off" aria-label="Descripción, fila ' + (i + 1) + '" placeholder="Descripción"></td>'
-      + '<td><select class="select" data-k="cat" aria-label="Categoría, fila ' + (i + 1) + '">' + ['Prenda', 'Accesorio'].map((c) => '<option' + (f.cat === c ? ' selected' : '') + '>' + c + '</option>').join('') + '</select></td>'
-      + '<td><input class="input num-input w-xs" data-k="cant" inputmode="numeric" value="' + esc(f.cant) + '" aria-label="Cantidad, fila ' + (i + 1) + '"></td>'
-      + '<td><input class="input num-input w-sm" data-k="costo" inputmode="decimal" data-dec="2" value="' + esc(f.costo) + '" aria-label="Costo en US$, fila ' + (i + 1) + '"></td>'
-      + '<td><input class="input num-input w-sm" data-k="peso" inputmode="decimal" data-dec="3" value="' + esc(f.peso) + '" aria-label="Peso en kg, fila ' + (i + 1) + '"></td>'
-      + '<td class="num" id="pd-e-' + i + '"></td><td class="num" id="pd-c-' + i + '"></td><td class="num" id="pd-p-' + i + '"></td>'
-      + '<td><button type="button" class="btn-icon" data-accion="quitar-fila" data-i="' + i + '" aria-label="Quitar fila ' + (i + 1) + '">' + icon('x') + '</button></td></tr>';
+      + '<td class="te-desc"><input class="input" data-k="desc" value="' + esc(f.desc) + '" autocomplete="off" aria-label="Descripción, fila ' + (i + 1) + '" placeholder="Descripción"></td>'
+      + '<td data-label="Categoría"><select class="select" data-k="cat" aria-label="Categoría, fila ' + (i + 1) + '">' + ['Prenda', 'Accesorio'].map((c) => '<option' + (f.cat === c ? ' selected' : '') + '>' + c + '</option>').join('') + '</select></td>'
+      + '<td data-label="Cantidad"><input class="input num-input w-xs" data-k="cant" inputmode="numeric" value="' + esc(f.cant) + '" aria-label="Cantidad, fila ' + (i + 1) + '"></td>'
+      + '<td data-label="Costo US$"><input class="input num-input w-sm" data-k="costo" inputmode="decimal" data-dec="2" value="' + esc(f.costo) + '" aria-label="Costo en US$, fila ' + (i + 1) + '"></td>'
+      + '<td data-label="Peso kg"><input class="input num-input w-sm" data-k="peso" inputmode="decimal" data-dec="3" value="' + esc(f.peso) + '" aria-label="Peso en kg, fila ' + (i + 1) + '"></td>'
+      + '<td class="num" data-label="Envío c/u" id="pd-e-' + i + '"></td><td class="num" data-label="Costo ₲ c/u" id="pd-c-' + i + '"></td><td class="num" data-label="Precio" id="pd-p-' + i + '"></td>'
+      + '<td class="te-quitar"><button type="button" class="btn-icon" data-accion="quitar-fila" data-i="' + i + '" aria-label="Quitar fila ' + (i + 1) + '">' + icon('x') + '</button></td></tr>';
     const pintarFilas = () => { $('#pd-filas', root).innerHTML = s.filas.map(htmlFila).join(''); BG.enlazarCampos($('#pd-filas', root)); };
     const pintarControles = () => { $('#pd-controles', root).innerHTML = htmlControlesEnvio(s.modo, s.envioTotal, s.margen, 'pd'); BG.enlazarCampos($('#pd-controles', root)); };
     const pintarCalculos = () => {
@@ -148,8 +166,8 @@
       const t = calcularLote(todas, s.modo, s.envioTotal, s.margen);
       if (t.error) return fallar(t.error);
       const creados = registrarLote(todas.map((x) => Object.assign(x, { prov: '' })), s, 'pedido', $('#pd-prov', root).value.trim());
-      BG.toast(creados.length + ' productos cargados y calculados.');
-      BG.ir('#/productos');
+      BG.toast(creados.length + ' productos cargados y calculados.' + (s.desde ? ' El pedido quedó como «Llegó».' : ''));
+      BG.ir(s.desde ? '#/pedidos/' + s.desde : '#/productos');
     };
     return {
       html: html,
@@ -191,7 +209,7 @@
           } else if (a === 'vaciar') {
             s.filas = [{ desc: '', cat: 'Prenda', cant: '1', costo: '', peso: '' }];
             s.envioTotal = '';
-            $('#pd-ejemplo', root).hidden = true;
+            if ($('#pd-ejemplo', root)) $('#pd-ejemplo', root).hidden = true;
             pintarFilas();
             pintarControles();
             pintarCalculos();

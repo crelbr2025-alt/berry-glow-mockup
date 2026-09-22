@@ -174,7 +174,8 @@
     const disp = BG.disponibles(p);
     const ultima = BG.ultimaVentaDe(p.id);
     const quieto = disp > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO;
-    const stock = '<dl class="kv"><dt>Cargados</dt><dd>' + p.cantidad + '</dd><dt>Vendidos</dt><dd>' + BG.vendidas(p.id) + '</dd><dt>Disponibles</dt><dd>' + disp + '</dd>'
+    const stock = '<dl class="kv"><dt>Cargados</dt><dd>' + p.cantidad + '</dd><dt>Vendidos</dt><dd>' + BG.vendidas(p.id) + '</dd>'
+      + (BG.ajusteStock(p.id) ? '<dt>Ajuste por conteo</dt><dd>' + (BG.ajusteStock(p.id) > 0 ? '+' : '') + BG.ajusteStock(p.id) + '</dd>' : '') + '<dt>Disponibles</dt><dd>' + disp + '</dd>'
       + '<dt>Última venta</dt><dd>' + (ultima ? BG.fmtFecha(ultima) + ' (' + BG.haceDias(ultima) + ')' : 'nunca se vendió') + '</dd></dl>'
       + (quieto ? '<p class="callout callout-warn">' + icon('pause') + '<span>Lleva <strong>' + BG.diasSinVender(p) + ' días</strong> sin venderse: candidato a liquidación o promoción.</span></p>' : '');
     const cabecera = '<p class="muted small">' + esc(p.codigo) + ' · ' + esc(p.categoria) + (duena ? ' · ' + esc(p.proveedor) : '') + ' · cargado el ' + BG.fmtFecha(p.fechaCarga) + '</p>';
@@ -249,7 +250,7 @@
     const chips = (grupo, pares) => '<div class="chips" role="group">' + pares.map(([k, t]) => '<button type="button" class="chip" data-' + grupo + '="' + esc(k) + '" aria-pressed="' + (e[grupo] === k) + '">' + esc(t) + '</button>').join('') + '</div>';
     const html = '<div class="page">'
       + '<div class="page-head"><div><h1 class="page-title">' + (duena ? 'Productos' : 'Lista de precios') + '</h1><p class="page-sub" id="p-resumen"></p></div>'
-      + (duena ? '<div class="page-actions"><a class="btn" href="#/productos/importar">' + icon('file') + 'Importar Excel</a>'
+      + (duena ? '<div class="page-actions"><a class="btn" href="#/productos/conteo">' + icon('count') + 'Conteo de inventario</a><a class="btn" href="#/pedidos">' + icon('box2') + 'Pedidos al proveedor</a><a class="btn" href="#/productos/importar">' + icon('file') + 'Importar Excel</a>'
         + '<a class="btn" href="#/productos/pedido">' + icon('truck') + 'Cargar pedido</a>'
         + '<a class="btn btn-primary" href="#/productos/nuevo">' + icon('plus') + 'Cargar producto</a></div>' : '') + '</div>'
       + (duena ? BG.htmlParametros() : '<div class="note-mock">' + icon('eye') + '<span>Vista de vendedor/a: se ven precio y stock; los costos, el dólar y los márgenes están ocultos.</span></div>')

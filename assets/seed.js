@@ -185,6 +185,51 @@
     { c: 'c14', d: 2, h: '17:30', partes: [['transferencia', 100000]], q: 'j', nota: 'Seña por un blazer negro que llega en el próximo pedido' },
   ];
 
+  // Datos que solo ve Ariel: cumpleaños (número = días atrás de este año; texto = MM-DD fijo) y límites de crédito propios
+  // (0 = solo contado). El resto de las clientas usa el límite general.
+  const EXTRA_CLIENTES = {
+    c01: { cumple: 40 }, c02: { cumple: '03-14' }, c03: { cumple: -25 }, c04: { cumple: '11-02' }, c05: { cumple: '07-21' },
+    c06: { cumple: 0 }, c07: { cumple: '04-09', limite: 3000000 }, c08: { cumple: '05-30' }, c09: { cumple: -2 }, c10: { cumple: '12-08' },
+    c11: { cumple: '01-17' }, c12: { cumple: -12 }, c13: { limite: 0 }, c15: { cumple: '06-03' }, c18: { cumple: '02-27' }, c20: { cumple: 5 },
+    c23: { cumple: '08-19' },
+  };
+  // Gastos del local: [días atrás, categoría, concepto, monto, forma de pago]
+  const GASTOS = [
+    [46, 'Alquiler', 'Alquiler del local', 1800000, 'transferencia'],
+    [42, 'Servicios (luz, agua, internet)', 'ANDE e internet', 310000, 'transferencia'],
+    [25, 'Bolsas y empaque', 'Bolsas con el logo (100 u)', 140000, 'transferencia'],
+    [16, 'Alquiler', 'Alquiler del local', 1800000, 'transferencia'],
+    [12, 'Servicios (luz, agua, internet)', 'ANDE e internet', 325000, 'transferencia'],
+    [9, 'Publicidad', 'Promoción en Instagram', 150000, 'tarjeta'],
+    [7, 'Envíos y courier', 'Delivery en moto (3 entregas)', 45000, 'otro'],
+    [0, 'Bolsas y empaque', 'Papel de regalo y cintas', 45000, 'caja'],
+  ];
+  // Pedidos al proveedor todavía sin llegar (los que ya llegaron son PEDIDOS, más arriba).
+  const PEDIDOS_EN_CURSO = [
+    {
+      id: 'pd4', estado: 'en_camino', proveedor: 'Outlet Miami, EE. UU.', pedido: 9, camino: 3, llega: -4, courier: 'Courier Miami–Asunción', guia: 'MIA-778120',
+      nota: 'Llegan juntos en una caja.',
+      items: [
+        { desc: 'Blazer negro', cat: 'Prenda', cant: '2', costo: '31,90', peso: '0,700', nota: 'Uno reservado: seña de Tamara Cáceres' },
+        { desc: 'Jean wide leg azul', cat: 'Prenda', cant: '3', costo: '26,50', peso: '0,650', nota: '' },
+        { desc: 'Top deportivo negro', cat: 'Prenda', cant: '4', costo: '9,90', peso: '0,150', nota: '' },
+        { desc: 'Cartera baguette', cat: 'Accesorio', cant: '2', costo: '19,00', peso: '0,450', nota: '' },
+      ],
+    },
+    {
+      id: 'pd5', estado: 'pedido', proveedor: 'Tienda online, EE. UU.', pedido: 1, nota: 'Reposición de lo que más se vende.',
+      items: [
+        { desc: 'Blazer beige', cat: 'Prenda', cant: '2', costo: '29,90', peso: '0,700', nota: 'Se agotó' },
+        { desc: 'Bolso cruzado mini', cat: 'Accesorio', cant: '2', costo: '17,50', peso: '0,350', nota: '' },
+        { desc: 'Set de scrunchies x3', cat: 'Accesorio', cant: '10', costo: '4,00', peso: '0,040', nota: '' },
+      ],
+    },
+  ];
+  // Conteo de inventario de hace 12 días: [código, contado, motivo] (solo los que dieron diferencia; se contaron 10).
+  const CONTEO = { d: 12, h: '19:30', contados: 10, nota: 'Conteo de accesorios y calzas', diferencias: [['P07', 5, 'No se encontró'], ['P04', 2, 'Dañado: no se puede vender']] };
+  // Canje de puntos: Fátima canjeó 50 puntos hace 20 días (quedó como saldo a favor).
+  const CANJES = [{ c: 'c03', d: 20, h: '11:20', puntos: 50, q: 'a' }];
+
   // Envíos por encomienda o courier desde Coronel Oviedo (venta = número de venta, empezando en 1).
   // estados: [estado, días atrás, hora, quién (a = Ariel, j = Jazmín)]
   const ENVIOS = [
@@ -216,7 +261,7 @@
     const gs = (n) => C.fmtGs(n);
 
     const db = {
-      version: 4,
+      version: 5,
       creado: hoy,
       config: {
         tienda: {
@@ -240,6 +285,10 @@
         proximoRecibo: 101,
         cajaCerradaHasta: F(1),
         precios: { margenMinimo: 30 },
+        // Ventas a cuenta: límite general por clienta y atraso máximo de cuotas (Ariel lo cambia en Ajustes).
+        credito: { activo: true, limite: 1000000, diasAtraso: 15 },
+        // Clientas frecuentes: 1 punto cada ₲ 10.000 pagados; cada punto vale ₲ 300 (3 %); canje desde 50 puntos; 10 % en su cumpleaños.
+        fidelidad: { activo: true, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: F(90), cumple: { activo: true, porcentaje: 10 } },
         envios: {
           origen: { ciudad: 'Coronel Oviedo', departamento: 'Caaguazú' },
           empresas: [
@@ -256,14 +305,17 @@
         { id: 'u2', nombre: JAZMIN, usuario: 'jazmin', rol: 'vendedor', permisos: Object.assign({}, PERMISOS_VENDEDORA), comision: Object.assign({}, COMISION_VENDEDORA) },
       ],
       clientes: [], productos: [], pedidos: [], ventas: [], pagos: [], creditos: [], cierres: [], auditoria: [],
-      emisiones: [], envios: [], egresos: [],
+      emisiones: [], envios: [], egresos: [], gastos: [], canjes: [], conteos: [], ajustesStock: [],
     };
 
     db.config.historialTarifa.forEach((h) => log(h.ts, 'parametros', 'Tarifa del courier', C.fmtUSD(h.valor) + ' por kg'));
     db.config.historialCotizacion.forEach((h) => log(h.ts, 'parametros', 'Cotización del dólar', C.fmtCot(h.valor) + ' por US$ 1'));
 
     for (const [id, nombre, ci, telefono, direccion, email, notas, alta] of CLIENTES) {
-      db.clientes.push({ id: id, nombre: nombre, ci: ci, telefono: telefono, direccion: direccion, email: email, notas: notas, alta: F(alta), demo: true });
+      const extra = EXTRA_CLIENTES[id] || {};
+      const cumple = extra.cumple == null ? '' : typeof extra.cumple === 'number' ? F(extra.cumple).slice(5) : extra.cumple;
+      db.clientes.push(Object.assign({ id: id, nombre: nombre, ci: ci, telefono: telefono, direccion: direccion, email: email, notas: notas, alta: F(alta), demo: true, cumple: cumple },
+        extra.limite != null ? { limite: extra.limite } : {}));
       log(T(alta, '09:05'), 'clientes', 'Alta de cliente', nombre);
     }
 
@@ -273,7 +325,12 @@
       const lineas = ped.items.map((it) => ({ pesoKg: it[5], cantidad: it[3] }));
       const reparto = ped.modo === 'total' ? C.prorratearEnvio(lineas, ped.envioTotal) : null;
       db.pedidos.push({
-        id: ped.id, fecha: fecha, ts: ts, proveedor: ped.proveedor, cotizacion: ped.cot,
+        id: ped.id, estado: 'recibido', fechaPedido: F(ped.dias + 12), fecha: fecha, ts: ts, proveedor: ped.proveedor, cotizacion: ped.cot,
+        historial: [
+          { estado: 'pedido', ts: T(ped.dias + 12, '10:00'), usuario: USUARIO, nota: '' },
+          { estado: 'en_camino', ts: T(ped.dias + 5, '09:00'), usuario: USUARIO, nota: 'Courier Miami–Asunción' },
+          { estado: 'recibido', ts: ts, usuario: USUARIO, nota: ped.items.length + ' artículos cargados al stock' },
+        ],
         envio: ped.modo === 'total'
           ? { modo: 'total', totalUSD: ped.envioTotal, pesoKg: C.qToString(C.pesoTotal(lineas)) }
           : { modo: 'kg', tarifa: ped.tarifa },
@@ -580,12 +637,59 @@
       historial.forEach((h) => log(h.ts, 'envios', ETIQ[h.estado], numeroEnvio + ' · ' + cli.nombre + ' → ' + e.ciudad + ' (' + e.empresa + ')' + (h.nota ? ' · ' + h.nota : ''), h.usuario));
     });
 
-    // Cierres de caja de los últimos días (el sistema bloquea esos movimientos).
+    // Gastos del local (los pagados con la caja bajan el efectivo esperado de ese día).
+    GASTOS.forEach(([dias, categoria, concepto, monto, forma], i) => {
+      const g = { id: 'gt' + (i + 1), fecha: F(dias), ts: T(dias, '18:00'), categoria: categoria, concepto: concepto, monto: monto, forma: forma, usuario: ARIEL, anulado: null };
+      db.gastos.push(g);
+      log(g.ts, 'gastos', 'Gasto cargado', fmtFecha(g.fecha) + ' · ' + categoria + ' · ' + concepto + ' · ' + gs(monto));
+    });
+
+    // Pedidos al proveedor en camino o recién pedidos.
+    PEDIDOS_EN_CURSO.forEach((x) => {
+      const historial = [{ estado: 'pedido', ts: T(x.pedido, '19:30'), usuario: ARIEL, nota: '' }];
+      if (x.estado === 'en_camino') historial.push({ estado: 'en_camino', ts: T(x.camino, '09:15'), usuario: ARIEL, nota: x.courier + ' · guía ' + x.guia + ' · llega el ' + fmtFecha(F(x.llega)) });
+      db.pedidos.push({
+        id: x.id, estado: x.estado, proveedor: x.proveedor, fechaPedido: F(x.pedido), items: x.items, nota: x.nota || '',
+        courier: x.courier || '', guia: x.guia || '', llegaEstimada: x.llega != null ? F(x.llega) : '', historial: historial, productos: [],
+      });
+      historial.forEach((h) => log(h.ts, 'productos', h.estado === 'pedido' ? 'Pedido al proveedor' : 'Pedido en camino', x.proveedor + ' · ' + x.items.length + ' artículo(s)' + (h.nota ? ' · ' + h.nota : '')));
+    });
+
+    // Conteo de inventario: lo que decía el sistema ese día contra lo contado; las diferencias corrigen el stock.
+    {
+      const fecha = F(CONTEO.d);
+      const conteo = { id: 'ct1', fecha: fecha, ts: T(CONTEO.d, CONTEO.h), usuario: ARIEL, nota: CONTEO.nota, contados: CONTEO.contados, diferencias: 0, faltanteGs: 0, sobranteGs: 0 };
+      CONTEO.diferencias.forEach(([codigo, contado, motivo], k) => {
+        const p = db.productos.find((x) => x.id === codigo);
+        const vendidas = db.ventas.filter((v) => !v.anulada && v.fecha <= fecha).reduce((a, v) => a + v.items.filter((it) => it.productoId === codigo).reduce((b, it) => b + it.cantidad - (it.devueltas || 0), 0), 0);
+        const sistema = p.cantidad - vendidas;
+        const diferencia = contado - sistema;
+        db.ajustesStock.push({ id: 'as' + (k + 1), conteoId: conteo.id, productoId: codigo, descripcion: p.descripcion, fecha: fecha, sistema: sistema, contado: contado, diferencia: diferencia, motivo: motivo, costoUnitGs: p.costoTotalGs });
+        conteo.diferencias++;
+        if (diferencia < 0) conteo.faltanteGs += -diferencia * p.costoTotalGs; else conteo.sobranteGs += diferencia * p.costoTotalGs;
+        log(conteo.ts, 'productos', 'Ajuste de stock', p.descripcion + ': sistema ' + sistema + ', contado ' + contado + ' (' + (diferencia > 0 ? '+' : '') + diferencia + ') · ' + motivo);
+      });
+      db.conteos.push(conteo);
+      log(conteo.ts, 'productos', 'Conteo de inventario', conteo.contados + ' productos contados · ' + conteo.diferencias + ' con diferencia · faltante ' + gs(conteo.faltanteGs) + ' al costo');
+    }
+
+    // Canje de puntos: se acredita como saldo a favor (y es un gasto de beneficios en la ganancia neta).
+    CANJES.forEach((x, i) => {
+      const k = { id: 'cj' + (i + 1), clienteId: x.c, fecha: F(x.d), ts: T(x.d, x.h), puntos: x.puntos, monto: x.puntos * db.config.fidelidad.valorPunto, usuario: x.q === 'j' ? JAZMIN : ARIEL };
+      db.canjes.push(k);
+      db.creditos.push({ id: 'cr' + (db.creditos.length + 1), clienteId: x.c, fecha: k.fecha, ts: k.ts, monto: k.monto, motivo: 'Canje de ' + k.puntos + ' puntos', canjeId: k.id });
+      log(k.ts, 'fidelidad', 'Canje de puntos', nombre(x.c) + ' · ' + k.puntos + ' puntos = ' + gs(k.monto) + ' de saldo a favor', k.usuario);
+    });
+
+    // Cierres de caja de los últimos días (el sistema bloquea esos movimientos). El efectivo esperado descuenta la plata
+    // devuelta y los gastos pagados con la caja de ese día.
     [3, 2, 1].forEach((dias) => {
       const fecha = F(dias);
       const efectivo = db.pagos
         .filter((pg) => pg.fecha === fecha && !pg.anulado)
-        .reduce((s, pg) => s + pg.partes.filter((x) => x.forma === 'efectivo').reduce((a, x) => a + x.monto, 0), 0);
+        .reduce((s, pg) => s + pg.partes.filter((x) => x.forma === 'efectivo').reduce((a, x) => a + x.monto, 0), 0)
+        - db.egresos.filter((e) => e.fecha === fecha && e.forma === 'efectivo').reduce((a, e) => a + e.monto, 0)
+        - db.gastos.filter((g) => g.fecha === fecha && g.forma === 'caja').reduce((a, g) => a + g.monto, 0);
       const falta = dias === 3 ? 5000 : 0;
       const quien = dias === 3 ? ARIEL : JAZMIN;
       db.cierres.push({
