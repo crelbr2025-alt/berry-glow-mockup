@@ -57,10 +57,36 @@
   BG.reiniciarDatos = () => { BG.db = window.BGSeed.crear(hoy()); BG.guardar(); };
 
   BG.db = BG.leer(KEY_DB);
-  if (!BG.db || BG.db.version !== 3) BG.reiniciarDatos();
+  if (!BG.db || BG.db.version !== 4) BG.reiniciarDatos();
   BG.sesion = BG.leer(KEY_SESION);
   if (BG.sesion && !BG.db.usuarios.some((u) => u.id === BG.sesion.usuarioId)) BG.sesion = null;
   BG.guardarSesion = () => { if (BG.sesion) BG.escribir(KEY_SESION, BG.sesion); else { try { localStorage.removeItem(KEY_SESION); } catch (e) { /* sin almacenamiento */ } } };
+
+  /* Tema: automático (el del teléfono o la computadora), claro u oscuro. Se guarda en este navegador. */
+  const KEY_TEMA = 'berryglow.mockup.tema';
+  BG.TEMAS = { auto: 'Automático', claro: 'Claro', oscuro: 'Oscuro' };
+  BG.ICONO_TEMA = { auto: 'auto', claro: 'sun', oscuro: 'moon' };
+  BG.tema = () => { try { const t = localStorage.getItem(KEY_TEMA); return BG.TEMAS[t] ? t : 'auto'; } catch (e) { return 'auto'; } };
+  BG.aplicarTema = (t) => {
+    const r = document.documentElement;
+    if (t === 'claro') r.setAttribute('data-theme', 'light');
+    else if (t === 'oscuro') r.setAttribute('data-theme', 'dark');
+    else r.removeAttribute('data-theme');
+  };
+  BG.cambiarTema = (t) => {
+    try { localStorage.setItem(KEY_TEMA, t); } catch (e) { /* sin almacenamiento: vale hasta recargar */ }
+    BG.aplicarTema(t);
+    document.querySelectorAll('[data-tema]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tema === t)));
+    document.querySelectorAll('[data-action="tema"]').forEach((b) => {
+      b.innerHTML = BG.icon(BG.ICONO_TEMA[t]);
+      b.setAttribute('aria-label', 'Tema: ' + BG.TEMAS[t].toLowerCase() + ' (tocá para cambiar)');
+      b.title = 'Tema: ' + BG.TEMAS[t].toLowerCase();
+    });
+  };
+  /** Botones Automático / Claro / Oscuro (hoja «Más», ingreso). */
+  BG.selectorTema = () => '<div class="seg seg-tema" role="group" aria-label="Tema de la pantalla">'
+    + Object.keys(BG.TEMAS).map((k) => '<button type="button" data-tema="' + k + '" aria-pressed="' + (BG.tema() === k) + '">' + BG.icon(BG.ICONO_TEMA[k], 'i-sm') + BG.TEMAS[k] + '</button>').join('') + '</div>';
+  BG.aplicarTema(BG.tema());
 
   BG.esDuena = () => !!BG.sesion && BG.sesion.rol === 'admin';
   BG.usuario = () => BG.db.usuarios.find((u) => u.id === (BG.sesion && BG.sesion.usuarioId)) || BG.db.usuarios[0];
@@ -72,7 +98,8 @@
     ['registrarVentas', 'Registrar ventas', 'Nueva venta con el precio de lista, sin ver costos.'],
     ['preciosEspeciales', 'Poner precios especiales', 'Cambiar el precio de lista al vender o ajustarlo después (promoción, cliente frecuente…), siempre con el motivo.'],
     ['verGanancia', 'Ver la ganancia de sus precios especiales', 'Ve cuánto gana la tienda y el margen del precio que pone. Con eso puede deducir el costo.'],
-    ['registrarCobros', 'Registrar cobros', 'Pagos, pagos mixtos y señas.'],
+    ['registrarCobros', 'Registrar cobros', 'Pagos, pagos mixtos, señas y cuotas con fecha.'],
+    ['devoluciones', 'Devoluciones y cambios', 'Devolver o cambiar un artículo de una venta. Lo que sobra queda como saldo a favor; devolver plata en efectivo pide tu PIN.'],
     ['editarClientes', 'Crear y editar clientes', 'Alta de clientes nuevos y corrección de datos.'],
     ['verPrecios', 'Ver la lista de precios', 'Precios de venta y stock, sin costos.'],
     ['verCaja', 'Caja del día', 'Ver lo cobrado y hacer el cierre (reabrir es solo del dueño).'],
@@ -94,16 +121,38 @@
   BG.producto = (id) => porId(BG.db.productos, id);
   BG.venta = (id) => porId(BG.db.ventas, id);
   BG.pagosDeVenta = (vid, conAnulados) => BG.db.pagos.filter((p) => p.ventaId === vid && (conAnulados || !p.anulado));
-  BG.pagadoVenta = (v) => sum(BG.pagosDeVenta(v.id), (p) => p.total);
+  /** Lo que la venta tiene pagado: los pagos vivos menos lo que una devolución pasó a saldo a favor (v.aFavor). */
+  BG.pagadoVenta = (v) => sum(BG.pagosDeVenta(v.id), (p) => p.total) - (v.aFavor || 0);
   BG.saldoVenta = (v) => (v.anulada ? 0 : v.total - BG.pagadoVenta(v));
   BG.ventasDeCliente = (cid) => BG.db.ventas.filter((v) => v.clienteId === cid);
   BG.saldoCliente = (cid) => sum(BG.ventasDeCliente(cid), (v) => BG.saldoVenta(v));
   BG.creditoCliente = (cid) => sum(BG.db.creditos.filter((c) => c.clienteId === cid), (c) => c.monto);
   BG.pendientesDe = (cid) => BG.ventasDeCliente(cid).filter((v) => BG.saldoVenta(v) > 0).sort((a, b) => a.ts.localeCompare(b.ts));
   BG.deudaMasAntigua = (cid) => { const p = BG.pendientesDe(cid); return p.length ? p[0].fecha : null; };
-  BG.vendidas = (pid) => sum(BG.db.ventas.filter((v) => !v.anulada), (v) => sum(v.items.filter((it) => it.productoId === pid), (it) => it.cantidad));
+  /** Unidades que la clienta se quedó de un artículo (las devueltas vuelven al stock). */
+  BG.cantidadViva = (it) => it.cantidad - (it.devueltas || 0);
+  BG.vendidas = (pid) => sum(BG.db.ventas.filter((v) => !v.anulada), (v) => sum(v.items.filter((it) => it.productoId === pid), BG.cantidadViva));
   BG.disponibles = (p) => p.cantidad - BG.vendidas(p.id);
   BG.cajaCerrada = (fecha) => !!BG.db.config.cajaCerradaHasta && fecha <= BG.db.config.cajaCerradaHasta;
+  BG.costoVenta = (v) => sum(v.items, (it) => (it.costoUnitGs || 0) * BG.cantidadViva(it));
+  BG.gananciaVenta = (v) => v.total - BG.costoVenta(v);
+  /**
+   * Subtotal, descuento y total de una venta con lo que la clienta se quedó (sin las unidades devueltas).
+   * Un descuento en % se recalcula solo; uno en ₲ se reparte en proporción a lo que queda, así una devolución
+   * no se lleva el descuento entero. Sin devoluciones da exactamente lo mismo que al vender.
+   */
+  BG.totalesDe = (v, items) => {
+    const its = items || v.items;
+    const vivos = its.map((it) => ({ precio: it.precio, cantidad: BG.cantidadViva(it) }));
+    const d = v.descuento;
+    if (!d || !d.valor) return C.totalesVenta(vivos, null);
+    if (d.tipo === 'porcentaje') return C.totalesVenta(vivos, { tipo: 'porcentaje', valor: d.valor });
+    const t = C.totalesVenta(vivos, null);
+    const lleno = sum(its, (it) => it.precio * it.cantidad);
+    const base = Math.min(Math.round(Number(d.valor)), lleno);
+    const monto = lleno > 0 ? Math.floor((2 * base * t.subtotal + lleno) / (2 * lleno)) : 0;
+    return { subtotal: t.subtotal, descuento: monto, total: t.subtotal - monto };
+  };
 
   BG.FORMAS = { efectivo: 'Efectivo', transferencia: 'Transferencia', qr: 'QR', tarjeta: 'Tarjeta', saldo: 'Saldo a favor' };
   BG.FORMAS_CORTAS = { efectivo: 'Efectivo', transferencia: 'Transf.', qr: 'QR', tarjeta: 'Tarjeta' };
@@ -119,14 +168,185 @@
     .filter((d) => d.saldo > 0)
     .sort((a, b) => b.saldo - a.saldo);
 
-  /** Cuadre: saldo sumado cliente por cliente contra el libro (vendido − cobrado). */
+  /** Cuadre: saldo sumado cliente por cliente contra el libro (vendido − cobrado + lo que una devolución pasó a saldo a favor). */
   BG.cuadre = () => {
     const porClientes = sum(BG.db.clientes, (c) => BG.saldoCliente(c.id));
     const vivas = BG.db.ventas.filter((v) => !v.anulada);
     const ids = new Set(vivas.map((v) => v.id));
-    const libro = sum(vivas, (v) => v.total) - sum(BG.db.pagos.filter((p) => !p.anulado && ids.has(p.ventaId)), (p) => p.total);
+    const libro = sum(vivas, (v) => v.total) - sum(BG.db.pagos.filter((p) => !p.anulado && ids.has(p.ventaId)), (p) => p.total) + sum(vivas, (v) => v.aFavor || 0);
     return { porClientes: porClientes, libro: libro, ok: porClientes === libro };
   };
+
+  /**
+   * Cuadre de los saldos a favor. Lo que dice el registro de saldos a favor de cada cliente tiene que coincidir con lo que
+   * se reconstruye de los hechos: excedentes y señas de pagos vivos − saldo a favor usado para pagar + pagos de ventas
+   * anuladas + lo que las devoluciones pasaron a favor − lo que se le devolvió en plata. Y ningún saldo puede quedar negativo.
+   */
+  BG.cuadreFavor = () => {
+    const esperado = new Map();
+    const sumar = (cid, m) => { if (m) esperado.set(cid, (esperado.get(cid) || 0) + m); };
+    for (const p of BG.db.pagos) {
+      if (p.anulado) continue;
+      sumar(p.clienteId, p.excedente || 0);
+      sumar(p.clienteId, -sum(p.partes.filter((x) => x.forma === 'saldo'), (x) => x.monto));
+    }
+    for (const v of BG.db.ventas) {
+      sumar(v.clienteId, v.aFavor || 0);
+      if (v.anulada) sumar(v.clienteId, BG.pagadoVenta(v));
+    }
+    for (const e of BG.db.egresos || []) sumar(e.clienteId, -e.monto);
+    const negativos = [];
+    const diferencias = [];
+    for (const c of BG.db.clientes) {
+      const r = BG.creditoCliente(c.id);
+      const e = esperado.get(c.id) || 0;
+      if (r < 0) negativos.push(c);
+      if (r !== e) diferencias.push({ c: c, registro: r, esperado: e });
+    }
+    const registro = sum(BG.db.creditos, (x) => x.monto);
+    const reconstruido = sum(Array.from(esperado.values()));
+    return { registro: registro, reconstruido: reconstruido, negativos: negativos, diferencias: diferencias, ok: !negativos.length && !diferencias.length && registro === reconstruido };
+  };
+  /** Clientes con saldo a favor (la tienda les debe), de mayor a menor. */
+  BG.listaAFavor = () => BG.db.clientes
+    .map((c) => ({ c: c, favor: BG.creditoCliente(c.id), debe: BG.saldoCliente(c.id) }))
+    .filter((x) => x.favor > 0)
+    .sort((a, b) => b.favor - a.favor);
+
+  /* ── Cuotas con fecha ──────────────────────────────────────────────── */
+
+  BG.FRECUENCIAS = { semanal: 'Semanal', quincenal: 'Cada 15 días', mensual: 'Mensual' };
+  const sumarMeses = (iso, k) => {
+    const p = iso.slice(0, 10).split('-').map(Number);
+    const ultimo = new Date(p[0], p[1] - 1 + k + 1, 0).getDate();
+    return isoLocal(new Date(p[0], p[1] - 1 + k, Math.min(p[2], ultimo)));
+  };
+  BG.sumarMeses = sumarMeses;
+  /** Fechas de vencimiento: la primera y las siguientes cada semana, cada 15 días o el mismo día de cada mes. */
+  BG.fechasCuotas = (primera, n, frecuencia) => Array.from({ length: n }, (x, i) => (frecuencia === 'mensual' ? sumarMeses(primera, i)
+    : sumarDias(primera, i * (frecuencia === 'quincenal' ? 15 : 7))));
+  /** Reparte el saldo en cuotas redondas (a mil); la diferencia va en la última, así la suma da exacto. */
+  BG.repartirCuotas = (saldo, n) => {
+    let base = Math.floor(saldo / n / 1000) * 1000;
+    if (!base) base = Math.floor(saldo / n);
+    const m = Array(n).fill(base);
+    m[n - 1] = saldo - base * (n - 1);
+    return m;
+  };
+  BG.primeraCuotaSugerida = (frecuencia, desde) => (frecuencia === 'mensual' ? sumarMeses(desde || hoy(), 1) : sumarDias(desde || hoy(), frecuencia === 'quincenal' ? 15 : 7));
+  /**
+   * Estado de cada cuota, calculado siempre desde el saldo real de la venta, así el plan nunca contradice al saldo:
+   *  · lo que se pagó después de acordar el plan cancela las cuotas en orden, de la primera a la última;
+   *  · si el total de la venta bajó (rebaja de precio o devolución), se descuenta de las últimas cuotas;
+   *  · si subió (un cambio por algo más caro), la diferencia se suma a la última cuota.
+   * Siempre: lo que falta de todas las cuotas = saldo de la venta.
+   */
+  BG.estadoPlan = (v) => {
+    if (!v.plan || v.anulada) return null;
+    const h = hoy();
+    const pl = v.plan;
+    const saldo = BG.saldoVenta(v);
+    const pagadoAlAcordar = (pl.totalInicial != null ? pl.totalInicial : v.total) - pl.saldoInicial;
+    const pagadoDesde = Math.max(0, BG.pagadoVenta(v) - pagadoAlAcordar);
+    const montos = pl.cuotas.map((c) => c.monto);
+    let dif = saldo + pagadoDesde - sum(montos);
+    if (dif > 0) montos[montos.length - 1] += dif;
+    for (let i = montos.length - 1; dif < 0 && i >= 0; i--) {
+      const baja = Math.min(montos[i], -dif);
+      montos[i] -= baja;
+      dif += baja;
+    }
+    let cubierto = pagadoDesde;
+    const cuotas = pl.cuotas.map((c, i) => {
+      const pagado = Math.max(0, Math.min(montos[i], cubierto));
+      cubierto -= pagado;
+      const falta = montos[i] - pagado;
+      const dias = diasEntre(h, c.vence);
+      const estado = !montos[i] ? 'sinCargo' : !falta ? 'pagada' : dias < 0 ? 'vencida' : dias === 0 ? 'hoy' : dias <= 7 ? 'semana' : 'futura';
+      return { n: i + 1, de: montos.length, vence: c.vence, monto: montos[i], pagado: pagado, falta: falta, dias: dias, estado: estado };
+    });
+    const vencidas = cuotas.filter((c) => c.estado === 'vencida');
+    return { cuotas: cuotas, proxima: cuotas.find((c) => c.falta > 0) || null, vencidas: vencidas.length, atrasado: sum(vencidas, (c) => c.falta), saldo: saldo };
+  };
+  /** Todas las cuotas que faltan pagar, con su venta y su cliente, de la que vence antes a la que vence después. */
+  BG.cuotasPendientes = () => {
+    const out = [];
+    for (const v of BG.db.ventas) {
+      const e = BG.estadoPlan(v);
+      if (!e) continue;
+      e.cuotas.filter((c) => c.falta > 0).forEach((c) => out.push({ venta: v, cliente: BG.cliente(v.clienteId), cuota: c }));
+    }
+    return out.sort((a, b) => a.cuota.vence.localeCompare(b.cuota.vence) || a.cliente.nombre.localeCompare(b.cliente.nombre, 'es'));
+  };
+  BG.pillCuota = (c) => {
+    if (c.estado === 'sinCargo') return '<span class="pill pill-muted">Ya no se paga (bajó el total)</span>';
+    if (c.estado === 'pagada') return '<span class="pill pill-good">' + BG.icon('check') + 'Pagada</span>';
+    if (c.estado === 'vencida') return '<span class="pill pill-bad">' + BG.icon('alert') + 'Atrasada ' + (-c.dias === 1 ? '1 día' : -c.dias + ' días') + '</span>';
+    if (c.estado === 'hoy') return '<span class="pill pill-warn">' + BG.icon('clock') + 'Vence hoy</span>';
+    if (c.estado === 'semana') return '<span class="pill pill-warn">' + BG.icon('clock') + (c.dias === 1 ? 'Vence mañana' : 'Vence en ' + c.dias + ' días') + '</span>';
+    return '<span class="pill pill-muted">' + BG.icon('calendar') + 'Vence el ' + fmtFechaCorta(c.vence) + '</span>';
+  };
+  BG.textoRecordatorio = (cli, v, c) => 'Hola ' + cli.nombre.split(' ')[0] + ', te escribimos de ' + BG.db.config.tienda.nombre + '. '
+    + (c.estado === 'vencida' ? 'El ' + fmtFecha(c.vence) + ' venció' : c.estado === 'hoy' ? 'Hoy vence' : 'El ' + fmtFecha(c.vence) + ' vence')
+    + ' tu cuota ' + c.n + ' de ' + c.de + ' por ' + gs(c.falta) + ' (compra ' + fmtRecibo(v.recibo) + '). ¡Gracias!';
+
+  /* ── Rotación del stock ────────────────────────────────────────────── */
+
+  BG.DIAS_QUIETO = 30;
+  /** Fecha de la última venta viva del producto (null si nunca se vendió). */
+  BG.ultimaVentaDe = (pid) => {
+    let f = null;
+    for (const v of BG.db.ventas) {
+      if (v.anulada || !v.items.some((it) => it.productoId === pid && BG.cantidadViva(it) > 0)) continue;
+      if (!f || v.fecha > f) f = v.fecha;
+    }
+    return f;
+  };
+  /** Días que el producto lleva sin venderse (desde la última venta, o desde que se cargó si nunca se vendió). */
+  BG.diasSinVender = (p) => diasEntre(BG.ultimaVentaDe(p.id) || p.fechaCarga, hoy());
+  BG.vendidasDesde = (pid, desde) => sum(BG.db.ventas.filter((v) => !v.anulada && v.fecha >= desde),
+    (v) => sum(v.items.filter((it) => it.productoId === pid), BG.cantidadViva));
+
+  /* ── Meta y comisión de la vendedora ───────────────────────────────── */
+
+  /**
+   * Comisión de un usuario en un período: sobre lo cobrado de sus ventas (por fecha de cobro), menos lo que una devolución
+   * pasó a saldo a favor. Con base 'ganancia', cada guaraní cobrado cuenta en la proporción de ganancia de su venta,
+   * así un descuento grande achica la comisión. Una venta sin ganancia no suma. Las ventas anuladas no cuentan.
+   */
+  BG.comisionDe = (u, desde, hasta) => {
+    const cfg = u.comision || {};
+    const en = (f) => f >= desde && f <= hasta;
+    const suyas = new Map(BG.db.ventas.filter((v) => v.usuario === u.nombre && !v.anulada).map((v) => [v.id, v]));
+    const porVenta = new Map();
+    const mover = (v, monto) => {
+      if (!porVenta.has(v.id)) porVenta.set(v.id, { v: v, cobrado: 0 });
+      porVenta.get(v.id).cobrado += monto;
+    };
+    for (const p of BG.db.pagos) {
+      const v = suyas.get(p.ventaId);
+      if (!v) continue;
+      if (!p.anulado) { if (en(p.fecha)) mover(v, p.total); }
+      else if (p.anulado.aFavorRevertido && en(p.anulado.fecha)) mover(v, p.anulado.aFavorRevertido);
+    }
+    suyas.forEach((v) => (v.devoluciones || []).forEach((d) => { if (d.aFavor && en(d.fecha)) mover(v, -d.aFavor); }));
+    const pct = Number(cfg.porcentaje) || 0;
+    const filas = [];
+    porVenta.forEach((x) => {
+      const ganancia = BG.gananciaVenta(x.v);
+      const proporcion = x.v.total > 0 ? Math.max(0, ganancia) / x.v.total : 0;
+      const base = cfg.base === 'cobrado' ? x.cobrado : x.cobrado * proporcion;
+      filas.push({ v: x.v, cobrado: x.cobrado, ganancia: ganancia, ev: BG.evaluarPrecio(x.v.total, BG.costoVenta(x.v)), base: base, comision: (base * pct) / 100 });
+    });
+    filas.sort((a, b) => b.v.ts.localeCompare(a.v.ts));
+    const vendidas = Array.from(suyas.values()).filter((v) => en(v.fecha));
+    return {
+      cobrado: sum(filas, (f) => f.cobrado), comision: Math.round(sum(filas, (f) => f.comision)), filas: filas,
+      ventas: vendidas.length, vendido: sum(vendidas, (v) => v.total), meta: cfg.meta || 0, base: cfg.base || 'ganancia', porcentaje: pct,
+    };
+  };
+  BG.mesActual = () => { const h = hoy(); return [h.slice(0, 8) + '01', h]; };
+  BG.mesAnterior = () => { const fin = sumarDias(hoy().slice(0, 8) + '01', -1); return [fin.slice(0, 8) + '01', fin]; };
 
   /** Los cuatro precios sugeridos sobre el costo congelado del producto, con el redondeo vigente. */
   BG.preciosProducto = (p) => {
@@ -203,7 +423,7 @@
     return out;
   };
   /** Cuánto se dejó de cobrar frente al precio de lista (descuentos incluidos). */
-  BG.rebajaVenta = (v) => sum(v.items, (it) => (it.precioLista != null ? (it.precioLista - it.precio) * it.cantidad : 0)) + (v.descuento ? v.descuento.monto : 0);
+  BG.rebajaVenta = (v) => sum(v.items, (it) => (it.precioLista != null ? (it.precioLista - it.precio) * BG.cantidadViva(it) : 0)) + (v.descuento ? v.descuento.monto : 0);
   BG.detalleProducto = (p) => (p.costoUSD == null ? null : C.calcularProducto({
     costoUSD: p.costoUSD, envioUnitUSD: p.envioUnitUSD, cotizacion: p.cotizacion, redondeo: BG.db.config.redondeo,
   }));
@@ -352,6 +572,14 @@
     refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>',
     eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/>',
     shield: '<path d="M12 3 4.5 6v5.5c0 4.6 3.1 8.2 7.5 9.5 4.4-1.3 7.5-4.9 7.5-9.5V6L12 3Z"/><path d="m8.8 12 2.2 2.2 4.2-4.4"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/>',
+    moon: '<path d="M19.5 14.6A7.8 7.8 0 0 1 9.4 4.5a7.8 7.8 0 1 0 10.1 10.1Z"/>',
+    auto: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17Z" fill="currentColor"/>',
+    undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+    wallet: '<path d="M18.5 7.5V5.8a1.3 1.3 0 0 0-1.3-1.3H6a2.5 2.5 0 0 0 0 5h13a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a2.5 2.5 0 0 1-2.5-2.5V7"/><circle cx="16" cy="14.5" r="1.3" fill="currentColor"/>',
+    target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor"/>',
+    trend: '<path d="M3.5 17 9 11.5l4 4 7.5-8"/><path d="M15 7.5h5.5V13"/>',
+    pause: '<circle cx="12" cy="12" r="8.5"/><path d="M10 9v6M14 9v6"/>',
   };
   BG.icon = (nombre, cls) => '<svg class="i ' + (cls || '') + '" viewBox="0 0 24 24" aria-hidden="true">' + (ICONOS[nombre] || '') + '</svg>';
   const icon = BG.icon;
@@ -437,7 +665,8 @@
       // Enter en un campo de texto confirma con el botón principal (sin depender del envío implícito del navegador).
       dlg.onkeydown = (e) => {
         const t = e.target;
-        if (e.key !== 'Enter' || e.isComposing || !t || t.tagName !== 'INPUT' || /^(checkbox|radio|file|button|submit)$/.test(t.type)) return;
+        // Si otro control ya usó el Enter (por ejemplo, elegir una opción de un buscador), no se confirma el diálogo.
+        if (e.key !== 'Enter' || e.defaultPrevented || e.isComposing || !t || t.tagName !== 'INPUT' || /^(checkbox|radio|file|button|submit)$/.test(t.type)) return;
         const principal = dlg.querySelector('.modal-foot button[type="submit"]');
         if (principal) { e.preventDefault(); principal.click(); }
       };
@@ -557,11 +786,15 @@
   /** Fila de cliente para listas y autocompletado. */
   BG.filaCliente = (c, q) => {
     const saldo = BG.saldoCliente(c.id);
+    const favor = BG.creditoCliente(c.id);
     return '<span class="avatar">' + esc(iniciales(c.nombre)) + '</span>'
       + '<span class="row-main"><span class="row-title">' + (q ? BG.resaltar(c.nombre, q) : esc(c.nombre)) + '</span>'
       + '<span class="row-sub">' + (c.ci ? (c.ci.includes('-') ? 'RUC ' : 'CI ') + esc(c.ci) + ' · ' : '') + esc(c.telefono) + '</span></span>'
-      + '<span class="row-end">' + BG.pillSaldo(saldo) + (saldo > 0 ? BG.edad(BG.deudaMasAntigua(c.id)) : '') + '</span>';
+      + '<span class="row-end">' + (saldo > 0 || !favor ? BG.pillSaldo(saldo) : '') + (saldo > 0 ? BG.edad(BG.deudaMasAntigua(c.id)) : '')
+      + (favor > 0 ? BG.pillFavor(favor) : '') + '</span>';
   };
+  /** Pastilla dorada de saldo a favor: se ve en listas, buscadores y fichas para que nadie se olvide de usarlo. */
+  BG.pillFavor = (monto, largo) => '<span class="pill pill-favor">' + icon('wallet') + (largo ? 'Saldo a favor ' : 'A favor ') + gs(monto) + '</span>';
 
   /* ── Navegación ──────────────────────────────────────────────────────── */
 
@@ -575,6 +808,7 @@
     [/^\/ventas$/, 'ventas'],
     [/^\/ventas\/nueva$/, 'ventaNueva', 'registrarVentas'],
     [/^\/ventas\/([\w-]+)$/, 'venta'],
+    [/^\/cuotas$/, 'cuotas'],
     [/^\/cobros\/nuevo$/, 'cobro', 'registrarCobros'],
     [/^\/productos$/, 'productos', 'verPrecios'],
     [/^\/productos\/nuevo$/, 'productoNuevo', true],
@@ -609,6 +843,7 @@
       ['inicio', 'Inicio', 'home'],
       ['clientes', 'Clientes', 'users'],
       ['ventas', 'Ventas', 'bag'],
+      ['cuotas', 'Cuotas', 'calendar'],
       BG.puede('registrarCobros') && ['cobros/nuevo', 'Cobrar', 'cash'],
       BG.puede('prepararEnvios') && ['envios', 'Envíos', 'truck'],
       BG.puede('verCaja') && ['caja', 'Caja del día', 'register'],
@@ -642,6 +877,7 @@
       + '<button type="button" data-action="rol" data-rol="admin" aria-pressed="' + d + '">' + esc(duenio.nombre) + '</button>'
       + '<button type="button" data-action="rol" data-rol="vendedor" aria-pressed="' + !d + '">' + esc(vendedora.nombre) + '</button></div>'
       + '<button type="button" class="btn btn-quiet hide-mobile" data-action="guia">' + icon('guide') + '<span>Guía</span></button>'
+      + '<button type="button" class="btn-icon btn-tema" data-action="tema" aria-label="Tema: ' + BG.TEMAS[BG.tema()].toLowerCase() + ' (tocá para cambiar)" title="Tema: ' + BG.TEMAS[BG.tema()].toLowerCase() + '">' + icon(BG.ICONO_TEMA[BG.tema()]) + '</button>'
       + (BG.puede('registrarVentas') ? '<a class="btn btn-primary hide-mobile" href="#/ventas/nueva">' + icon('plus') + '<span>Nueva venta</span></a>' : '')
       + '<button type="button" class="btn-icon show-mobile" data-action="guia" aria-label="Guía de prueba">' + icon('guide') + '</button>';
     const tabs = ['<a class="tab" href="#/inicio" data-nav="inicio">' + icon('home') + '<span>Inicio</span></a>',
@@ -722,11 +958,13 @@
     const otro = BG.db.usuarios.find((x) => x.rol === (d ? 'vendedor' : 'admin'));
     sheet.innerHTML = '<div class="sheet-grip"></div><div class="sheet-list">'
       + item('#/ventas', 'bag', 'Ventas')
+      + item('#/cuotas', 'calendar', 'Cuotas')
       + (BG.puede('prepararEnvios') ? item('#/envios', 'truck', 'Envíos') : '')
       + (BG.puede('verPrecios') ? item('#/productos', 'box', d ? 'Productos' : 'Lista de precios') : '')
       + (BG.puede('verCaja') ? item('#/caja', 'register', 'Caja del día') : '')
       + (d ? item('#/resumen', 'pie', 'Resumen') + item('#/reportes', 'chart', 'Reportes') + item('#/auditoria', 'audit', 'Auditoría') + item('#/ajustes', 'sliders', 'Ajustes') : '')
       + '<div class="sheet-sep"></div>'
+      + '<div class="sheet-tema"><span class="small muted">Tema</span>' + BG.selectorTema() + '</div>'
       + '<button type="button" class="sheet-item" data-action="guia" data-cerrar-hoja>' + icon('guide') + 'Guía de prueba</button>'
       + '<button type="button" class="sheet-item" data-action="rol" data-rol="' + (d ? 'vendedor' : 'admin') + '" data-cerrar-hoja>' + icon('eye') + 'Ver como ' + esc(otro.nombre) + (d ? ' (vendedora)' : ' (dueño)') + '</button>'
       + '<button type="button" class="sheet-item" data-action="salir" data-cerrar-hoja>' + icon('logout') + 'Cerrar sesión</button></div>';
@@ -748,6 +986,13 @@
     if (!b) return;
     const a = b.dataset.action;
     if (a === 'guia') { e.preventDefault(); if (BG.abrirGuia) BG.abrirGuia(); }
+    else if (a === 'tema') {
+      e.preventDefault();
+      const orden = ['auto', 'claro', 'oscuro'];
+      const t = orden[(orden.indexOf(BG.tema()) + 1) % orden.length];
+      BG.cambiarTema(t);
+      BG.toast('Tema: ' + BG.TEMAS[t].toLowerCase() + (t === 'auto' ? ' (sigue al del teléfono o la computadora)' : '') + '.');
+    }
     else if (a === 'mas') { e.preventDefault(); abrirMas(); }
     else if (a === 'rol') { e.preventDefault(); BG.cambiarRol(b.dataset.rol); }
     else if (a === 'salir') {
@@ -757,6 +1002,10 @@
       location.hash = '#/inicio';
       BG.render();
     }
+  });
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tema]');
+    if (b) { e.preventDefault(); BG.cambiarTema(b.dataset.tema); }
   });
   document.addEventListener('keydown', (e) => {
     if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;

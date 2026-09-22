@@ -172,7 +172,11 @@
     if (!p) return;
     const duena = BG.esDuena();
     const disp = BG.disponibles(p);
-    const stock = '<dl class="kv"><dt>Cargados</dt><dd>' + p.cantidad + '</dd><dt>Vendidos</dt><dd>' + BG.vendidas(p.id) + '</dd><dt>Disponibles</dt><dd>' + disp + '</dd></dl>';
+    const ultima = BG.ultimaVentaDe(p.id);
+    const quieto = disp > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO;
+    const stock = '<dl class="kv"><dt>Cargados</dt><dd>' + p.cantidad + '</dd><dt>Vendidos</dt><dd>' + BG.vendidas(p.id) + '</dd><dt>Disponibles</dt><dd>' + disp + '</dd>'
+      + '<dt>Última venta</dt><dd>' + (ultima ? BG.fmtFecha(ultima) + ' (' + BG.haceDias(ultima) + ')' : 'nunca se vendió') + '</dd></dl>'
+      + (quieto ? '<p class="callout callout-warn">' + icon('pause') + '<span>Lleva <strong>' + BG.diasSinVender(p) + ' días</strong> sin venderse: candidato a liquidación o promoción.</span></p>' : '');
     const cabecera = '<p class="muted small">' + esc(p.codigo) + ' · ' + esc(p.categoria) + (duena ? ' · ' + esc(p.proveedor) : '') + ' · cargado el ' + BG.fmtFecha(p.fechaCarga) + '</p>';
     if (!duena) {
       await BG.modal({ titulo: p.descripcion, cuerpo: cabecera + '<p class="hero-figure">' + (p.precioVenta ? gs(p.precioVenta) : 'Sin precio') + '</p>' + stock, acciones: [{ texto: 'Cerrar', valor: 'cancelar' }] });
@@ -261,19 +265,20 @@
       if (e.stock === 'sin') lista = lista.filter((p) => BG.disponibles(p) <= 0);
       const valorStock = sum(lista, (p) => Math.max(0, BG.disponibles(p)) * (p.costoTotalGs || 0));
       $('#p-resumen', root).textContent = lista.length + ' productos · ' + sum(lista, (p) => Math.max(0, BG.disponibles(p))) + ' unidades disponibles' + (duena ? ' · stock al costo ' + gs(valorStock) : '');
+      const quieto = (p) => (BG.disponibles(p) > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO ? '<span class="pill pill-warn pill-quieto">' + icon('pause') + BG.diasSinVender(p) + ' días sin venderse</span>' : '');
       const stockTxt = (p) => { const d = BG.disponibles(p); return d > 0 ? d + ' / ' + p.cantidad : '<span class="pill pill-muted">Agotado</span>'; };
       const precioTxt = (p) => (p.precioVenta ? gs(p.precioVenta) : '<span class="pill pill-warn">' + icon('alert') + 'Sin precio</span>');
       const tabla = '<div class="table-wrap hide-narrow"><table class="table"><thead><tr><th>Producto</th><th>Categoría</th><th class="num">Stock</th>'
         + (duena ? '<th class="num">Costo US$</th><th class="num">Costo ₲ (congelado)</th>' : '') + '<th class="num">Precio</th>' + (duena ? '<th class="num">Gana c/u</th><th>Cargado</th>' : '') + '</tr></thead><tbody>'
         + lista.map((p) => '<tr class="is-link" data-ver="' + p.id + '" tabindex="0"><td><div class="t-title">' + (e.q ? BG.resaltar(p.descripcion, e.q) : esc(p.descripcion)) + '</div>'
-          + '<div class="t-sub">' + esc(p.codigo) + (duena ? ' · ' + esc(p.proveedor) : '') + '</div></td><td>' + esc(p.categoria) + '</td><td class="num">' + stockTxt(p) + '</td>'
+          + '<div class="t-sub">' + esc(p.codigo) + (duena ? ' · ' + esc(p.proveedor) : '') + '</div>' + quieto(p) + '</td><td>' + esc(p.categoria) + '</td><td class="num">' + stockTxt(p) + '</td>'
           + (duena ? '<td class="num">' + (p.costoUSD ? C.fmtUSD(p.costoUSD) : '—') + '</td><td class="num">' + (p.costoTotalGs ? gs(p.costoTotalGs) : '—') + '</td>' : '')
           + '<td class="num"><strong>' + precioTxt(p) + '</strong>' + (duena && p.precioVenta ? '<div class="t-sub">' + (p.margen ? p.margen + ' %' : 'a mano') + '</div>' : '') + '</td>'
           + (duena ? '<td class="num">' + (p.precioVenta && p.costoTotalGs ? gs(p.precioVenta - p.costoTotalGs) : '—') + '</td><td class="nowrap"><div>' + BG.fmtFecha(p.fechaCarga) + '</div><div class="t-sub">dólar ' + C.fmtCot(p.cotizacion) + '</div></td>' : '')
           + '</tr>').join('') + '</tbody></table></div>';
       const tarjetas = '<ul class="list show-narrow">' + lista.map((p) => '<li><button type="button" class="list-row list-btn" data-ver="' + p.id + '"><span class="avatar">' + icon('tag', 'i-sm') + '</span>'
         + '<span class="row-main"><span class="row-title">' + esc(p.descripcion) + '</span><span class="row-sub">' + esc(p.categoria) + ' · ' + (BG.disponibles(p) > 0 ? 'quedan ' + BG.disponibles(p) : 'agotado')
-        + (duena && p.costoTotalGs ? ' · costo ' + gs(p.costoTotalGs) : '') + '</span></span><span class="row-end"><span class="amount">' + (p.precioVenta ? gs(p.precioVenta) : 'Sin precio') + '</span>'
+        + (duena && p.costoTotalGs ? ' · costo ' + gs(p.costoTotalGs) : '') + '</span>' + quieto(p) + '</span><span class="row-end"><span class="amount">' + (p.precioVenta ? gs(p.precioVenta) : 'Sin precio') + '</span>'
         + (duena && p.precioVenta && p.costoTotalGs ? '<span class="small muted">gana ' + gs(p.precioVenta - p.costoTotalGs) + '</span>' : '') + '</span></button></li>').join('') + '</ul>';
       $('#p-lista', root).innerHTML = lista.length ? tabla + tarjetas : '<p class="empty">Ningún producto coincide.</p>';
     };

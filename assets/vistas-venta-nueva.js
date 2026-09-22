@@ -87,7 +87,7 @@
     const favor = BG.creditoCliente(cid);
     return '<div class="picked"><span class="avatar">' + esc(BG.iniciales(c.nombre)) + '</span><div class="grow">'
       + '<div class="row-title">' + esc(c.nombre) + '</div><div class="row-sub">' + (c.ci ? '<span>' + esc(c.ci) + '</span>' : '') + '<span>' + esc(c.telefono) + '</span></div>'
-      + '<div class="row-sub">' + (saldo > 0 ? 'Ya debe ' + gs(saldo) : 'Cuenta al día') + (favor > 0 ? ' · saldo a favor ' + gs(favor) : '') + '</div></div>'
+      + '<div class="row-sub">' + (saldo > 0 ? 'Ya debe ' + gs(saldo) : 'Cuenta al día') + (favor > 0 ? ' ' + BG.pillFavor(favor, true) : '') + '</div></div>'
       + '<button type="button" class="btn btn-sm btn-quiet" data-accion="cambiar-cliente">Cambiar</button></div>';
   }
   function campoFecha(valor) {
@@ -113,6 +113,7 @@
       desc: { activo: false, tipo: 'monto', valor: '' },
       partes: [{ forma: 'efectivo', monto: 0 }],
       usarCredito: true,
+      plan: { activo: false, n: 3, frecuencia: 'mensual', desde: BG.hoy(), primera: BG.primeraCuotaSugerida('mensual', BG.hoy()) },
     };
     const html = '<div class="page">'
       + '<div class="page-head"><div><h1 class="page-title">Nueva venta</h1><p class="page-sub">Cliente, artículos y cobro en una sola pantalla. Al registrar, el precio y el saldo quedan congelados.</p></div></div>'
@@ -131,6 +132,7 @@
       + '<div class="lines" id="s-pagos"></div>'
       + '<button type="button" class="btn-link" data-accion="agregar-forma">' + icon('plus', 'i-sm') + 'Dividir en otra forma de pago (pago mixto)</button>'
       + '<dl class="summary" id="s-resto"></dl>'
+      + '<div id="s-plan" class="stack"></div>'
       + '<p class="error-text" id="err-venta" role="alert" hidden></p>'
       + '<button type="button" class="btn btn-primary btn-lg btn-block hide-sticky" data-accion="registrar">' + icon('check') + 'Registrar venta</button>'
       + '</section></div></div>'
@@ -224,7 +226,12 @@
       const t = calc();
       $('#s-totales', root).innerHTML = (t.descuento ? '<dt>Subtotal</dt><dd>' + gs(t.subtotal) + '</dd><dt>Descuento</dt><dd>−' + gs(t.descuento) + '</dd>' : '')
         + '<dt><strong>Total de la venta</strong></dt><dd class="big">' + gs(t.total) + '</dd>';
-      $('#s-credito', root).innerHTML = t.favor > 0 ? '<label class="check-inline"><input type="checkbox" id="usar-credito"' + (b.usarCredito ? ' checked' : '') + '> Usar el saldo a favor del cliente (' + gs(t.favor) + ' disponible)</label>' : '';
+      // Saldo a favor bien a la vista: viene marcado para usarlo, así nadie se olvida de descontarlo.
+      const credHost = $('#s-credito', root);
+      const credHtml = t.favor > 0 ? '<div class="favor-banner favor-banner-sm"><span class="favor-ic">' + icon('wallet') + '</span><div class="grow"><strong>Tiene ' + gs(t.favor) + ' a favor.</strong>'
+        + '<label class="check-inline"><input type="checkbox" id="usar-credito"' + (b.usarCredito ? ' checked' : '') + '> Usarlo en esta venta</label>'
+        + (b.usarCredito && t.credito && t.credito < t.favor ? '<span class="small">Se usan ' + gs(t.credito) + '; le quedan ' + gs(t.favor - t.credito) + ' a favor.</span>' : '') + '</div></div>' : '';
+      if (credHost.innerHTML !== credHtml) credHost.innerHTML = credHtml;
       $('#s-resto', root).innerHTML = (t.credito ? '<dt>Saldo a favor aplicado</dt><dd>−' + gs(t.credito) + '</dd>' : '')
         + '<dt>Recibido ahora</dt><dd>' + gs(t.recibido) + '</dd><div class="sep"></div>'
         + (t.resto >= 0 ? '<dt><strong>Queda debiendo</strong></dt><dd class="big ' + (t.resto > 0 ? 'due' : 'clear') + '">' + gs(t.resto) + '</dd>'
@@ -235,6 +242,20 @@
       const conCambios = b.items.some(esEspecial) || t.descuento > 0;
       const ev = b.items.length && t.total > 0 && (duena || (puedeEspecial && conCambios)) ? BG.evaluarPrecio(t.total, sum(b.items, (it) => costoDe(it) * it.cantidad)) : null;
       $('#s-ganancia', root).innerHTML = ev ? '<p class="precio-info"><span class="muted">En toda la venta:</span> ' + BG.infoPrecio(ev) + '</p>' : '';
+      pintarPlan(t.resto);
+    };
+    // Cuotas al vender: aparece cuando queda algo debiendo. El editor se arma solo cuando cambia lo que se muestra
+    // (así no se pierde el foco mientras se escriben los montos); la vista previa se actualiza siempre.
+    let planMostrado = null;
+    const pintarPlan = (resto) => {
+      const host = $('#s-plan', root);
+      const clave = resto > 0 && b.items.length ? (b.plan.activo ? 'editor' : 'check') : 'nada';
+      if (clave !== planMostrado) {
+        planMostrado = clave;
+        host.innerHTML = clave === 'nada' ? '' : '<label class="check-inline"><input type="checkbox" id="plan-activo"' + (b.plan.activo ? ' checked' : '') + '> Acordar cuotas con fecha para lo que queda debiendo</label>'
+          + (b.plan.activo ? BG.htmlPlanEditor('pv', b.plan) : '');
+      }
+      if (clave === 'editor') BG.pintarPlanPreview(host, 'pv', b.plan, resto);
     };
 
     const agregar = (p) => {
@@ -273,6 +294,8 @@
       if (descuento() && b.desc.motivo === 'Otro' && !(b.desc.nota || '').trim()) return fallar('Contá en «Detalle» el motivo del descuento.');
       const t = calc();
       if (t.total <= 0) return fallar('El total quedó en ₲ 0: revisá el descuento.');
+      const conPlan = t.resto > 0 && b.plan.activo;
+      if (conPlan && !(b.plan.primera >= b.fecha)) return fallar('La primera cuota no puede vencer antes de la fecha de la venta.');
       if (BG.cajaCerrada(b.fecha) && !(await BG.pedirPin('La venta tiene fecha ' + BG.fmtFecha(b.fecha) + ', un día con la caja cerrada.'))) return;
       // Si la vendedora baja del margen mínimo (o vende a pérdida), la venta necesita el PIN del dueño.
       let autorizadoPor = null;
@@ -298,6 +321,7 @@
       try {
         res = BG.registrarVenta({
           clienteId: b.clienteId, fecha: b.fecha, descuento: descuento(), partes: partes, usarCredito: t.credito, excedenteACredito: aCredito, autorizadoPor: autorizadoPor,
+          plan: conPlan ? { frecuencia: b.plan.frecuencia, n: b.plan.n, primera: b.plan.primera } : null,
           items: b.items.map((it) => ({
             productoId: it.productoId, cantidad: it.cantidad, precio: it.precio, margen: it.margen,
             motivo: esEspecial(it) ? it.motivo : null, nota: esEspecial(it) ? it.nota : '',
@@ -330,10 +354,21 @@
           elegir: (it) => { $('#q-prod', root).value = ''; agregar(it.p); },
         });
         enlazarPartes($('#s-pagos', root), b, (rehacer) => { if (rehacer) pintarPagos(); pintarTotales(); });
+        BG.enlazarPlanEditor(root, 'pv', b.plan, () => pintarTotales());
         root.addEventListener('change', (e) => {
           const t = e.target;
-          if (t.id === 'f-fecha') { b.fecha = t.value || BG.hoy(); $('#h-fecha', root).textContent = textoFecha(b.fecha); return; }
+          if (t.id === 'f-fecha') {
+            b.fecha = t.value || BG.hoy();
+            $('#h-fecha', root).textContent = textoFecha(b.fecha);
+            // Las cuotas no pueden vencer antes de la venta: si cambia la fecha, se propone de nuevo la primera.
+            b.plan.desde = b.fecha;
+            if (b.plan.primera < b.fecha) b.plan.primera = BG.primeraCuotaSugerida(b.plan.frecuencia, b.fecha);
+            planMostrado = null;
+            pintarTotales();
+            return;
+          }
           if (t.id === 'usar-credito') { b.usarCredito = t.checked; pintarTotales(); return; }
+          if (t.id === 'plan-activo') { b.plan.activo = t.checked; pintarTotales(); return; }
           if (t.id === 'd-activo') { b.desc.activo = t.checked; pintarDescuento(); pintarTotales(); return; }
           if (t.name === 'd-tipo') { b.desc.tipo = t.value; b.desc.valor = ''; pintarDescuento(); pintarTotales(); return; }
           if (t.name && t.name.startsWith('motivo-')) { const k = t.name.slice(7); (k === 'd' ? b.desc : b.items[Number(k)]).motivo = t.value; return; }
@@ -418,15 +453,19 @@
 
   BG.vistas.cobro = (args, params) => {
     const pre = params.get('cliente');
-    const e = { clienteId: pre && BG.cliente(pre) ? pre : null, destino: params.get('venta') || null, fecha: BG.hoy(), partes: [{ forma: 'efectivo', monto: 0 }] };
+    const e = {
+      clienteId: pre && BG.cliente(pre) ? pre : null, destino: params.get('venta') || null, fecha: BG.hoy(),
+      partes: [{ forma: 'efectivo', monto: 0 }], usar: params.get('usar') === '1',
+    };
     const html = '<div class="page">'
-      + '<div class="page-head"><div><h1 class="page-title">Registrar cobro</h1><p class="page-sub">Pagos parciales, de varias compras o mixtos (efectivo + transferencia + QR + tarjeta).</p></div></div>'
+      + '<div class="page-head"><div><h1 class="page-title">Registrar cobro</h1><p class="page-sub">Pagos parciales, cuotas, de varias compras o mixtos (efectivo + transferencia + QR + tarjeta), y también con el saldo a favor.</p></div></div>'
       + '<div class="grid-form has-sticky"><div class="stack">'
       + '<section class="card stack" aria-labelledby="t-c1"><h2 class="card-title" id="t-c1">1 · Cliente</h2><div id="c-cliente" class="stack"></div></section>'
       + '<section class="card stack" aria-labelledby="t-c2"><h2 class="card-title" id="t-c2">2 · ¿A qué se aplica?</h2><div id="c-destino"></div></section>'
       + '</div><div class="stack sticky-col">'
       + '<section class="card stack" aria-labelledby="t-c3"><h2 class="card-title" id="t-c3">3 · Monto y forma de pago</h2>'
       + '<div id="c-fecha"></div>'
+      + '<div id="c-favor"></div><div id="c-cuota"></div>'
       + '<div class="row"><span class="field-label grow">Paga</span><button type="button" class="chip" data-accion="completo">Todo el saldo</button></div>'
       + '<div class="lines" id="c-pagos"></div>'
       + '<button type="button" class="btn-link" data-accion="agregar-forma">' + icon('plus', 'i-sm') + 'Dividir en otra forma de pago (pago mixto)</button>'
@@ -442,6 +481,11 @@
       if (e.destino === 'todas') return BG.saldoCliente(e.clienteId);
       const v = BG.venta(e.destino);
       return v ? BG.saldoVenta(v) : null;
+    };
+    /** Saldo a favor que se usa en este cobro: nunca más de lo que tiene ni de lo que debe. */
+    const usado = () => {
+      const obj = objetivo();
+      return e.usar && obj != null ? Math.min(BG.creditoCliente(e.clienteId), obj) : 0;
     };
     const elegirDestinoInicial = () => {
       if (!e.clienteId) { e.destino = null; return; }
@@ -462,29 +506,56 @@
       const host = $('#c-destino', root);
       if (!e.clienteId) { host.innerHTML = '<p class="muted">Primero elegí el cliente.</p>'; return; }
       const pend = BG.pendientesDe(e.clienteId);
-      const op = (id, titulo, sub, monto) => '<label class="dest"><input type="radio" name="destino" value="' + id + '"' + (e.destino === id ? ' checked' : '') + '>'
-        + '<span class="grow"><span class="row-title">' + titulo + '</span><span class="row-sub">' + sub + '</span></span>' + (monto != null ? '<span class="amount">' + gs(monto) + '</span>' : '') + '</label>';
+      const op = (id, titulo, sub, monto, extra) => '<label class="dest"><input type="radio" name="destino" value="' + id + '"' + (e.destino === id ? ' checked' : '') + '>'
+        + '<span class="grow"><span class="row-title">' + titulo + '</span><span class="row-sub">' + sub + '</span>' + (extra || '') + '</span>' + (monto != null ? '<span class="amount">' + gs(monto) + '</span>' : '') + '</label>';
       host.innerHTML = '<div class="dests" role="radiogroup" aria-label="Aplicar el cobro a">'
-        + pend.map((v) => op(v.id, 'Compra ' + BG.fmtRecibo(v.recibo) + ' · ' + BG.fmtFecha(v.fecha), esc(v.items.map((it) => it.descripcion).join(', ')) + ' · ' + BG.haceDias(v.fecha), BG.saldoVenta(v))).join('')
+        + pend.map((v) => {
+          const ep = BG.estadoPlan(v);
+          return op(v.id, 'Compra ' + BG.fmtRecibo(v.recibo) + ' · ' + BG.fmtFecha(v.fecha), esc(v.items.filter((it) => BG.cantidadViva(it) > 0).map((it) => it.descripcion).join(', ')) + ' · ' + BG.haceDias(v.fecha),
+            BG.saldoVenta(v), ep && ep.proxima ? '<span class="row-sub">Cuota ' + ep.proxima.n + ' de ' + ep.proxima.de + ': ' + gs(ep.proxima.falta) + ' ' + BG.pillCuota(ep.proxima) + '</span>' : '');
+        }).join('')
         + (pend.length > 1 ? op('todas', 'Todas las compras pendientes', 'Se aplica de la más antigua a la más nueva', BG.saldoCliente(e.clienteId)) : '')
         + op('sena', 'Seña o anticipo', 'Queda como saldo a favor para una próxima compra', null)
         + '</div>' + (pend.length ? '' : '<p class="hint list-top">Este cliente no debe nada: solo se puede registrar una seña.</p>');
+    };
+    // Recuadro dorado del saldo a favor: se ofrece para pagar la deuda (no para una seña).
+    const pintarFavor = () => {
+      const host = $('#c-favor', root);
+      const favor = e.clienteId ? BG.creditoCliente(e.clienteId) : 0;
+      const obj = objetivo();
+      if (!(favor > 0) || obj == null) { host.innerHTML = ''; return; }
+      const u = usado();
+      host.innerHTML = '<div class="favor-banner favor-banner-sm"><span class="favor-ic">' + icon('wallet') + '</span><div class="grow"><strong>Tiene ' + gs(favor) + ' a favor.</strong>'
+        + '<label class="check-inline"><input type="checkbox" id="usar-favor"' + (e.usar ? ' checked' : '') + '> Usarlo para pagar</label>'
+        + (e.usar ? '<span class="small">Se usan ' + gs(u) + (favor > u ? '; le quedan ' + gs(favor - u) + ' a favor' : '') + '. No es plata nueva: no entra en la caja.</span>' : '') + '</div></div>';
+    };
+    // Próxima cuota de la compra elegida, con un atajo para cobrar justo esa cuota.
+    const pintarCuota = () => {
+      const host = $('#c-cuota', root);
+      const v = e.destino && e.destino !== 'sena' && e.destino !== 'todas' ? BG.venta(e.destino) : null;
+      const ep = v ? BG.estadoPlan(v) : null;
+      if (!ep || !ep.proxima) { host.innerHTML = ''; return; }
+      const c = ep.proxima;
+      host.innerHTML = '<div class="cuota-aviso">' + icon('calendar') + '<div class="grow"><strong>Cuota ' + c.n + ' de ' + c.de + ': ' + gs(c.falta) + '</strong>'
+        + '<span class="small"> · vence el ' + BG.fmtFecha(c.vence) + (ep.vencidas > 1 ? ' · hay ' + ep.vencidas + ' atrasadas (' + gs(ep.atrasado) + ')' : '') + '</span> ' + BG.pillCuota(c) + '</div>'
+        + '<button type="button" class="chip" data-accion="cuota" data-monto="' + (ep.vencidas > 1 ? ep.atrasado : c.falta) + '">' + (ep.vencidas > 1 ? 'Pagar lo atrasado' : 'Pagar la cuota') + '</button></div>';
     };
     const pintarPagos = () => { const host = $('#c-pagos', root); host.innerHTML = htmlPartes(e.partes); BG.enlazarCampos(host); };
     const pintarResumen = () => {
       const recibido = sum(e.partes, (p) => p.monto || 0);
       const obj = objetivo();
+      const u = usado();
       let h = '<dt>Recibido</dt><dd class="big">' + gs(recibido) + '</dd>';
       if (obj != null) {
-        const resto = obj - recibido;
-        h += '<dt>Saldo a cubrir</dt><dd>' + gs(obj) + '</dd><div class="sep"></div>'
+        const resto = obj - u - recibido;
+        h += '<dt>Saldo a cubrir</dt><dd>' + gs(obj) + '</dd>' + (u ? '<dt>Saldo a favor usado</dt><dd class="t-favor">−' + gs(u) + '</dd>' : '') + '<div class="sep"></div>'
           + (resto >= 0 ? '<dt><strong>Después del pago debe</strong></dt><dd class="big ' + (resto > 0 ? 'due' : 'clear') + '">' + gs(resto) + '</dd>'
             : '<dt><strong>Pagó de más</strong></dt><dd class="big due">' + gs(-resto) + '</dd><dd class="span hint">Al registrar vas a elegir si es vuelto o saldo a favor.</dd>');
       } else if (e.destino === 'sena') h += '<dd class="span hint">Todo el monto queda como saldo a favor.</dd>';
       $('#c-resumen', root).innerHTML = h;
       $('#cs-total', root).textContent = gs(recibido);
     };
-    const pintarTodo = () => { pintarCliente(); pintarDestino(); pintarResumen(); };
+    const pintarTodo = () => { pintarCliente(); pintarDestino(); pintarFavor(); pintarCuota(); pintarResumen(); };
     const registrar = async () => {
       const err = $('#err-cobro', root);
       const fallar = (msg) => { err.textContent = msg; err.hidden = false; BG.toast(msg, 'error'); };
@@ -493,18 +564,25 @@
       if (!e.destino) return fallar('Elegí a qué compra se aplica el cobro.');
       let partes = e.partes.filter((p) => p.monto > 0);
       const recibido = sum(partes, (p) => p.monto);
-      if (!recibido) return fallar('Escribí cuánto paga.');
+      const u = usado();
+      if (!recibido && !u) return fallar('Escribí cuánto paga.');
       if (e.fecha > BG.hoy()) return fallar('La fecha del cobro no puede ser futura.');
       if (BG.cajaCerrada(e.fecha) && !(await BG.pedirPin('El cobro tiene fecha ' + BG.fmtFecha(e.fecha) + ', un día con la caja cerrada.'))) return;
       let aCredito = 0;
       const obj = objetivo();
-      if (obj != null && recibido > obj) {
-        const r = await resolverExcedente(recibido - obj, partes);
+      if (obj != null && recibido > obj - u) {
+        const exceso = recibido - (obj - u);
+        const r = await resolverExcedente(exceso, partes);
         if (!r) return;
-        if (r === 'vuelto') partes = aplicarVuelto(partes, recibido - obj); else aCredito = recibido - obj;
+        if (r === 'vuelto') partes = aplicarVuelto(partes, exceso); else aCredito = exceso;
       }
-      const res = BG.registrarCobro({ clienteId: e.clienteId, destino: e.destino, fecha: e.fecha, partes: partes, excedenteACredito: aCredito });
-      BG.toast('Cobro registrado · Recibo ' + BG.fmtRecibo(res.recibo));
+      let res;
+      try {
+        res = BG.registrarCobro({ clienteId: e.clienteId, destino: e.destino, fecha: e.fecha, partes: partes, excedenteACredito: aCredito, usarCredito: u });
+      } catch (er) {
+        return fallar(er.message);
+      }
+      BG.toast('Cobro registrado · Recibo ' + BG.fmtRecibo(res.recibo) + (u ? ' · ' + gs(u) + ' con su saldo a favor' : ''));
       const ids = res.pagos.map((p) => p.id).join(',');
       const unaVenta = res.pagos.length === 1 && res.pagos[0].ventaId;
       BG.ir(unaVenta ? '#/recibo/v/' + res.pagos[0].ventaId + '?pagos=' + ids : '#/recibo/c/' + e.clienteId + '?pagos=' + ids);
@@ -521,7 +599,8 @@
         enlazarPartes($('#c-pagos', root), e, (rehacer) => { if (rehacer) pintarPagos(); pintarResumen(); });
         root.addEventListener('change', (ev) => {
           const t = ev.target;
-          if (t.name === 'destino') { e.destino = t.value; pintarResumen(); }
+          if (t.name === 'destino') { e.destino = t.value; pintarFavor(); pintarCuota(); pintarResumen(); }
+          if (t.id === 'usar-favor') { e.usar = t.checked; pintarFavor(); pintarResumen(); }
           if (t.id === 'f-fecha') { e.fecha = t.value || BG.hoy(); $('#h-fecha', root).textContent = textoFecha(e.fecha); }
         });
         root.addEventListener('click', (ev) => {
@@ -530,15 +609,17 @@
           const a = b.dataset.accion;
           if (a === 'cambiar-cliente') { e.clienteId = null; e.destino = null; pintarTodo(); $('#q-cli', root).focus(); }
           else if (a === 'elegir-cliente') { e.clienteId = b.dataset.id; e.destino = null; elegirDestinoInicial(); pintarTodo(); }
-          else if (a === 'completo') {
+          else if (a === 'completo' || a === 'cuota') {
             const obj = objetivo();
             if (obj == null) { BG.toast(e.clienteId ? 'Una seña no tiene saldo: escribí el monto.' : 'Primero elegí el cliente.', 'error'); return; }
-            e.partes = [{ forma: e.partes[0] ? e.partes[0].forma : 'efectivo', monto: obj }];
+            const u = usado();
+            const quiere = a === 'cuota' ? Number(b.dataset.monto) : obj;
+            e.partes = [{ forma: e.partes[0] ? e.partes[0].forma : 'efectivo', monto: Math.max(0, Math.min(quiere, obj) - u) }];
             pintarPagos();
             pintarResumen();
           } else if (a === 'agregar-forma') {
             const obj = objetivo();
-            const falta = obj == null ? 0 : Math.max(0, obj - sum(e.partes, (p) => p.monto || 0));
+            const falta = obj == null ? 0 : Math.max(0, obj - usado() - sum(e.partes, (p) => p.monto || 0));
             e.partes.push({ forma: siguienteForma(e.partes), monto: falta });
             pintarPagos();
             pintarResumen();

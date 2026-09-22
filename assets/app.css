@@ -1052,3 +1052,108 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
   body.route-print .receipt.is-ticket { max-width: none; }
   .receipt, .receipt * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* ── Tema, saldo a favor, cuotas, devoluciones, meta y rotación ───────── */
+
+:root { --favor: #7A4F00; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --favor: #F2C879; }
+}
+:root[data-theme="dark"] { --favor: #F2C879; }
+
+.btn-tema { color: var(--ink-2); }
+.seg-tema button .i { width: 16px; height: 16px; }
+.sheet-tema { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 8px 10px 12px; }
+.login-tema { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+
+.pill-favor { background: var(--glow-soft); color: var(--favor); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--glow) 70%, transparent); }
+.t-favor { color: var(--favor); font-weight: 700; }
+.t-devuelto { color: var(--warn); font-weight: 700; }
+.favor-banner {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px 18px; align-items: center;
+  padding: 16px 20px; border-radius: 16px; background: var(--glow-soft); color: var(--ink);
+  border: 1.5px solid color-mix(in srgb, var(--glow) 55%, transparent); border-left: 6px solid var(--glow);
+}
+.favor-ic { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 50%; background: var(--glow); color: #2B1624; }
+.favor-ic .i { width: 24px; height: 24px; }
+.favor-label { font-size: 12.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--favor); }
+.favor-monto { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; color: var(--favor); font-variant-numeric: tabular-nums; }
+.favor-banner .small { color: var(--ink-2); }
+.favor-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; max-width: 440px; }
+.favor-banner-sm { grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px 14px; gap: 10px 12px; border-radius: 12px; border-left-width: 5px; }
+.favor-banner-sm .favor-ic { width: 36px; height: 36px; }
+.favor-banner-sm .favor-ic .i { width: 20px; height: 20px; }
+.favor-banner-sm .grow { display: flex; flex-direction: column; gap: 4px; }
+@media (max-width: 760px) {
+  .favor-banner { grid-template-columns: auto minmax(0, 1fr); padding: 14px 16px; }
+  .favor-actions { grid-column: 1 / -1; justify-content: flex-start; max-width: none; }
+  .favor-actions .btn { flex: 1 1 calc(50% - 8px); }
+  .favor-banner-sm > .btn { grid-column: 1 / -1; justify-self: start; }
+}
+.tile-favor { background: var(--glow-soft); border-color: color-mix(in srgb, var(--glow) 60%, transparent); }
+.tile-favor .tile-value { color: var(--favor); }
+.tile-favor .tile-label { display: inline-flex; align-items: center; gap: 6px; }
+.tile-bad .tile-value { color: var(--bad); }
+.card-favor { border-color: color-mix(in srgb, var(--glow) 55%, transparent); }
+.card-head h2 { display: inline-flex; align-items: center; gap: 8px; }
+.card-head-wrap { flex-wrap: wrap; }
+.pad-top { padding: 10px 20px 0; }
+.pad-x-card { margin: 10px 20px 0; }
+.favor-total strong { font-size: 22px; color: var(--favor); font-variant-numeric: tabular-nums; }
+.line-favor { background: var(--glow-soft); border-color: transparent; }
+.row-nowrap { flex-wrap: nowrap; }
+.row-nowrap .money { flex: 1 1 auto; min-width: 0; }
+.pill-quieto { margin-top: 4px; }
+
+/* Meta y comisión */
+.meta-box { display: flex; flex-direction: column; gap: 10px; }
+.meta-top { display: flex; align-items: center; gap: 12px; }
+.meta-top .grow { display: flex; flex-direction: column; }
+.meta-ic { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--berry-soft); color: var(--berry); flex: none; }
+.meta-pct { font-size: 22px; font-weight: 800; color: var(--berry); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.progress { height: 10px; border-radius: 999px; background: var(--chart-grid); overflow: hidden; }
+.progress > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--berry), var(--glow)); }
+.meta-nums { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 0; }
+.meta-nums dt { font-size: 13px; font-weight: 700; color: var(--ink-2); }
+.meta-nums dd { margin: 0; font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* Cuotas */
+.plan-editor { display: flex; flex-direction: column; gap: 12px; padding: 12px; border: 1.5px dashed var(--line-strong); border-radius: 12px; }
+.plan-preview { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; font-size: 14px; }
+.plan-preview li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px dashed var(--line); }
+.plan-preview li strong { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cuotas { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.cuota { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.cuota:first-child { border-top: 0; padding-top: 0; }
+.cuota .grow { display: flex; flex-direction: column; min-width: 0; }
+.cuota-n { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--surface-2); font-weight: 800; flex: none; }
+.cuota-pagada .cuota-n { background: var(--good-soft); color: var(--good); }
+.cuota-vencida .cuota-n { background: var(--bad-soft); color: var(--bad); }
+.cuota-hoy .cuota-n, .cuota-semana .cuota-n { background: var(--warn-soft); color: var(--warn); }
+.cuota-sinCargo .row-title { text-decoration: line-through; color: var(--muted); }
+.cuota-aviso { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
+.cuota-aviso > .i { color: var(--berry); }
+.cuota-fila { align-items: flex-start; }
+.cuota-fila .row-end { gap: 6px; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+@media (max-width: 560px) {
+  .cuota-fila { flex-wrap: wrap; }
+  .cuota-fila .row-main { flex: 1 1 calc(100% - 60px); }
+  .cuota-fila .row-end { width: 100%; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-start; padding-left: 52px; }
+  .cuota-fila .row-actions { justify-content: flex-start; }
+}
+
+/* Recibo: saldo a favor y cuotas atrasadas */
+.r-favor {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  padding: 12px 16px; border-radius: 10px; margin: 0 0 12px;
+  background: #FBF0DC; color: #6B4600; border: 1.5px solid #E2A94F;
+}
+.r-favor span { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.r-favor strong { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.r-table tr.is-late td { color: #B42A2A; font-weight: 700; }
+/* La barra de arriba entra en 360 px aunque tenga el botón de tema: el buscador es el que se achica. */
+.topbar .search, .topbar .search-box { min-width: 0; }
+@media (max-width: 899px) { .topbar-actions { gap: 2px; } }
+/* Tablas de reportes en el celular: se ocultan las columnas secundarias para que entren sin deslizar tanto. */
+@media (max-width: 560px) { .col-sm-hide { display: none; } }

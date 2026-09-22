@@ -177,14 +177,14 @@
       const unidades = {};
       ventas.forEach((v) => v.items.forEach((it) => {
         const u = unidades[it.productoId] || (unidades[it.productoId] = { etiqueta: it.descripcion, valor: 0, monto: 0 });
-        u.valor += it.cantidad;
-        u.monto += it.precio * it.cantidad;
+        u.valor += BG.cantidadViva(it);
+        u.monto += it.precio * BG.cantidadViva(it);
       }));
-      const top = Object.values(unidades).sort((a, b) => b.valor - a.valor || b.monto - a.monto).slice(0, 6)
+      const top = Object.values(unidades).filter((x) => x.valor > 0).sort((a, b) => b.valor - a.valor || b.monto - a.monto).slice(0, 6)
         .map((x) => ({ etiqueta: x.etiqueta, sub: gs(x.monto), valor: x.valor, texto: x.valor + (x.valor === 1 ? ' u' : ' u') }));
 
       // Precios especiales, descuentos y ajustes de las ventas del período: cuánto se rebajó y cómo quedó el margen.
-      const costoDe = (vs) => sum(vs, (v) => sum(v.items, (it) => (it.costoUnitGs || 0) * it.cantidad));
+      const costoDe = (vs) => sum(vs, BG.costoVenta);
       const conCambios = ventas.filter((v) => BG.cambiosDePrecio(v).length);
       const sinCambios = ventas.filter((v) => !BG.cambiosDePrecio(v).length);
       const evCon = BG.evaluarPrecio(sum(conCambios, (v) => v.total), costoDe(conCambios));
@@ -216,6 +216,40 @@
           : '<p class="empty">Nadie cambió precios en este período: todo se vendió al precio de lista.</p>')
         + '</section>';
 
+      // Meta y comisión de cada vendedora con comisión activa, en el período elegido.
+      const cardsMeta = BG.db.usuarios.filter((u) => u.rol === 'vendedor' && u.comision && u.comision.activa).map((u) => {
+        const com = BG.comisionDe(u, desde, hasta);
+        return '<section class="card stack"><div class="card-head"><h2>Meta y comisión de ' + esc(u.nombre) + '</h2><a class="small" href="#/ajustes">Cambiar</a></div>'
+          + BG.htmlMeta(u, com, e.periodo === '30' ? 'Últimos 30 días' : BG.MESES[Number(hasta.slice(5, 7)) - 1].replace(/^./, (x) => x.toUpperCase()))
+          + (com.filas.length ? '<details class="table-toggle"><summary>Ver venta por venta (' + com.filas.length + ')</summary><div class="table-wrap"><table class="table table-compact table-venta"><thead><tr><th>Venta</th><th class="num">Cobrado</th><th class="num">Margen</th><th class="num">Comisión</th></tr></thead><tbody>'
+            + com.filas.map((x) => '<tr class="is-link" data-href="#/ventas/' + x.v.id + '"><td><div class="t-title">' + esc(BG.cliente(x.v.clienteId).nombre) + '</div><div class="t-sub">' + BG.fmtFecha(x.v.fecha) + ' · ' + BG.fmtRecibo(x.v.recibo)
+              + (BG.cambiosDePrecio(x.v).length ? ' · con precio especial' : '') + '</div></td><td class="num">' + gs(x.cobrado) + '</td><td class="num">' + (x.ev ? BG.fmtMargen(x.ev.margen) : '—') + '</td><td class="num">' + gs(Math.round(x.comision)) + '</td></tr>').join('')
+            + '</tbody></table></div></details>' : '<p class="empty">Todavía no se cobró nada de sus ventas en el período.</p>')
+          + '</section>';
+      }).join('');
+
+      // Devoluciones y cambios del período, plata devuelta y saldo a favor pendiente.
+      const devs = [];
+      BG.db.ventas.forEach((v) => (v.devoluciones || []).forEach((d) => { if (enR(d.fecha)) devs.push({ v: v, d: d }); }));
+      const bajo = sum(devs, (x) => Math.max(0, x.d.totalAntes - x.d.totalDespues));
+      const devuelto = sum((BG.db.egresos || []).filter((x) => enR(x.fecha)), (x) => x.monto);
+      const porMotivo = {};
+      devs.forEach((x) => { porMotivo[x.d.motivo] = (porMotivo[x.d.motivo] || 0) + x.d.cantidad; });
+      const favorAhora = BG.listaAFavor();
+      const cardDevol = '<section class="card stack"><div class="card-head"><h2>Devoluciones y saldo a favor</h2><a class="small" href="#/auditoria?tipo=devoluciones">Auditoría</a></div>'
+        + '<dl class="kv"><dt>Devoluciones y cambios</dt><dd>' + devs.length + '</dd><dt>Bajaron las ventas</dt><dd>' + gs(bajo) + '</dd><dt>Plata devuelta</dt><dd>' + gs(devuelto) + '</dd>'
+        + '<dt>Saldo a favor pendiente hoy</dt><dd class="t-favor">' + gs(sum(favorAhora, (x) => x.favor)) + ' · ' + favorAhora.length + (favorAhora.length === 1 ? ' cliente' : ' clientes') + '</dd></dl>'
+        + (devs.length ? '<h3 class="card-sub">Por qué devuelven (unidades)</h3>' + barrasH(Object.keys(porMotivo).map((k) => ({ etiqueta: k, valor: porMotivo[k], texto: porMotivo[k] + ' u' })).sort((a, b) => b.valor - a.valor))
+          : '<p class="empty">Sin devoluciones ni cambios en el período.</p>')
+        + '<p class="hint">Si «No le quedó el talle» es lo más común, conviene cargar talles como variantes y anotar las medidas en la ficha.</p></section>';
+
+      const quietos = BG.db.productos.filter((p) => BG.disponibles(p) > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO).sort((a, b) => BG.diasSinVender(b) - BG.diasSinVender(a));
+      const cardQuietos = '<section class="card stack"><div class="card-head"><h2>Stock sin movimiento</h2><a class="small" href="#/reportes?tab=stock">Liquidar y próximo pedido</a></div>'
+        + (quietos.length ? '<p class="small">' + quietos.length + (quietos.length === 1 ? ' producto' : ' productos') + ' con ' + BG.DIAS_QUIETO + ' días o más sin venderse · <strong>' + gs(sum(quietos, (p) => BG.disponibles(p) * (p.costoTotalGs || 0))) + '</strong> parados al costo.</p>'
+          + barrasH(quietos.slice(0, 6).map((p) => ({ etiqueta: p.descripcion, sub: BG.disponibles(p) + ' en stock', valor: BG.diasSinVender(p), texto: BG.diasSinVender(p) + ' días' })))
+          : '<p class="empty">Todo se está moviendo: nada lleva ' + BG.DIAS_QUIETO + ' días sin venderse.</p>')
+        + '</section>';
+
       const actividad = BG.db.usuarios.map((u) => {
         const vs = ventas.filter((v) => v.usuario === u.nombre);
         const ps = pagos.filter((p) => p.usuario === u.nombre);
@@ -230,6 +264,7 @@
         + tile('Cobrado', gs(cobrado), 'plata que entró en el período') + tile('Ganancia real', gs(ganancia), 'precio de venta − costo congelado')
         + tile('Por cobrar hoy', gs(sum(deudores, (d) => d.saldo)), deudores.length + ' clientes') + tile('Envíos', String(envios.length), fleteTienda ? 'fletes pagados por la tienda: ' + gs(fleteTienda) : 'en el período') + '</div>'
         + cardPrecios
+        + '<div class="grid-2 grid-charts">' + cardsMeta + cardDevol + '</div>'
         + '<div class="grid-2 grid-charts">'
         + '<section class="card stack"><div class="card-head"><h2>Ventas y cobros por semana</h2><a class="small" href="#/reportes">Detalle</a></div>' + columnas('rs-semanas', sem, series) + '</section>'
         + '<section class="card stack"><div class="card-head"><h2>Cobrado por forma de pago</h2><span class="small muted">' + gs(cobrado) + '</span></div>' + barrasH(formas, 'Sin cobros en el período.')
@@ -238,7 +273,8 @@
         + '<p class="hint">Lo de más de 30 días es lo primero a reclamar.</p></section>'
         + '<section class="card stack"><div class="card-head"><h2>Envíos por ciudad de destino</h2><a class="small" href="#/envios">Ver envíos</a></div>' + barrasH(ciudades, 'Sin envíos en el período.')
         + '<p class="row">' + estados + '</p></section>'
-        + '<section class="card stack"><div class="card-head"><h2>Productos más vendidos</h2><span class="small muted">unidades</span></div>' + barrasH(top, 'Sin ventas en el período.') + '</section>'
+        + '<section class="card stack"><div class="card-head"><h2>Productos más vendidos</h2><a class="small" href="#/reportes?tab=stock">Rotación</a></div>' + barrasH(top, 'Sin ventas en el período.') + '</section>'
+        + cardQuietos
         + '<section class="card stack"><div class="card-head"><h2>Actividad por usuario</h2><a class="small" href="#/auditoria">Auditoría</a></div>'
         + '<ul class="actividad">'
         + actividad.map((a) => '<li><div class="act-quien"><strong>' + esc(a.u.nombre) + '</strong><span class="small muted">' + (a.u.rol === 'admin' ? 'Dueño' : 'Vendedora')
@@ -258,6 +294,8 @@
         root = r;
         pintar();
         root.addEventListener('click', (ev) => {
+          const fila = ev.target.closest('tr[data-href]');
+          if (fila && !ev.target.closest('a')) { BG.ir(fila.dataset.href); return; }
           const b = ev.target.closest('[data-periodo]');
           if (!b) return;
           e.periodo = b.dataset.periodo;

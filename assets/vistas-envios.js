@@ -92,7 +92,7 @@
         ciudad: ciudad, departamento: deptoDe(ciudad), modalidad: 'agencia', agencia: 'Terminal de ómnibus', direccion: '', referencia: '',
       },
       empresa: empresas.length ? empresas[0].nombre : '', bultos: 1, pesoKg: '', contenido: 'Ropa y accesorios',
-      detalle: v ? v.items.map((it) => it.cantidad + ' × ' + it.descripcion).join(', ') : '',
+      detalle: v ? v.items.filter((it) => BG.cantidadViva(it) > 0).map((it) => BG.cantidadViva(it) + ' × ' + it.descripcion).join(', ') : '',
       valorDeclarado: v ? v.total : 0, fragil: false, seco: true,
       flete: { monto: 0, paga: 'destinatario' }, cobro: 0, cobroActivo: false, guia: '', notas: '',
       checklist: { datos: false, embalaje: false, etiqueta: false, prohibidos: false, cobro: false, comprobante: false },

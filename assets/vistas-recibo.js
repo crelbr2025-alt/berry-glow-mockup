@@ -38,17 +38,31 @@
       numero: numero,
       emision: BG.hoy(),
       cliente: { nombre: cli.nombre, documento: cli.ci ? (cli.ci.includes('-') ? 'RUC ' : 'CI ') + cli.ci : 'Sin CI/RUC' },
-      compras: ventas.map((v) => ({
-        numero: v.recibo, fecha: v.fecha, anulada: !!v.anulada,
-        items: v.items.map((it) => ({ descripcion: it.descripcion, cantidad: it.cantidad, precio: it.precio })),
-        subtotal: v.subtotal, descuento: v.descuento.monto, total: v.total,
-        pagos: BG.pagosDeVenta(v.id).sort((a, b) => a.ts.localeCompare(b.ts)).map((p) => ({
-          fecha: p.fecha, monto: p.total, nuevo: pagosIds.indexOf(p.id) >= 0,
-          formas: p.partes.map((x) => ({ forma: BG.FORMAS[x.forma], monto: x.monto })),
-          aFavor: p.excedente,
-        })),
-        pagado: BG.pagadoVenta(v), saldo: BG.saldoVenta(v),
-      })),
+      compras: ventas.map((v) => {
+        const ep = BG.estadoPlan(v);
+        return {
+          numero: v.recibo, fecha: v.fecha, anulada: !!v.anulada,
+          // Solo lo que la clienta se quedó; lo devuelto va en «Cambios y devoluciones».
+          items: v.items.filter((it) => BG.cantidadViva(it) > 0).map((it) => ({ descripcion: it.descripcion, cantidad: BG.cantidadViva(it), precio: it.precio })),
+          subtotal: v.subtotal, descuento: v.descuento.monto, total: v.total,
+          pagos: BG.pagosDeVenta(v.id).sort((a, b) => a.ts.localeCompare(b.ts)).map((p) => ({
+            fecha: p.fecha, monto: p.total, nuevo: pagosIds.indexOf(p.id) >= 0,
+            formas: p.partes.map((x) => ({ forma: BG.FORMAS[x.forma], monto: x.monto })),
+            aFavor: p.excedente,
+          })),
+          // Público: qué devolvió o cambió y qué pasó con la plata (sin motivos internos).
+          devoluciones: (v.devoluciones || []).map((d) => ({
+            fecha: d.fecha,
+            texto: d.tipo === 'talle' ? 'Cambio de talle: ' + d.cantidad + ' × ' + d.descripcion + (d.talle ? ' (' + d.talle + ')' : '')
+              : d.tipo === 'cambio' ? 'Cambio: ' + d.cantidad + ' × ' + d.descripcion + ' por ' + d.cantidad + ' × ' + d.productoNuevo
+                : 'Devolución: ' + d.cantidad + ' × ' + d.descripcion,
+            aFavor: d.aFavor, reintegro: d.reintegro, forma: d.forma ? BG.FORMAS[d.forma].toLowerCase() : '',
+          })),
+          aFavorMovido: v.aFavor || 0,
+          cuotas: ep ? ep.cuotas.filter((c) => c.falta > 0).map((c) => ({ n: c.n, de: c.de, vence: c.vence, falta: c.falta, vencida: c.estado === 'vencida' })) : [],
+          pagado: BG.pagadoVenta(v), saldo: BG.saldoVenta(v),
+        };
+      }),
       saldoCuenta: BG.saldoCliente(cli.id),
       aFavor: BG.creditoCliente(cli.id),
       clienteRef: cli,
@@ -71,11 +85,17 @@
       + '</tbody><tfoot>'
       + (c.descuento ? '<tr><td colspan="3">Subtotal</td><td class="num">' + gs(c.subtotal) + '</td></tr><tr><td colspan="3">Descuento</td><td class="num">−' + gs(c.descuento) + '</td></tr>' : '')
       + '<tr><td colspan="3">Total de la compra</td><td class="num">' + gs(c.total) + '</td></tr></tfoot></table>'
+      + (c.devoluciones.length ? '<h2 class="r-sub">Cambios y devoluciones</h2><table class="r-table"><tbody>' + c.devoluciones.map((d) => '<tr><td>' + BG.fmtFecha(d.fecha) + ' · ' + esc(d.texto)
+        + (d.aFavor ? '<div class="r-forms">' + (d.reintegro ? 'Se te devolvieron ' + gs(d.reintegro) + ' en ' + esc(d.forma) : gs(d.aFavor) + ' quedaron a tu favor') + '</div>' : '') + '</td></tr>').join('') + '</tbody></table>' : '')
       + '<h2 class="r-sub">Pagos realizados</h2>'
       + (c.pagos.length ? '<table class="r-table"><tbody>' + c.pagos.map((p) => '<tr' + (p.nuevo ? ' class="is-new"' : '') + '><td>' + BG.fmtFecha(p.fecha) + (p.nuevo ? ' <strong>· pago de hoy</strong>' : '')
         + '<div class="r-forms">' + p.formas.map((x) => x.forma + ' ' + gs(x.monto)).join(' + ') + (p.aFavor ? ' · ' + gs(p.aFavor) + ' quedó a tu favor' : '') + '</div></td>'
-        + '<td class="num">' + gs(p.monto) + '</td></tr>').join('') + '</tbody><tfoot><tr><td>Total pagado</td><td class="num">' + gs(c.pagado) + '</td></tr></tfoot></table>'
+        + '<td class="num">' + gs(p.monto) + '</td></tr>').join('')
+        + (c.aFavorMovido ? '<tr><td>Por la devolución, pasó a tu saldo a favor</td><td class="num">−' + gs(c.aFavorMovido) + '</td></tr>' : '')
+        + '</tbody><tfoot><tr><td>Total pagado</td><td class="num">' + gs(c.pagado) + '</td></tr></tfoot></table>'
         : '<p class="r-forms">Todavía sin pagos.</p>')
+      + (c.cuotas.length ? '<h2 class="r-sub">Tus próximas cuotas</h2><table class="r-table"><tbody>' + c.cuotas.map((q) => '<tr' + (q.vencida ? ' class="is-late"' : '') + '><td>Cuota ' + q.n + ' de ' + q.de + ' · '
+        + (q.vencida ? 'venció el ' : 'vence el ') + BG.fmtFecha(q.vence) + '</td><td class="num">' + gs(q.falta) + '</td></tr>').join('') + '</tbody></table>' : '')
       + (unaCompra ? '' : '<p class="r-account"><span>Saldo de esta compra</span><strong>' + gs(c.saldo) + '</strong></p>')
       + '</section>';
     return '<article class="receipt' + (formato === 'ticket' ? ' is-ticket' : '') + '" id="recibo" style="--r-brand:' + esc(m.principal) + ';--r-accent:' + esc(m.acento) + ';--mark-berry:' + esc(m.principal) + ';--mark-glow:' + esc(m.acento) + '">'
@@ -86,7 +106,7 @@
       + (d.compras.length ? d.compras.map(compra).join('') : '<p class="r-section">No hay compras con saldo pendiente.</p>')
       + '<div class="r-saldo' + (saldoPrincipal > 0 ? '' : ' is-paid') + '"><span>' + etiquetaSaldo + '</span><strong>' + gs(saldoPrincipal) + '</strong></div>'
       + (deUnaCompra && d.saldoCuenta !== saldoPrincipal ? '<p class="r-account"><span>Saldo total de tu cuenta (todas las compras)</span><strong>' + gs(d.saldoCuenta) + '</strong></p>' : '')
-      + (d.aFavor > 0 ? '<p class="r-account"><span>Saldo a tu favor para la próxima compra</span><strong>' + gs(d.aFavor) + '</strong></p>' : '')
+      + (d.aFavor > 0 ? '<div class="r-favor"><span>Saldo a tu favor para la próxima compra</span><strong>' + gs(d.aFavor) + '</strong></div>' : '')
       + '<footer class="r-foot"><p class="r-thanks">' + esc(t.mensaje || '¡Gracias por tu compra!') + '</p><p class="r-legal">' + esc(t.nombre) + ' · Comprobante interno de pago, no válido como factura.</p></footer>'
       + '</article>';
   }
@@ -115,9 +135,12 @@
     try { formato = localStorage.getItem(KEY_FORMATO) || 'a4'; } catch (e) { /* sin almacenamiento */ }
     const cli = d.clienteRef;
     const ventasOrig = tipo === 'v' ? [BG.venta(args[1])] : BG.ventasDeCliente(cli.id);
+    const prox = d.compras.length === 1 && d.compras[0].cuotas.length ? d.compras[0].cuotas[0] : null;
     const textoWa = 'Hola ' + cli.nombre.split(' ')[0] + ', te paso el resumen de tu cuenta en ' + d.tienda.nombre + ': '
       + (d.compras.length === 1 ? 'compra ' + BG.fmtRecibo(d.compras[0].numero) + ' por ' + gs(d.compras[0].total) + ', pagado ' + gs(d.compras[0].pagado) + '. ' : '')
-      + (d.saldoCuenta > 0 ? 'Saldo pendiente: ' + gs(d.saldoCuenta) + '.' : '¡Tu cuenta está al día!') + ' ¡Gracias!';
+      + (d.saldoCuenta > 0 ? 'Saldo pendiente: ' + gs(d.saldoCuenta) + '.' : '¡Tu cuenta está al día!')
+      + (prox ? ' Próxima cuota: ' + gs(prox.falta) + ' el ' + BG.fmtFecha(prox.vence) + '.' : '')
+      + (d.aFavor > 0 ? ' Tenés ' + gs(d.aFavor) + ' a favor para tu próxima compra.' : '') + ' ¡Gracias!';
     const volver = tipo === 'v' ? '#/ventas/' + args[1] : '#/clientes/' + cli.id;
     const html = '<div class="page">'
       + '<div class="receipt-toolbar no-print"><a class="back-link" href="' + volver + '">' + icon('left', 'i-sm') + 'Volver</a>'
@@ -198,7 +221,15 @@
       + CRITERIOS.map((c) => '<div class="check' + (hechos.indexOf(c.id) >= 0 ? ' is-done' : '') + '"><input type="checkbox" id="g-' + c.id + '" data-check="' + c.id + '"' + (hechos.indexOf(c.id) >= 0 ? ' checked' : '') + '>'
         + '<label class="check-title" for="g-' + c.id + '">' + esc(c.titulo) + '</label><p class="check-how">' + esc(c.como) + '</p>'
         + '<button type="button" class="btn btn-sm check-go" data-ir="' + c.ir + '">Probarlo</button></div>').join('') + '</div>'
-      + '<h3>Lo nuevo: perfiles, precios especiales, envíos y resumen</h3><ul class="bullets">'
+      + '<h3>Lo nuevo de esta versión</h3><ul class="bullets">'
+      + '<li><strong>Tema claro u oscuro:</strong> el botón del sol/luna de arriba cambia entre automático, claro y oscuro (en el celular también está en «Más»).</li>'
+      + '<li><strong>Saldo a favor bien a la vista:</strong> pastilla dorada en la lista de clientes, recuadro en la ficha, en Inicio y al vender o cobrar (viene marcado para usarlo). Tamara tiene una seña de ₲ 100.000 y además debe: probá «Registrar cobro» con «Usarlo para pagar». Desde su ficha se puede devolver en plata (sale de la caja).</li>'
+      + '<li><strong>Control del saldo a favor:</strong> en Inicio y en Reportes → Deudores el sistema reconstruye cada saldo a favor desde los pagos de más, señas, devoluciones, anulaciones y la plata devuelta, y avisa si algo no cuadra o queda negativo.</li>'
+      + '<li><strong>Cuotas con fecha:</strong> al vender a cuenta, «Acordar cuotas con fecha». En «Cuotas» (menú) se ve lo atrasado y lo que vence esta semana, con «Recordar» por WhatsApp. Desde una venta: «Acordar cuotas» o «Cambiar cuotas».</li>'
+      + '<li><strong>Devoluciones y cambios:</strong> en una venta, «Devolución o cambio»: devolver un artículo, cambiarlo por otro producto o por otro talle. Lo que sobra queda a favor o se devuelve en plata (Jazmín necesita el PIN 1234).</li>'
+      + '<li><strong>Stock sin movimiento y próximo pedido:</strong> como Ariel, Reportes → «Stock y rotación»: lo que no se vende hace 30 días o más (con «Liquidar»), lo más vendido y cuánto pedir.</li>'
+      + '<li><strong>Meta y comisión de Jazmín:</strong> ella ve «Tu mes» en Inicio (avance y comisión); Ariel la ve en Resumen y la cambia en Ajustes. Se calcula sobre la ganancia de lo cobrado: un descuento grande le baja la comisión.</li></ul>'
+      + '<h3>Perfiles, precios especiales, envíos y resumen</h3><ul class="bullets">'
       + '<li><strong>Perfiles:</strong> arriba, «Ver como» cambia entre Ariel (dueño: ve y cambia todo) y Jazmín (vendedora: vende, cobra, emite recibos y prepara envíos, sin costos ni dólar, y sin anular).</li>'
       + '<li><strong>Permisos:</strong> como Ariel, en Ajustes → Usuarios y permisos, quitale a Jazmín por ejemplo «Registrar cobros» y fijate cómo desaparece esa opción en su vista.</li>'
       + '<li><strong>Envíos:</strong> desde una venta, «Preparar envío» → completá la lista de control → «Imprimir etiqueta» → «Registrar despacho» con el número de guía → «Marcar entregado».</li>'
@@ -224,7 +255,9 @@
       + '<li><strong>Cotización:</strong> "cambio el dólar y todo se recalcula" choca con "congelar la cotización". Propuesta: el costo queda congelado y el precio de venta del stock se actualiza solo si lo confirmás.</li>'
       + '<li><strong>Stock:</strong> el mockup no deja vender más unidades de las cargadas. ¿Se queda así o pasa a la fase 2?</li>'
       + '<li><strong>Recibo:</strong> ¿hoja A4 o ticket de 80 mm? ¿Se agrega el teléfono de la clienta?</li>'
-      + '<li><strong>Envíos:</strong> las empresas de la lista son ejemplos: ¿con cuáles mandan desde Coronel Oviedo? ¿Imprimen en etiquetas de 10 × 15 cm o en hoja A4?</li></ul>'
+      + '<li><strong>Envíos:</strong> las empresas de la lista son ejemplos: ¿con cuáles mandan desde Coronel Oviedo? ¿Imprimen en etiquetas de 10 × 15 cm o en hoja A4?</li>'
+      + '<li><strong>Talles y colores:</strong> ¿se cargan como variantes de cada prenda? Así el cambio de talle mueve el stock del talle correcto y el próximo pedido sugiere qué talle pedir.</li>'
+      + '<li><strong>Comisión:</strong> ¿10 % de la ganancia de lo cobrado está bien, o prefieren un % de todo lo cobrado? ¿Cuál es la meta del mes?</li></ul>'
       + '<div class="card-foot"><span class="small muted">¿Querés empezar de cero?</span><button type="button" class="btn btn-sm btn-danger" data-guia="reiniciar">' + icon('refresh', 'i-sm') + 'Reiniciar datos</button></div>';
   }
 

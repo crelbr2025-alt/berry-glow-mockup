@@ -13,6 +13,31 @@
     const p = iso.split('-').map(Number);
     return isoLocal(new Date(p[0], p[1] - 1, p[2] + n));
   }
+  // Mismas reglas que el sistema (app-core.js): fechas de cuotas, reparto en cuotas redondas y totales sin lo devuelto.
+  function sumarMeses(iso, k) {
+    const p = iso.split('-').map(Number);
+    const ultimo = new Date(p[0], p[1] - 1 + k + 1, 0).getDate();
+    return isoLocal(new Date(p[0], p[1] - 1 + k, Math.min(p[2], ultimo)));
+  }
+  const fechasCuotas = (primera, n, f) => Array.from({ length: n }, (x, i) => (f === 'mensual' ? sumarMeses(primera, i) : sumarDias(primera, i * (f === 'quincenal' ? 15 : 7))));
+  function repartirCuotas(saldo, n) {
+    let base = Math.floor(saldo / n / 1000) * 1000;
+    if (!base) base = Math.floor(saldo / n);
+    const m = Array(n).fill(base);
+    m[n - 1] = saldo - base * (n - 1);
+    return m;
+  }
+  function totalesDe(v) {
+    const vivos = v.items.map((it) => ({ precio: it.precio, cantidad: it.cantidad - (it.devueltas || 0) }));
+    const d = v.descuento;
+    if (!d || !d.valor) return C.totalesVenta(vivos, null);
+    if (d.tipo === 'porcentaje') return C.totalesVenta(vivos, { tipo: 'porcentaje', valor: d.valor });
+    const t = C.totalesVenta(vivos, null);
+    const lleno = v.items.reduce((a, it) => a + it.precio * it.cantidad, 0);
+    const base = Math.min(Math.round(Number(d.valor)), lleno);
+    const monto = lleno > 0 ? Math.floor((2 * base * t.subtotal + lleno) / (2 * lleno)) : 0;
+    return { subtotal: t.subtotal, descuento: monto, total: t.subtotal - monto };
+  }
 
   // [id, nombre, CI/RUC, teléfono, dirección, correo, notas, alta (días atrás)]
   const CLIENTES = [
@@ -96,23 +121,28 @@
   ];
 
   // Ventas: cliente, días atrás, hora, artículos [código, cantidad, precio especial opcional], descuento opcional,
-  // pagos [días atrás, hora, partes [forma, monto]]. Monto: 'total' | 'resto' | fracción del total | ₲ fijos.
+  // pagos [días atrás, hora, partes [forma, monto], excedente opcional]. Monto: 'total' | 'resto' | fracción del total | ₲ fijos.
   // autorizo: el precio especial bajó del mínimo y Ariel lo autorizó con su PIN. ajuste: precio cambiado después de vender.
+  // plan: cuotas acordadas al vender (f = frecuencia, n = cuotas, primera = días atrás del primer vencimiento; negativo = a futuro;
+  // 'mes' = un mes después de la venta). devol: devoluciones y cambios de un artículo, días después de vender.
   const VENTAS = [
     { c: 'c01', d: 40, h: '10:20', it: [['P01', 1], ['P07', 1]], pagos: [[40, '10:22', [['efectivo', 0.5]]], [25, '16:05', [['transferencia', 'resto']]]] },
-    { c: 'c02', d: 38, h: '11:05', it: [['P03', 1]], pagos: [[38, '11:06', [['efectivo', 100000]]], [0, '09:40', [['transferencia', 50000]]]] },
+    { c: 'c02', d: 38, h: '11:05', it: [['P03', 1]], pagos: [[38, '11:06', [['efectivo', 100000]]], [0, '09:40', [['transferencia', 50000]]]],
+      plan: { f: 'quincenal', n: 3, primera: 23 } },
     { c: 'c03', d: 36, h: '15:30', it: [['P06', 1], ['P08', 1]], pagos: [[36, '15:31', [['efectivo', 'total']]]] },
     { c: 'c04', d: 35, h: '17:45', it: [['P02', 1]], pagos: [[35, '17:46', [['transferencia', 0.3]]], [20, '10:10', [['qr', 0.3]]]] },
     { c: 'c05', d: 33, h: '12:15', it: [['P04', 2]], pagos: [[33, '12:16', [['tarjeta', 'total']]]] },
-    { c: 'c06', d: 30, h: '16:40', it: [['P05', 1]], pagos: [[30, '16:41', [['efectivo', 150000]]]] },
-    { c: 'c07', d: 29, h: '10:00', it: [['P07', 3], ['P10', 2]], desc: { tipo: 'porcentaje', valor: '10', motivo: 'Compra para revender' }, pagos: [[29, '10:02', [['transferencia', 0.5]]], [15, '18:20', [['transferencia', 'resto']]]] },
+    { c: 'c06', d: 30, h: '16:40', it: [['P05', 1]], pagos: [[30, '16:41', [['efectivo', 150000]]]], plan: { f: 'mensual', n: 3, primera: 'mes' } },
+    { c: 'c07', d: 29, h: '10:00', it: [['P07', 3], ['P10', 2]], desc: { tipo: 'porcentaje', valor: '10', motivo: 'Compra para revender' }, pagos: [[29, '10:02', [['transferencia', 0.5]]], [15, '18:20', [['transferencia', 'resto']], 20000]] },
     { c: 'c08', d: 27, h: '14:50', it: [['P09', 1]], pagos: [[27, '14:51', [['efectivo', 'total']]]] },
-    { c: 'c09', d: 25, h: '11:30', it: [['P01', 1]], pagos: [[25, '11:31', [['qr', 200000]]], [0, '10:15', [['efectivo', 100000]]]] },
+    { c: 'c09', d: 25, h: '11:30', it: [['P01', 1]], pagos: [[25, '11:31', [['qr', 200000]]], [0, '10:15', [['efectivo', 100000]]]],
+      devol: [{ d: 24, h: '11:00', tipo: 'talle', i: 0, n: 1, talle: 'Devolvió el 38 y se llevó el 40', motivo: 'No le quedó el talle', q: 'a' }] },
     { c: 'c10', d: 22, h: '17:10', it: [['P06', 1]], pagos: [[22, '17:12', [['efectivo', 100000], ['transferencia', 50000]]]] },
-    { c: 'c11', d: 18, h: '09:50', it: [['P11', 1], ['P13', 1]], pagos: [[18, '09:51', [['tarjeta', 'total']]]] },
-    { c: 'c12', d: 17, h: '15:05', it: [['P12', 1]], pagos: [[17, '15:06', [['efectivo', 0.5]]]] },
+    { c: 'c11', d: 18, h: '09:50', it: [['P11', 1], ['P13', 1]], pagos: [[18, '09:51', [['tarjeta', 'total']]]],
+      devol: [{ d: 14, h: '16:40', tipo: 'cambio', i: 1, n: 1, prod: 'P09', motivo: 'No le quedó el talle', nota: 'No había su talle de short; eligió la riñonera', q: 'a' }] },
+    { c: 'c12', d: 17, h: '15:05', it: [['P12', 1]], pagos: [[17, '15:06', [['efectivo', 0.5]]]], plan: { f: 'quincenal', n: 2, primera: 2 } },
     { c: 'c13', d: 16, h: '16:30', it: [['P14', 1], ['P20', 1]], pagos: [[16, '16:31', [['efectivo', 'total']]]] },
-    { c: 'c14', d: 15, h: '18:00', it: [['P15', 1]], pagos: [[10, '11:20', [['transferencia', 100000]]]] },
+    { c: 'c14', d: 15, h: '18:00', it: [['P15', 1]], pagos: [[10, '11:20', [['transferencia', 100000]]]], plan: { f: 'semanal', n: 4, primera: 8 } },
     { c: 'c02', d: 14, h: '10:45', it: [['P19', 2]], pagos: [[14, '10:46', [['efectivo', 'total']]]] },
     { c: 'c15', d: 12, h: '12:40', it: [['P16', 1], ['P17', 1]], pagos: [[12, '12:41', [['qr', 0.4]]]] },
     { c: 'c16', d: 11, h: '17:25', it: [['P18', 1]], pagos: [[11, '17:26', [['efectivo', 'total']]]] },
@@ -121,14 +151,16 @@
       c: 'c18', d: 9, h: '16:10', it: [['P11', 1]], pagos: [[9, '16:11', [['efectivo', 50000]]]],
       anulada: { d: 8, h: '10:30', motivo: 'La clienta devolvió el top: no le quedó el talle.' },
     },
-    { c: 'c19', d: 8, h: '13:20', it: [['P13', 1], ['P19', 1, { precio: 60000, motivo: 'Promoción', nota: 'Promo de pulseras de la semana' }]], pagos: [[8, '13:21', [['tarjeta', 'total']]]] },
-    { c: 'c20', d: 6, h: '10:35', it: [['P12', 1]], pagos: [[6, '10:36', [['efectivo', 0.3]]]] },
+    { c: 'c19', d: 8, h: '13:20', it: [['P13', 1], ['P19', 1, { precio: 60000, motivo: 'Promoción', nota: 'Promo de pulseras de la semana' }]], pagos: [[8, '13:21', [['tarjeta', 'total']]]],
+      devol: [{ d: 6, h: '12:30', tipo: 'devolucion', i: 1, n: 1, motivo: 'No le gustó', nota: 'La pulsera le quedaba grande', q: 'j' }] },
+    { c: 'c20', d: 6, h: '10:35', it: [['P12', 1]], pagos: [[6, '10:36', [['efectivo', 0.3]]]], plan: { f: 'semanal', n: 3, primera: -1 } },
     { c: 'c21', d: 5, h: '15:45', it: [['P20', 2, { precio: 60000, motivo: 'Promoción', nota: 'Llevando 2 sets' }], ['P17', 1]], pagos: [[5, '15:46', [['efectivo', 30000], ['qr', 'resto']]]] },
-    { c: 'c22', d: 4, h: '17:55', it: [['P14', 1]], pagos: [],
+    { c: 'c22', d: 4, h: '17:55', it: [['P14', 1]], pagos: [], plan: { f: 'quincenal', n: 2, primera: -11 },
       ajuste: { d: 2, h: '10:15', i: 0, precio: 320000, motivo: 'Detalle en la prenda', nota: 'Tenía una costura abierta; se le avisó y aceptó el descuento', q: 'j' } },
     { c: 'c01', d: 3, h: '11:10', it: [['P16', 1]], pagos: [[3, '11:11', [['transferencia', 0.5]]]] },
     { c: 'c23', d: 2, h: '16:20', autorizo: true, it: [['P15', 1, { precio: 420000, motivo: 'Detalle en la prenda', nota: 'Mancha chica en la manga; la clienta la lleva así' }]], pagos: [[2, '16:21', [['tarjeta', 'total']]]] },
-    { c: 'c24', d: 1, h: '18:30', it: [['P08', 1], ['P10', 1]], pagos: [[1, '18:31', [['efectivo', 'total']]]] },
+    { c: 'c24', d: 1, h: '18:30', it: [['P08', 1], ['P10', 1]], pagos: [[1, '18:31', [['efectivo', 'total']]]],
+      devol: [{ d: 0, h: '10:20', tipo: 'devolucion', i: 1, n: 1, motivo: 'No le gustó', nota: 'Era para regalo y ya tenía uno parecido', destino: 'efectivo', q: 'a' }] },
     { c: 'c05', d: 1, h: '12:05', it: [['P21', 1]], pagos: [[1, '12:06', [['qr', 0.5]]]] },
     { c: 'c09', d: 0, h: '09:25', it: [['P22', 1, { precio: 250000, motivo: 'Cliente frecuente' }], ['P28', 1]], pagos: [[0, '09:26', [['efectivo', 100000], ['transferencia', 'resto']]]] },
     { c: 'c25', d: 0, h: '10:50', it: [['P24', 1]], pagos: [[0, '10:51', [['qr', 150000]]]] },
@@ -144,8 +176,14 @@
   // Permisos de la vendedora: Ariel los puede cambiar desde Ajustes.
   const PERMISOS_VENDEDORA = {
     emitirRecibos: true, registrarVentas: true, registrarCobros: true, editarClientes: true,
-    verPrecios: true, verCaja: true, prepararEnvios: true, preciosEspeciales: true, verGanancia: true,
+    verPrecios: true, verCaja: true, prepararEnvios: true, preciosEspeciales: true, verGanancia: true, devoluciones: true,
   };
+  // Meta y comisión de Jazmín: 10 % de la ganancia de lo que se cobra de sus ventas; meta de cobranza por mes.
+  const COMISION_VENDEDORA = { activa: true, base: 'ganancia', porcentaje: 10, meta: 3500000, ve: true };
+  // Señas (anticipos sin venta): quedan como saldo a favor. [cliente, días atrás, hora, partes, quién, nota]
+  const SENAS = [
+    { c: 'c14', d: 2, h: '17:30', partes: [['transferencia', 100000]], q: 'j', nota: 'Seña por un blazer negro que llega en el próximo pedido' },
+  ];
 
   // Envíos por encomienda o courier desde Coronel Oviedo (venta = número de venta, empezando en 1).
   // estados: [estado, días atrás, hora, quién (a = Ariel, j = Jazmín)]
@@ -178,7 +216,7 @@
     const gs = (n) => C.fmtGs(n);
 
     const db = {
-      version: 3,
+      version: 4,
       creado: hoy,
       config: {
         tienda: {
@@ -215,10 +253,10 @@
       },
       usuarios: [
         { id: 'u1', nombre: ARIEL, usuario: 'ariel', rol: 'admin' },
-        { id: 'u2', nombre: JAZMIN, usuario: 'jazmin', rol: 'vendedor', permisos: Object.assign({}, PERMISOS_VENDEDORA) },
+        { id: 'u2', nombre: JAZMIN, usuario: 'jazmin', rol: 'vendedor', permisos: Object.assign({}, PERMISOS_VENDEDORA), comision: Object.assign({}, COMISION_VENDEDORA) },
       ],
       clientes: [], productos: [], pedidos: [], ventas: [], pagos: [], creditos: [], cierres: [], auditoria: [],
-      emisiones: [], envios: [],
+      emisiones: [], envios: [], egresos: [],
     };
 
     db.config.historialTarifa.forEach((h) => log(h.ts, 'parametros', 'Tarifa del courier', C.fmtUSD(h.valor) + ' por kg'));
@@ -272,6 +310,8 @@
     }
 
     const eventos = [];
+    const totalAlVender = new Map();
+    const excedentes = [];
     VENTAS.forEach((s, n) => {
       const id = 'v' + String(n + 1).padStart(3, '0');
       const deJazmin = DE_JAZMIN.has(n + 1);
@@ -288,12 +328,14 @@
         id: id, recibo: null, clienteId: s.c, fecha: F(s.d), ts: T(s.d, s.h), items: items,
         descuento: { tipo: s.desc ? s.desc.tipo : 'monto', valor: s.desc ? s.desc.valor : 0, monto: t.descuento, motivo: (s.desc && s.desc.motivo) || null, nota: '' },
         subtotal: t.subtotal, total: t.total, anulada: null, usuario: quien, autorizadoPor: s.autorizo ? ARIEL : null, ajustes: [],
+        devoluciones: [], aFavor: 0, plan: null,
       };
       db.ventas.push(v);
+      totalAlVender.set(id, v.total);
       eventos.push({ tipo: 'venta', ts: v.ts, obj: v });
 
       let pagado = 0;
-      s.pagos.forEach(([dias, hora, partesSpec], idx) => {
+      s.pagos.forEach(([dias, hora, partesSpec, extra], idx) => {
         const partes = [];
         for (const [forma, spec] of partesSpec) {
           const resto = v.total - pagado - partes.reduce((a, x) => a + x.monto, 0);
@@ -306,16 +348,32 @@
         }
         const total = partes.reduce((a, x) => a + x.monto, 0);
         if (!total) return;
+        // Pagó de más y lo dejó a favor: el excedente va en la misma forma de pago y queda como saldo a favor.
+        if (extra) partes[partes.length - 1].monto += extra;
         const pg = {
           id: 'pg' + String(db.pagos.length + 1).padStart(3, '0'), ventaId: id, clienteId: s.c,
-          fecha: F(dias), ts: T(dias, hora), partes: partes, total: total, excedente: 0,
+          fecha: F(dias), ts: T(dias, hora), partes: partes, total: total, excedente: extra || 0,
           recibo: null, inicial: idx === 0 && dias === s.d, grupo: null, anulado: null,
           usuario: dias <= 12 && (deJazmin || dias < s.d) ? JAZMIN : ARIEL,
         };
         pagado += total;
         db.pagos.push(pg);
         eventos.push({ tipo: 'pago', ts: pg.ts, obj: pg });
+        if (extra) excedentes.push(pg);
       });
+
+      // Cuotas acordadas al vender, sobre lo que quedó debiendo después del pago inicial.
+      if (s.plan) {
+        const inicial = db.pagos.filter((p) => p.ventaId === id && p.inicial).reduce((a, p) => a + p.total, 0);
+        const saldo0 = v.total - inicial;
+        const primera = s.plan.primera === 'mes' ? sumarMeses(v.fecha, 1) : F(s.plan.primera);
+        const fechas = fechasCuotas(primera, s.plan.n, s.plan.f);
+        const montos = repartirCuotas(saldo0, s.plan.n);
+        v.plan = {
+          id: 'pl' + (n + 1), fecha: v.fecha, ts: T(s.d, sumarMinutos(s.h, 2)), usuario: quien, frecuencia: s.plan.f, nota: '',
+          saldoInicial: saldo0, totalInicial: v.total, cuotas: fechas.map((f, i) => ({ vence: f, monto: montos[i] })),
+        };
+      }
 
       if (s.anulada) {
         v.anulada = { fecha: F(s.anulada.d), ts: T(s.anulada.d, s.anulada.h), motivo: s.anulada.motivo, usuario: USUARIO };
@@ -341,6 +399,19 @@
       }
     });
 
+    // Señas: pagos sin venta, todo queda a favor de la clienta.
+    SENAS.forEach((s) => {
+      const partes = s.partes.map(([forma, monto]) => ({ forma: forma, monto: monto }));
+      const monto = partes.reduce((a, x) => a + x.monto, 0);
+      const pg = {
+        id: 'pg' + String(db.pagos.length + 1).padStart(3, '0'), ventaId: null, clienteId: s.c, fecha: F(s.d), ts: T(s.d, s.h), partes: partes,
+        total: 0, excedente: monto, recibo: null, inicial: false, grupo: null, anulado: null, usuario: s.q === 'j' ? JAZMIN : ARIEL, nota: s.nota || '',
+      };
+      db.pagos.push(pg);
+      eventos.push({ tipo: 'pago', ts: pg.ts, obj: pg });
+      excedentes.push(pg);
+    });
+
     eventos.sort((a, b) => a.ts.localeCompare(b.ts));
     let recibo = 101;
     for (const e of eventos) {
@@ -352,6 +423,72 @@
 
     const nombre = (cid) => db.clientes.find((c) => c.id === cid).nombre;
     const numero = (n) => 'N° ' + String(n).padStart(6, '0');
+    const credito = (cid, fecha, ts, monto, motivo, extra) => db.creditos.push(Object.assign({ id: 'cr' + (db.creditos.length + 1), clienteId: cid, fecha: fecha, ts: ts, monto: monto, motivo: motivo }, extra || {}));
+
+    // Excedentes y señas: el saldo a favor nace con el número de recibo del pago.
+    excedentes.forEach((pg) => {
+      const sena = !pg.ventaId;
+      credito(pg.clienteId, pg.fecha, pg.ts, pg.excedente, (sena ? 'Seña / anticipo, recibo ' : 'Excedente del recibo ') + numero(pg.recibo), { pagoId: pg.id });
+      if (!sena) log(pg.ts, 'cobros', 'Saldo a favor', nombre(pg.clienteId) + ' · ' + gs(pg.excedente) + ' de excedente', pg.usuario);
+    });
+
+    // Devoluciones y cambios de un artículo (mismas reglas que BG.registrarDevolucion).
+    const MOTIVO_TXT = (m, nota) => (m ? ' · ' + m : '') + (nota ? ' (' + nota + ')' : '');
+    VENTAS.forEach((s, n) => {
+      (s.devol || []).forEach((dv, k) => {
+        const v = db.ventas[n];
+        const it = v.items[dv.i];
+        const quien = dv.q === 'j' ? JAZMIN : ARIEL;
+        const fecha = F(dv.d);
+        const ts = T(dv.d, dv.h);
+        const pagado = db.pagos.filter((p) => p.ventaId === v.id && !p.anulado).reduce((a, p) => a + p.total, 0) - v.aFavor;
+        const reg = {
+          id: 'dv' + (n + 1) + '-' + (k + 1), fecha: fecha, ts: ts, usuario: quien, tipo: dv.tipo, item: dv.i, descripcion: it.descripcion, cantidad: dv.n, precio: it.precio,
+          talle: dv.talle || '', nuevoItem: null, productoNuevo: null, precioNuevo: null, totalAntes: v.total, totalDespues: v.total, aFavor: 0, reintegro: 0, forma: null,
+          motivo: dv.motivo, nota: dv.nota || '', autorizadoPor: null,
+        };
+        if (dv.tipo !== 'talle') {
+          it.devueltas = (it.devueltas || 0) + dv.n;
+          if (dv.prod) {
+            const p = db.productos.find((x) => x.id === dv.prod);
+            v.items.push({ productoId: p.id, descripcion: p.descripcion, cantidad: dv.n, precio: p.precioVenta, costoUnitGs: p.costoTotalGs, margen: p.margen, precioLista: p.precioVenta, especial: null, cambioDe: { item: dv.i, devolucion: reg.id } });
+            Object.assign(reg, { nuevoItem: v.items.length - 1, productoNuevo: p.descripcion, precioNuevo: p.precioVenta });
+          }
+          const t2 = totalesDe(v);
+          v.subtotal = t2.subtotal;
+          v.descuento.monto = t2.descuento;
+          v.total = t2.total;
+          reg.totalDespues = t2.total;
+          const sobra = pagado - t2.total;
+          if (sobra > 0) {
+            v.aFavor += sobra;
+            reg.aFavor = sobra;
+            credito(v.clienteId, fecha, ts, sobra, (dv.tipo === 'cambio' ? 'Cambio' : 'Devolución') + ' en la compra ' + numero(v.recibo), { ventaId: v.id, devolucionId: reg.id });
+          }
+        }
+        v.devoluciones.push(reg);
+        const tipoTxt = { devolucion: 'Devolución', cambio: 'Cambio por otro producto', talle: 'Cambio de talle' }[dv.tipo];
+        const que = dv.tipo === 'talle' ? 'Cambio de talle: ' + dv.n + ' × ' + it.descripcion + ' (' + reg.talle + ')'
+          : dv.tipo === 'cambio' ? 'Cambio: ' + dv.n + ' × ' + it.descripcion + ' por ' + dv.n + ' × ' + reg.productoNuevo : 'Devolución: ' + dv.n + ' × ' + it.descripcion;
+        log(ts, 'devoluciones', tipoTxt, 'Recibo ' + numero(v.recibo) + ' · ' + nombre(v.clienteId) + ' · ' + que + MOTIVO_TXT(reg.motivo, reg.nota)
+          + (reg.totalAntes !== reg.totalDespues ? ' · total ' + gs(reg.totalAntes) + ' → ' + gs(reg.totalDespues) : '') + (reg.aFavor ? ' · ' + gs(reg.aFavor) + ' a saldo a favor' : ''), quien);
+        if (reg.aFavor && dv.destino) {
+          const eg = { id: 'eg' + (db.egresos.length + 1), fecha: fecha, ts: T(dv.d, sumarMinutos(dv.h, 1)), usuario: quien, clienteId: v.clienteId, forma: dv.destino, monto: reg.aFavor,
+            concepto: 'Devolución de la compra ' + numero(v.recibo), devolucionId: reg.id, autorizadoPor: null };
+          db.egresos.push(eg);
+          credito(v.clienteId, fecha, eg.ts, -eg.monto, 'Devuelto en ' + dv.destino + ' · ' + eg.concepto, { egresoId: eg.id });
+          reg.reintegro = reg.aFavor;
+          reg.forma = dv.destino;
+          log(eg.ts, 'devoluciones', 'Plata devuelta', nombre(v.clienteId) + ' · ' + gs(eg.monto) + ' en ' + dv.destino + ' · ' + eg.concepto, quien);
+        }
+      });
+      if (db.ventas[n].plan) {
+        const v = db.ventas[n];
+        const pl = v.plan;
+        log(pl.ts, 'cuotas', 'Plan de cuotas', 'Recibo ' + numero(v.recibo) + ' · ' + nombre(v.clienteId) + ' · ' + gs(pl.saldoInicial) + ' en ' + pl.cuotas.length + ' cuotas ('
+          + ({ semanal: 'semanal', quincenal: 'cada 15 días', mensual: 'mensual' })[pl.frecuencia] + ') · la primera vence el ' + fmtFecha(pl.cuotas[0].vence), pl.usuario);
+      }
+    });
     const FORMAS = { efectivo: 'Efectivo', transferencia: 'Transferencia', qr: 'QR', tarjeta: 'Tarjeta' };
     const margenTxt = (precio, costo) => {
       if (!(costo > 0)) return '';
@@ -362,7 +499,7 @@
     for (const e of eventos) {
       if (e.tipo === 'venta') {
         const v = e.obj;
-        log(v.ts, 'ventas', 'Venta registrada', 'Recibo ' + numero(v.recibo) + ' · ' + nombre(v.clienteId) + ' · ' + gs(v.ajustes.length ? v.ajustes[0].totalAntes : v.total), v.usuario);
+        log(v.ts, 'ventas', 'Venta registrada', 'Recibo ' + numero(v.recibo) + ' · ' + nombre(v.clienteId) + ' · ' + gs(totalAlVender.get(v.id)), v.usuario);
         const especiales = v.items.filter((it) => it.especial);
         if (v.autorizadoPor) {
           log(v.ts, 'seguridad', 'Autorización con PIN', 'Precio especial debajo del mínimo que fijó ' + v.autorizadoPor + ': ' + especiales.map((it) => it.descripcion).join(', ') + '.', v.usuario);
@@ -384,7 +521,8 @@
       } else if (e.tipo === 'pago') {
         const pg = e.obj;
         const formas = pg.partes.map((x) => FORMAS[x.forma] + ' ' + gs(x.monto)).join(' + ');
-        log(pg.ts, 'cobros', pg.inicial ? 'Pago inicial' : 'Cobro registrado', 'Recibo ' + numero(pg.recibo) + ' · ' + nombre(pg.clienteId) + ' · ' + formas, pg.usuario);
+        log(pg.ts, 'cobros', !pg.ventaId ? 'Seña registrada' : pg.inicial ? 'Pago inicial' : 'Cobro registrado', 'Recibo ' + numero(pg.recibo) + ' · ' + nombre(pg.clienteId) + ' · ' + formas
+          + (pg.nota ? ' · ' + pg.nota : ''), pg.usuario);
       } else if (e.tipo === 'anulacion') {
         const v = e.obj;
         log(v.anulada.ts, 'anulaciones', 'Venta anulada', 'Recibo ' + numero(v.recibo) + ' · ' + nombre(v.clienteId) + ' · motivo: ' + v.anulada.motivo);

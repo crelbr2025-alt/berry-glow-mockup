@@ -76,6 +76,67 @@
   }
   const textoPartes = (partes) => partes.map((x) => BG.FORMAS[x.forma] + ' ' + gs(x.monto)).join(' + ');
 
+  /* ── Plan de cuotas ──────────────────────────────────────────────────── */
+
+  /** Arma las cuotas sobre el saldo actual de la venta. d = { frecuencia, n, primera, nota } */
+  function armarPlan(v, d) {
+    const saldo = BG.saldoVenta(v);
+    const n = Math.max(1, Math.min(12, Math.round(Number(d.n) || 1)));
+    if (!(saldo > 0)) throw new Error('La venta no tiene saldo: no hace falta un plan de cuotas.');
+    if (!BG.FRECUENCIAS[d.frecuencia]) throw new Error('Elegí cada cuánto se paga.');
+    if (!d.primera || d.primera < v.fecha) throw new Error('La primera cuota no puede vencer antes de la venta.');
+    const fechas = BG.fechasCuotas(d.primera, n, d.frecuencia);
+    const montos = BG.repartirCuotas(saldo, n);
+    return {
+      id: BG.uid('pl'), fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, frecuencia: d.frecuencia, nota: limpiar(d.nota),
+      saldoInicial: saldo, totalInicial: v.total, cuotas: fechas.map((f, i) => ({ vence: f, monto: montos[i] })),
+    };
+  }
+  const textoPlan = (pl) => pl.cuotas.length + (pl.cuotas.length === 1 ? ' cuota' : ' cuotas') + ' (' + BG.FRECUENCIAS[pl.frecuencia].toLowerCase() + ') de ' + gs(pl.cuotas[0].monto)
+    + (pl.cuotas.length > 1 && pl.cuotas[pl.cuotas.length - 1].monto !== pl.cuotas[0].monto ? ' (la última ' + gs(pl.cuotas[pl.cuotas.length - 1].monto) + ')' : '')
+    + ' · la primera vence el ' + BG.fmtFecha(pl.cuotas[0].vence);
+
+  BG.guardarPlan = (d) => {
+    if (!BG.puede('registrarCobros') && !BG.puede('registrarVentas')) throw new Error('Tu usuario no puede acordar cuotas.');
+    const v = BG.venta(d.ventaId);
+    if (!v || v.anulada) throw new Error('Esa venta está anulada.');
+    const habia = !!v.plan;
+    v.plan = armarPlan(v, d);
+    BG.auditar('cuotas', habia ? 'Plan de cuotas cambiado' : 'Plan de cuotas', 'Recibo ' + BG.fmtRecibo(v.recibo) + ' · ' + BG.cliente(v.clienteId).nombre + ' · ' + gs(v.plan.saldoInicial) + ' en ' + textoPlan(v.plan));
+    BG.guardar();
+    return v.plan;
+  };
+  BG.quitarPlan = (ventaId) => {
+    const v = BG.venta(ventaId);
+    if (!v || !v.plan) return;
+    v.plan = null;
+    BG.auditar('cuotas', 'Plan de cuotas quitado', 'Recibo ' + BG.fmtRecibo(v.recibo) + ' · ' + BG.cliente(v.clienteId).nombre);
+    BG.guardar();
+  };
+
+  /* ── Devolver plata (sale de la caja y baja el saldo a favor) ────────── */
+
+  function reintegrar(clienteId, monto, forma, concepto, extra) {
+    const cli = BG.cliente(clienteId);
+    const eg = Object.assign({ id: BG.uid('eg'), fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, clienteId: clienteId, forma: forma, monto: monto, concepto: concepto }, extra || {});
+    (BG.db.egresos || (BG.db.egresos = [])).push(eg);
+    credito(clienteId, -monto, 'Devuelto en ' + BG.FORMAS[forma].toLowerCase() + ' · ' + concepto, { egresoId: eg.id });
+    BG.auditar('devoluciones', 'Plata devuelta', cli.nombre + ' · ' + gs(monto) + ' en ' + BG.FORMAS[forma].toLowerCase() + ' · ' + concepto + (eg.autorizadoPor ? ' · autorizó ' + eg.autorizadoPor : ''));
+    return eg;
+  }
+  /** Devuelve en plata (efectivo o transferencia) todo o parte del saldo a favor. d = { clienteId, monto, forma, nota, autorizadoPor } */
+  BG.devolverSaldoAFavor = (d) => {
+    if (!BG.esDuena() && !d.autorizadoPor) throw new Error('Devolver plata necesita la autorización de ' + BG.nombreDuena() + '.');
+    const disponible = BG.creditoCliente(d.clienteId);
+    const monto = Math.round(Number(d.monto));
+    if (!(monto > 0)) throw new Error('Escribí cuánto se le devuelve.');
+    if (monto > disponible) throw new Error('Tiene ' + gs(disponible) + ' a favor: no se le puede devolver más que eso.');
+    if (d.forma !== 'efectivo' && d.forma !== 'transferencia') throw new Error('Elegí cómo se le devuelve.');
+    const eg = reintegrar(d.clienteId, monto, d.forma, limpiar(d.nota) || 'Saldo a favor', { autorizadoPor: d.autorizadoPor || null });
+    BG.guardar();
+    return eg;
+  };
+
   /** Texto de un cambio de precio para la auditoría (solo la ve el dueño, así que lleva el margen). */
   const textoMargen = (precio, costo) => { const ev = BG.evaluarPrecio(precio, costo); return ev ? ' · margen ' + BG.fmtMargen(ev.margen) : ''; };
   const textoMotivo = (motivo, nota) => (motivo ? ' · ' + motivo : '') + (nota ? ' (' + nota + ')' : '');
@@ -101,6 +162,10 @@
     if (!BG.puede('preciosEspeciales') && (conDescuento || items.some((it) => it.especial))) {
       throw new Error('Tu usuario vende con el precio de lista: ' + BG.nombreDuena() + ' no te habilitó los precios especiales.');
     }
+    // El plan de cuotas se valida antes de guardar nada, así un dato mal puesto no deja la venta a medias.
+    if (d.plan && (!BG.FRECUENCIAS[d.plan.frecuencia] || !d.plan.primera || d.plan.primera < d.fecha)) {
+      throw new Error('Revisá el plan de cuotas: la primera cuota no puede vencer antes de la venta.');
+    }
     const t = C.totalesVenta(items, d.descuento);
     const recibo = BG.nuevoRecibo();
     const v = {
@@ -110,6 +175,7 @@
         motivo: conDescuento ? d.descuento.motivo || null : null, nota: conDescuento ? limpiar(d.descuento.nota) : '',
       },
       subtotal: t.subtotal, total: t.total, anulada: null, usuario: quien, autorizadoPor: d.autorizadoPor || null, ajustes: [],
+      devoluciones: [], aFavor: 0, plan: null,
     };
     BG.db.ventas.push(v);
     BG.auditar('ventas', 'Venta registrada', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · ' + items.length + ' artículo(s) · ' + gs(v.total));
@@ -137,6 +203,11 @@
         BG.auditar('cobros', 'Saldo a favor', cli.nombre + ' · ' + gs(excedente) + ' de excedente');
       }
     }
+    // Cuotas acordadas al vender: se reparte lo que quedó debiendo.
+    if (d.plan && BG.saldoVenta(v) > 0) {
+      v.plan = armarPlan(v, d.plan);
+      BG.auditar('cuotas', 'Plan de cuotas', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · ' + gs(v.plan.saldoInicial) + ' en ' + textoPlan(v.plan));
+    }
     BG.guardar();
     return { venta: v, pago: pago };
   };
@@ -147,10 +218,16 @@
    */
   BG.registrarCobro = (d) => {
     const cli = BG.cliente(d.clienteId);
+    const cola = (d.partes || []).filter((x) => x.monto > 0).map((x) => ({ forma: x.forma, monto: x.monto }));
+    // Saldo a favor usado para pagar la deuda: va primero y nunca más de lo que tiene ni de lo que debe.
+    const usar = d.destino === 'sena' ? 0 : Math.min(Math.round(Number(d.usarCredito) || 0), BG.creditoCliente(d.clienteId),
+      d.destino === 'todas' ? BG.saldoCliente(d.clienteId) : BG.saldoVenta(BG.venta(d.destino)));
+    if (usar > 0) cola.unshift({ forma: 'saldo', monto: usar });
+    const entregado = sum(cola, (x) => x.monto);
+    if (!(entregado > 0)) throw new Error('Escribí cuánto paga.');
     const recibo = BG.nuevoRecibo();
     const grupo = BG.uid('g');
-    const cola = (d.partes || []).filter((x) => x.monto > 0).map((x) => ({ forma: x.forma, monto: x.monto }));
-    const entregado = sum(cola, (x) => x.monto);
+    if (usar > 0) credito(d.clienteId, -usar, 'Aplicado al recibo ' + BG.fmtRecibo(recibo), { ventaId: d.destino === 'todas' ? null : d.destino });
     const pagos = [];
     if (d.destino === 'sena') {
       pagos.push(nuevoPago({ clienteId: d.clienteId, fecha: d.fecha, partes: cola, total: 0, excedente: entregado, recibo: recibo, grupo: grupo }));
@@ -185,7 +262,8 @@
       pagos.push(nuevoPago({ ventaId: v.id, clienteId: d.clienteId, fecha: d.fecha, partes: partes, total: aplicar, excedente: excedente, recibo: recibo, grupo: grupo }));
     });
     const totalPartes = sum(pagos, (p) => sum(p.partes, (x) => x.monto));
-    BG.auditar('cobros', 'Cobro registrado', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · ' + gs(totalPartes) + ' en ' + pagos.length + ' venta(s)');
+    BG.auditar('cobros', 'Cobro registrado', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · ' + gs(totalPartes) + ' en ' + pagos.length + ' venta(s)'
+      + (usar > 0 ? ' · ' + gs(usar) + ' con su saldo a favor' : ''));
     const exc = sum(pagos, (p) => p.excedente);
     if (exc > 0) {
       credito(d.clienteId, exc, 'Excedente del recibo ' + BG.fmtRecibo(recibo), { pagoId: pagos[pagos.length - 1].id });
@@ -211,9 +289,10 @@
     const precio = Math.round(Number(d.precio));
     if (!it || !(precio > 0)) throw new Error('Escribí el precio nuevo.');
     if (precio === it.precio) throw new Error('Es el mismo precio que ya tiene.');
+    if (!BG.cantidadViva(it)) throw new Error('Ese artículo ya se devolvió entero.');
     if (!d.motivo) throw new Error('Elegí el motivo del cambio.');
     const nuevos = v.items.map((x, i) => (i === d.item ? Object.assign({}, x, { precio: precio }) : x));
-    const t = C.totalesVenta(nuevos, v.descuento.valor ? { tipo: v.descuento.tipo, valor: v.descuento.valor } : null);
+    const t = BG.totalesDe(v, nuevos);
     const pagado = BG.pagadoVenta(v);
     if (t.total <= 0) throw new Error('Con ese precio el total de la venta quedaría en ' + gs(0) + '.');
     if (t.total < pagado) {
@@ -236,6 +315,97 @@
       + (ajuste.autorizadoPor ? ' · autorizó ' + ajuste.autorizadoPor : ''));
     BG.guardar();
     return ajuste;
+  };
+
+  /* ── Devoluciones y cambios de un artículo ───────────────────────────── */
+
+  BG.MOTIVOS_DEVOLUCION = ['No le quedó el talle', 'Falla o detalle', 'No le gustó', 'Otro'];
+  BG.TIPOS_DEVOLUCION = { devolucion: 'Devolución', cambio: 'Cambio por otro producto', talle: 'Cambio de talle' };
+
+  /**
+   * Devuelve o cambia unidades de un artículo sin anular la venta.
+   *  · devolucion: las unidades vuelven al stock y el total baja.
+   *  · cambio: vuelven al stock y se agrega a la venta el producto que se lleva (a su precio de lista); el total se recalcula.
+   *  · talle: el mismo producto en otro talle; se registra (el stock por talle es para el sistema final) y no cambia la plata.
+   * Si el total nuevo queda debajo de lo que ya pagó, la diferencia pasa a saldo a favor (v.aFavor), o se devuelve en plata.
+   * d = { ventaId, item, cantidad, tipo, productoId, talle, motivo, nota, destino: 'favor'|'efectivo'|'transferencia', autorizadoPor }
+   */
+  BG.registrarDevolucion = (d) => {
+    if (!BG.puede('devoluciones')) throw new Error(BG.nombreDuena() + ' no te habilitó las devoluciones y cambios.');
+    const v = BG.venta(d.ventaId);
+    if (!v || v.anulada) throw new Error('Esa venta está anulada.');
+    const it = v.items[d.item];
+    const quedan = it ? BG.cantidadViva(it) : 0;
+    const n = Math.round(Number(d.cantidad));
+    if (!it || !(n >= 1) || n > quedan) throw new Error('Elegí cuántas unidades vuelven (tiene ' + quedan + ').');
+    if (!BG.TIPOS_DEVOLUCION[d.tipo]) throw new Error('Elegí si es devolución o cambio.');
+    if (!d.motivo) throw new Error('Elegí el motivo.');
+    if (d.motivo === 'Otro' && !limpiar(d.nota)) throw new Error('Contá el motivo en «Detalle».');
+    let nuevo = null;
+    if (d.tipo === 'cambio') {
+      nuevo = BG.producto(d.productoId);
+      if (!nuevo) throw new Error('Elegí el producto que se lleva.');
+      if (nuevo.id === it.productoId) throw new Error('Es el mismo producto: usá «Cambio de talle».');
+      if (!nuevo.precioVenta) throw new Error('«' + nuevo.descripcion + '» no tiene precio de venta.');
+      if (BG.disponibles(nuevo) < n) throw new Error('Solo quedan ' + BG.disponibles(nuevo) + ' de «' + nuevo.descripcion + '».');
+    }
+    if (d.tipo === 'talle' && !limpiar(d.talle)) throw new Error('Escribí qué talle devuelve y cuál se lleva.');
+    const enPlata = d.destino === 'efectivo' || d.destino === 'transferencia';
+    if (enPlata && !BG.esDuena() && !d.autorizadoPor) throw new Error('Devolver plata necesita la autorización de ' + BG.nombreDuena() + '.');
+    const cli = BG.cliente(v.clienteId);
+    const pagado = BG.pagadoVenta(v);
+    const reg = {
+      id: BG.uid('dv'), fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, tipo: d.tipo, item: d.item, descripcion: it.descripcion,
+      cantidad: n, precio: it.precio, talle: limpiar(d.talle), nuevoItem: null, productoNuevo: null, precioNuevo: null,
+      totalAntes: v.total, totalDespues: v.total, aFavor: 0, reintegro: 0, forma: null, motivo: d.motivo, nota: limpiar(d.nota), autorizadoPor: d.autorizadoPor || null,
+    };
+    if (d.tipo !== 'talle') {
+      it.devueltas = (it.devueltas || 0) + n;
+      if (nuevo) {
+        v.items.push({
+          productoId: nuevo.id, descripcion: nuevo.descripcion, cantidad: n, precio: nuevo.precioVenta, costoUnitGs: nuevo.costoTotalGs,
+          margen: nuevo.margen, precioLista: nuevo.precioVenta, especial: null, cambioDe: { item: d.item, devolucion: reg.id },
+        });
+        Object.assign(reg, { nuevoItem: v.items.length - 1, productoNuevo: nuevo.descripcion, precioNuevo: nuevo.precioVenta });
+      }
+      const t = BG.totalesDe(v);
+      v.subtotal = t.subtotal;
+      v.descuento.monto = t.descuento;
+      v.total = t.total;
+      reg.totalDespues = t.total;
+      const sobra = pagado - t.total;
+      if (sobra > 0) {
+        v.aFavor = (v.aFavor || 0) + sobra;
+        reg.aFavor = sobra;
+        credito(v.clienteId, sobra, (d.tipo === 'cambio' ? 'Cambio' : 'Devolución') + ' en la compra ' + BG.fmtRecibo(v.recibo), { ventaId: v.id, devolucionId: reg.id });
+      }
+    }
+    (v.devoluciones || (v.devoluciones = [])).push(reg);
+    const que = d.tipo === 'talle' ? 'Cambio de talle: ' + n + ' × ' + it.descripcion + ' (' + reg.talle + ')'
+      : d.tipo === 'cambio' ? 'Cambio: ' + n + ' × ' + it.descripcion + ' por ' + n + ' × ' + nuevo.descripcion
+        : 'Devolución: ' + n + ' × ' + it.descripcion;
+    BG.auditar('devoluciones', BG.TIPOS_DEVOLUCION[d.tipo], 'Recibo ' + BG.fmtRecibo(v.recibo) + ' · ' + cli.nombre + ' · ' + que + textoMotivo(reg.motivo, reg.nota)
+      + (reg.totalAntes !== reg.totalDespues ? ' · total ' + gs(reg.totalAntes) + ' → ' + gs(reg.totalDespues) : '') + (reg.aFavor ? ' · ' + gs(reg.aFavor) + ' a saldo a favor' : ''));
+    if (reg.aFavor && enPlata) {
+      reintegrar(v.clienteId, reg.aFavor, d.destino, 'Devolución de la compra ' + BG.fmtRecibo(v.recibo), { devolucionId: reg.id, autorizadoPor: d.autorizadoPor || null });
+      reg.reintegro = reg.aFavor;
+      reg.forma = d.destino;
+    }
+    BG.guardar();
+    return reg;
+  };
+
+  /* ── Meta y comisión ─────────────────────────────────────────────────── */
+
+  BG.guardarComision = (usuarioId, datos) => {
+    soloDuenio('cambiar la meta y la comisión');
+    const u = BG.db.usuarios.find((x) => x.id === usuarioId);
+    const antes = Object.assign({ activa: false, base: 'ganancia', porcentaje: 10, meta: 0, ve: true }, u.comision);
+    u.comision = Object.assign(antes, datos);
+    const c = u.comision;
+    BG.auditar('parametros', 'Meta y comisión de ' + u.nombre, c.activa ? c.porcentaje + ' % ' + (c.base === 'cobrado' ? 'de lo cobrado' : 'de la ganancia cobrada') + ' · meta ' + gs(c.meta) + ' por mes'
+      + (c.ve ? '' : ' · ella no lo ve') : 'Sin comisión');
+    BG.guardar();
   };
 
   /* ── Anulaciones (nunca se borra nada) ───────────────────────────────── */
@@ -264,11 +434,29 @@
     return pagado;
   };
 
+  /**
+   * Cuánto saldo a favor hay que sacarle al cliente si se anula este pago: el excedente que generó, más la parte de una
+   * devolución que había pasado a favor y que, sin este pago, ya no tiene respaldo en lo pagado.
+   */
+  function favorARevertir(pg) {
+    const v = pg.ventaId ? BG.venta(pg.ventaId) : null;
+    let deDevolucion = 0;
+    if (v && v.aFavor) {
+      const quedan = sum(BG.pagosDeVenta(v.id).filter((p) => p.id !== pg.id), (p) => p.total);
+      deDevolucion = Math.max(0, v.aFavor - quedan);
+    }
+    return { excedente: pg.excedente || 0, deDevolucion: deDevolucion };
+  }
+
   /** Devuelve un texto de error si el pago no se puede anular, o null si se puede. */
   BG.motivoNoAnulable = (pg) => {
     if (pg.anulado) return 'Este pago ya está anulado.';
-    if (pg.excedente > 0 && BG.creditoCliente(pg.clienteId) < pg.excedente) {
-      return 'El saldo a favor que generó este pago ya se usó en otra compra.';
+    const v = pg.ventaId ? BG.venta(pg.ventaId) : null;
+    if (v && v.anulada) return 'La venta está anulada: este pago ya pasó a saldo a favor.';
+    const r = favorARevertir(pg);
+    const vuelve = sum(pg.partes.filter((x) => x.forma === 'saldo'), (x) => x.monto);
+    if (r.excedente + r.deDevolucion > 0 && BG.creditoCliente(pg.clienteId) + vuelve < r.excedente + r.deDevolucion) {
+      return 'El saldo a favor que generó este pago ya se usó en otra compra (o se devolvió): anularlo dejaría el saldo a favor en negativo.';
     }
     return null;
   };
@@ -276,12 +464,22 @@
   BG.anularPago = (id, motivo) => {
     soloDuenio('anular pagos');
     const pg = BG.db.pagos.find((p) => p.id === id);
+    const problema = BG.motivoNoAnulable(pg);
+    if (problema) throw new Error(problema);
     const cli = BG.cliente(pg.clienteId);
+    const r = favorARevertir(pg);
     pg.anulado = { fecha: BG.hoy(), ts: BG.ahora(), motivo: motivo, usuario: BG.usuario().nombre };
     const deSaldo = sum(pg.partes.filter((x) => x.forma === 'saldo'), (x) => x.monto);
     if (deSaldo > 0) credito(pg.clienteId, deSaldo, 'Devuelto al anular el recibo ' + BG.fmtRecibo(pg.recibo), { pagoId: pg.id });
     if (pg.excedente > 0) credito(pg.clienteId, -pg.excedente, 'Anulación del recibo ' + BG.fmtRecibo(pg.recibo), { pagoId: pg.id });
-    BG.auditar('anulaciones', 'Pago anulado', 'Recibo ' + BG.fmtRecibo(pg.recibo) + ' · ' + cli.nombre + ' · ' + gs(pg.total + pg.excedente) + ' · motivo: ' + motivo);
+    if (r.deDevolucion > 0) {
+      const v = BG.venta(pg.ventaId);
+      v.aFavor -= r.deDevolucion;
+      pg.anulado.aFavorRevertido = r.deDevolucion;
+      credito(pg.clienteId, -r.deDevolucion, 'Anulación del recibo ' + BG.fmtRecibo(pg.recibo) + ' (la devolución ya no tiene pago que la respalde)', { pagoId: pg.id, ventaId: v.id });
+    }
+    BG.auditar('anulaciones', 'Pago anulado', 'Recibo ' + BG.fmtRecibo(pg.recibo) + ' · ' + cli.nombre + ' · ' + gs(pg.total + pg.excedente) + ' · motivo: ' + motivo
+      + (r.deDevolucion ? ' · se quitaron ' + gs(r.deDevolucion) + ' de saldo a favor' : ''));
     BG.guardar();
   };
 
@@ -331,12 +529,13 @@
     return creados;
   };
 
-  BG.actualizarPrecio = (pid, margen, precio) => {
+  BG.actualizarPrecio = (pid, margen, precio, nota) => {
     const p = BG.producto(pid);
     const antes = p.precioVenta;
     p.margen = margen;
     p.precioVenta = precio;
-    BG.auditar('productos', 'Precio de venta', p.codigo + ' · ' + p.descripcion + ' · ' + (antes ? gs(antes) : 'sin precio') + ' → ' + gs(precio) + (margen ? ' (' + margen + ' %)' : ' (manual)'));
+    BG.auditar('productos', nota && /^liquidaci/i.test(nota) ? 'Precio de liquidación' : 'Precio de venta', p.codigo + ' · ' + p.descripcion + ' · ' + (antes ? gs(antes) : 'sin precio') + ' → ' + gs(precio)
+      + (margen ? ' (' + margen + ' %)' : ' (manual)') + (nota ? ' · ' + nota : ''));
     BG.guardar();
   };
 
