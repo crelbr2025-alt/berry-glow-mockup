@@ -60,7 +60,9 @@
     const out = [];
     for (const x of partes) {
       const ya = out.find((y) => y.forma === x.forma);
-      if (ya) ya.monto += x.monto; else out.push({ forma: x.forma, monto: x.monto });
+      // deCanje: cuánto de un pago con saldo a favor vino de puntos canjeados (esa parte no suma puntos ni se devuelve en plata).
+      if (ya) { ya.monto += x.monto; if (x.deCanje) ya.deCanje = (ya.deCanje || 0) + x.deCanje; }
+      else out.push(Object.assign({ forma: x.forma, monto: x.monto }, x.deCanje ? { deCanje: x.deCanje } : {}));
     }
     return out.filter((x) => x.monto > 0);
   }
@@ -130,10 +132,12 @@
   /** Devuelve en plata (efectivo o transferencia) todo o parte del saldo a favor. d = { clienteId, monto, forma, nota, autorizadoPor } */
   BG.devolverSaldoAFavor = (d) => {
     if (!BG.esDuena() && !d.autorizadoPor) throw new Error('Devolver plata necesita la autorización de ' + BG.nombreDuena() + '.');
-    const disponible = BG.creditoCliente(d.clienteId);
+    // Lo que viene de puntos canjeados se usa en compras, pero no se devuelve en plata.
+    const deCanje = BG.canjeDisponible(d.clienteId);
+    const disponible = BG.creditoCliente(d.clienteId) - deCanje;
     const monto = Math.round(Number(d.monto));
     if (!(monto > 0)) throw new Error('Escribí cuánto se le devuelve.');
-    if (monto > disponible) throw new Error('Tiene ' + gs(disponible) + ' a favor: no se le puede devolver más que eso.');
+    if (monto > disponible) throw new Error('Se le pueden devolver en plata hasta ' + gs(disponible) + (deCanje ? ' (' + gs(deCanje) + ' de su saldo a favor son puntos canjeados: se usan en compras, no se devuelven en plata)' : '') + '.');
     if (d.forma !== 'efectivo' && d.forma !== 'transferencia') throw new Error('Elegí cómo se le devuelve.');
     const eg = reintegrar(d.clienteId, monto, d.forma, limpiar(d.nota) || 'Saldo a favor', { autorizadoPor: d.autorizadoPor || null });
     BG.guardar();
@@ -208,7 +212,9 @@
 
     const partes = (d.partes || []).filter((x) => x.monto > 0).map((x) => ({ forma: x.forma, monto: x.monto }));
     if (d.usarCredito > 0) {
-      partes.push({ forma: 'saldo', monto: d.usarCredito });
+      // Primero se usa lo que viene de puntos canjeados (se anota, porque esa parte no vuelve a sumar puntos).
+      const deCanje = Math.min(d.usarCredito, BG.canjeDisponible(d.clienteId));
+      partes.push(Object.assign({ forma: 'saldo', monto: d.usarCredito }, deCanje ? { deCanje: deCanje } : {}));
       credito(d.clienteId, -d.usarCredito, 'Aplicado a la venta ' + BG.fmtRecibo(recibo), { ventaId: v.id });
     }
     const entregado = sum(partes, (x) => x.monto);
@@ -241,7 +247,10 @@
     // Saldo a favor usado para pagar la deuda: va primero y nunca más de lo que tiene ni de lo que debe.
     const usar = d.destino === 'sena' ? 0 : Math.min(Math.round(Number(d.usarCredito) || 0), BG.creditoCliente(d.clienteId),
       d.destino === 'todas' ? BG.saldoCliente(d.clienteId) : BG.saldoVenta(BG.venta(d.destino)));
-    if (usar > 0) cola.unshift({ forma: 'saldo', monto: usar });
+    if (usar > 0) {
+      const deCanje = Math.min(usar, BG.canjeDisponible(d.clienteId));
+      cola.unshift(Object.assign({ forma: 'saldo', monto: usar }, deCanje ? { deCanje: deCanje } : {}));
+    }
     const entregado = sum(cola, (x) => x.monto);
     if (!(entregado > 0)) throw new Error('Escribí cuánto paga.');
     const recibo = BG.nuevoRecibo();
@@ -265,7 +274,9 @@
       while (falta > 0 && cola.length) {
         const x = cola[0];
         const toma = Math.min(falta, x.monto);
-        partes.push({ forma: x.forma, monto: toma });
+        const dc = x.deCanje ? Math.min(toma, x.deCanje) : 0;
+        partes.push(Object.assign({ forma: x.forma, monto: toma }, dc ? { deCanje: dc } : {}));
+        if (dc) x.deCanje -= dc;
         x.monto -= toma;
         falta -= toma;
         if (!x.monto) cola.shift();
@@ -394,8 +405,11 @@
       reg.totalDespues = t.total;
       const sobra = pagado - t.total;
       if (sobra > 0) {
+        // De lo que vuelve a favor, primero es lo que se había pagado con puntos (eso no se devuelve en plata).
+        const canjeAntes = BG.canjeAplicado(v);
         v.aFavor = (v.aFavor || 0) + sobra;
         reg.aFavor = sobra;
+        reg.deCanje = canjeAntes - BG.canjeAplicado(v);
         credito(v.clienteId, sobra, (d.tipo === 'cambio' ? 'Cambio' : 'Devolución') + ' en la compra ' + BG.fmtRecibo(v.recibo), { ventaId: v.id, devolucionId: reg.id });
       }
     }
@@ -405,9 +419,10 @@
         : 'Devolución: ' + n + ' × ' + it.descripcion;
     BG.auditar('devoluciones', BG.TIPOS_DEVOLUCION[d.tipo], 'Recibo ' + BG.fmtRecibo(v.recibo) + ' · ' + cli.nombre + ' · ' + que + textoMotivo(reg.motivo, reg.nota)
       + (reg.totalAntes !== reg.totalDespues ? ' · total ' + gs(reg.totalAntes) + ' → ' + gs(reg.totalDespues) : '') + (reg.aFavor ? ' · ' + gs(reg.aFavor) + ' a saldo a favor' : ''));
-    if (reg.aFavor && enPlata) {
-      reintegrar(v.clienteId, reg.aFavor, d.destino, 'Devolución de la compra ' + BG.fmtRecibo(v.recibo), { devolucionId: reg.id, autorizadoPor: d.autorizadoPor || null });
-      reg.reintegro = reg.aFavor;
+    const enPlataMonto = reg.aFavor - (reg.deCanje || 0);
+    if (enPlataMonto > 0 && enPlata) {
+      reintegrar(v.clienteId, enPlataMonto, d.destino, 'Devolución de la compra ' + BG.fmtRecibo(v.recibo), { devolucionId: reg.id, autorizadoPor: d.autorizadoPor || null });
+      reg.reintegro = enPlataMonto;
       reg.forma = d.destino;
     }
     BG.guardar();

@@ -64,7 +64,7 @@
           ts: d.ts, href: '#/ventas/' + v.id, icono: 'undo', monto: d.totalDespues - d.totalAntes,
           titulo: (d.tipo === 'devolucion' ? 'Devolución · ' : 'Cambio · ') + esc(BG.cliente(v.clienteId).nombre),
           sub: BG.fmtHora(d.ts) + ' · ' + d.cantidad + ' × ' + esc(d.descripcion) + (d.productoNuevo ? ' por ' + esc(d.productoNuevo) : d.talle ? ' (' + esc(d.talle) + ')' : '') + ' · ' + BG.fmtRecibo(v.recibo),
-          extra: d.aFavor ? (d.reintegro ? '<span class="pill pill-muted">Se devolvió la plata</span>' : BG.pillFavor(d.aFavor)) : '',
+          extra: d.aFavor ? (d.reintegro ? '<span class="pill pill-muted">Se devolvió la plata</span>' + (d.reintegro < d.aFavor ? ' ' + BG.pillFavor(d.aFavor - d.reintegro) : '') : BG.pillFavor(d.aFavor)) : '',
         });
       }
     }
@@ -333,7 +333,7 @@
       mov.push({ ts: v.ts, fecha: v.fecha, concepto: 'Compra ' + num + ' · ' + v.items.filter((it) => !it.cambioDe).map((it) => it.descripcion).join(', '), cargo: v.anulada ? 0 : totalOriginal, anulado: v.anulada ? 'Anulada: ' + v.anulada.motivo : '' });
       if (v.anulada) continue;
       cambios.forEach((x) => mov.push({ ts: x.ts, fecha: x.fecha, concepto: x.concepto, cargo: x.delta > 0 ? x.delta : 0, abono: x.delta < 0 ? -x.delta : 0 }));
-      (v.devoluciones || []).filter((d) => d.aFavor).forEach((d) => mov.push({ ts: d.ts + ':01', fecha: d.fecha, concepto: 'Lo pagado de más pasó a saldo a favor' + (d.reintegro ? ' (se le devolvió en ' + BG.FORMAS[d.forma].toLowerCase() + ')' : ''), cargo: d.aFavor }));
+      (v.devoluciones || []).filter((d) => d.aFavor).forEach((d) => mov.push({ ts: d.ts + ':01', fecha: d.fecha, concepto: 'Lo pagado de más pasó a saldo a favor' + (d.reintegro ? ' (se le devolvió' + (d.reintegro < d.aFavor ? ' ' + gs(d.reintegro) : '') + ' en ' + BG.FORMAS[d.forma].toLowerCase() + ')' : ''), cargo: d.aFavor }));
     }
     for (const p of BG.db.pagos.filter((x) => x.clienteId === cid && x.ventaId)) {
       const v = BG.venta(p.ventaId);
@@ -347,11 +347,14 @@
 
   /** Devolver en plata todo o parte del saldo a favor (sale de la caja; la vendedora necesita el PIN del dueño). */
   BG.devolverFavorUI = async (c) => {
-    const disponible = BG.creditoCliente(c.id);
+    // Lo que viene de puntos canjeados se usa en compras, pero no se devuelve en plata.
+    const deCanje = BG.canjeDisponible(c.id);
+    const disponible = BG.creditoCliente(c.id) - deCanje;
+    if (!(disponible > 0)) { BG.toast('Su saldo a favor es de puntos canjeados: se usa en compras, no se devuelve en plata.', 'error'); return false; }
     const st = { monto: disponible, forma: 'efectivo', nota: '' };
     const r = await BG.modal({
       titulo: 'Devolver saldo a favor en plata',
-      cuerpo: '<p><strong>' + esc(c.nombre) + '</strong> tiene <strong>' + gs(disponible) + '</strong> a favor. Lo que se devuelve sale de la caja de hoy y baja su saldo a favor; queda en la auditoría.</p>'
+      cuerpo: '<p><strong>' + esc(c.nombre) + '</strong> tiene <strong>' + gs(disponible + deCanje) + '</strong> a favor' + (deCanje ? ' (' + gs(deCanje) + ' son puntos canjeados: se usan en compras, no se devuelven en plata)' : '') + '. Lo que se devuelve sale de la caja de hoy y baja su saldo a favor; queda en la auditoría.</p>'
         + '<div class="field"><label for="dv-monto">Monto a devolver</label>' + BG.campoGs('dv-monto', disponible, '') + '</div>'
         + '<div class="field"><span class="field-label" id="dv-forma-l">Cómo se devuelve</span><div class="seg" role="radiogroup" aria-labelledby="dv-forma-l">'
         + '<label><input type="radio" name="dv-forma" value="efectivo" checked>Efectivo</label><label><input type="radio" name="dv-forma" value="transferencia">Transferencia</label></div></div>'
@@ -366,7 +369,7 @@
         st.nota = $('#dv-nota', dlg).value;
         const falla = (m) => { er.textContent = m; er.hidden = false; return false; };
         if (!(st.monto > 0)) return falla('Escribí cuánto se le devuelve.');
-        if (st.monto > disponible) return falla('Tiene ' + gs(disponible) + ' a favor: no se puede devolver más.');
+        if (st.monto > disponible) return falla('Se pueden devolver en plata hasta ' + gs(disponible) + '.');
         return true;
       },
       onMount: (dlg) => { const f = $('#dv-monto', dlg); f.focus(); f.select(); },
@@ -403,7 +406,8 @@
       + (ec.motivos.indexOf('atraso') >= 0 ? '<p class="small t-devuelto">No puede llevar a cuenta: cuota atrasada hace ' + ec.atraso + ' días.</p>' : '') + '</div>'
       + '<div class="stack-sm"><span class="field-label">Clienta frecuente</span>'
       + '<p class="small">' + recientes.length + (recientes.length === 1 ? ' compra' : ' compras') + ' en 90 días por ' + gs(sum(recientes, (v) => v.total)) + (BG.esFrecuente(c.id) ? ' <span class="pill pill-berry">' + icon('star') + 'Frecuente</span>' : '') + '</p>'
-      + (pts ? '<p class="small">' + icon('star', 'i-sm') + ' <strong>' + pts.puntos + ' puntos</strong> = ' + gs(pts.valor) + (pts.canjeable ? ' · se pueden canjear al venderle' : ' · canjea desde ' + BG.configFidelidad().minimo) + '</p>' : '')
+      + (pts ? '<p class="small">' + icon('star', 'i-sm') + ' <strong>' + pts.puntos + ' puntos</strong> = ' + gs(pts.valor) + (pts.canjeable ? ' · se pueden canjear al venderle' : ' · canjea desde ' + BG.configFidelidad().minimo) + '</p>'
+        + (pts.pendientes ? '<p class="small muted">+' + pts.pendientes + ' puntos cuando termine de pagar ' + (pts.porGanar.length === 1 ? 'la compra ' + BG.fmtRecibo(pts.porGanar[0].v.recibo) : 'sus ' + pts.porGanar.length + ' compras a cuenta') + '</p>' : '') : '')
       + '<p class="small">' + icon('gift', 'i-sm') + ' ' + (k ? 'Cumple el ' + BG.fmtFechaCorta(k.fecha) + (k.enSemana ? ' (' + BG.textoCumple(k) + ')' + (BG.regaloCumple(c.id) ? ' · regalo disponible' : BG.regaloCumpleUsado(c.id) ? ' · ya usó el regalo' : '') : '') : 'Sin fecha de cumpleaños: agregala en «Cambiar».') + '</p></div>'
       + '</div></section>';
   }

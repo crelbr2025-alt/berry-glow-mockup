@@ -392,16 +392,44 @@
     f.cumple = Object.assign({ activo: false, porcentaje: 10 }, f.cumple);
     return f;
   };
-  /** Puntos: 1 cada `cadaGs` de plata que pagó (sin contar saldo a favor usado ni lo que se le devolvió), menos los canjeados. */
+  /** Parte de los pagos vivos de una venta que se hizo con saldo a favor que venía de puntos canjeados. */
+  BG.canjeEnVenta = (v) => sum(BG.pagosDeVenta(v.id), (p) => sum(p.partes, (x) => x.deCanje || 0));
+  /** Lo pagado con puntos que sigue aplicado a la venta (si una devolución pasó plata a favor, vuelve primero lo de puntos). */
+  BG.canjeAplicado = (v) => { const c = BG.canjeEnVenta(v); return c - Math.min(v.aFavor || 0, c); };
+  /** Saldo a favor de la clienta que viene de puntos canjeados y todavía no se usó. Se usa en compras; no se devuelve en plata. */
+  BG.canjeDisponible = (cid) => {
+    const canjeado = sum((BG.db.canjes || []).filter((k) => k.clienteId === cid), (k) => k.monto);
+    const usado = sum(BG.ventasDeCliente(cid).filter((v) => !v.anulada), BG.canjeAplicado);
+    return Math.max(0, Math.min(BG.creditoCliente(cid), canjeado - usado));
+  };
+  /**
+   * Puntos: cada compra suma recién cuando queda pagada del todo (en contado al momento, en cuotas al pagar la última),
+   * 1 punto cada `cadaGs` de su total, sin contar lo que se pagó con puntos. Los pagos parciales no suman nada.
+   * Si la compra se anula no suma; si una devolución baja el total, suma sobre el total nuevo.
+   * Devuelve { puntos (disponibles), valor, canjeable, ganados, canjeados, pendientes (de compras sin terminar de pagar), porGanar }.
+   */
   BG.puntosDe = (cid) => {
     const f = BG.configFidelidad();
     if (!f.activo) return null;
-    const pagado = sum(BG.db.pagos.filter((p) => p.clienteId === cid && !p.anulado && p.fecha >= f.desde), (p) => sum(p.partes.filter((x) => x.forma !== 'saldo'), (x) => x.monto));
-    const devuelto = sum((BG.db.egresos || []).filter((e) => e.clienteId === cid && e.fecha >= f.desde), (e) => e.monto);
-    const ganados = Math.max(0, Math.floor((pagado - devuelto) / f.cadaGs));
+    let ganados = 0;
+    let pendientes = 0;
+    const porGanar = [];
+    for (const v of BG.ventasDeCliente(cid)) {
+      if (v.anulada || v.fecha < f.desde) continue;
+      const pts = Math.floor(Math.max(0, v.total - BG.canjeAplicado(v)) / f.cadaGs);
+      if (!pts) continue;
+      if (BG.saldoVenta(v) <= 0) ganados += pts;
+      else { pendientes += pts; porGanar.push({ v: v, puntos: pts }); }
+    }
     const canjeados = sum((BG.db.canjes || []).filter((k) => k.clienteId === cid), (k) => k.puntos);
     const puntos = Math.max(0, ganados - canjeados);
-    return { puntos: puntos, valor: puntos * f.valorPunto, canjeable: puntos >= f.minimo, ganados: ganados, canjeados: canjeados };
+    return { puntos: puntos, valor: puntos * f.valorPunto, canjeable: puntos >= f.minimo, ganados: ganados, canjeados: canjeados, pendientes: pendientes, porGanar: porGanar };
+  };
+  /** Puntos que suma una venta cuando se termine de pagar (0 si el programa está apagado o no llega a 1 punto). */
+  BG.puntosDeVenta = (v) => {
+    const f = BG.configFidelidad();
+    if (!f.activo || v.anulada || v.fecha < f.desde) return 0;
+    return Math.floor(Math.max(0, v.total - BG.canjeAplicado(v)) / f.cadaGs);
   };
   /** Próximo cumpleaños: días que faltan (negativo si fue hace poco) y si está en la semana del regalo (7 días antes o después). */
   BG.cumpleDe = (c) => {

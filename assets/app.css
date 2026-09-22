@@ -9,8 +9,8 @@
   --surface-2: #F6EFF3;
   --surface-3: #EFE4EA;
   --ink: #2B1624;
-  --ink-2: #5E4957;
-  --muted: #7A6673;
+  --ink-2: #4A3743;
+  --muted: #66535F;
   --line: #EADFE5;
   --line-strong: #D9C8D1;
   --berry: #A3195B;
@@ -37,7 +37,7 @@
   --shadow-1: 0 1px 2px rgba(43, 22, 36, 0.06);
   --shadow-2: 0 10px 32px rgba(43, 22, 36, 0.14);
 
-  --font-ui: "Manrope", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-ui: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   --font-brand: "Bodoni Moda", "Bodoni 72", Didot, "Times New Roman", serif;
   --radius-card: 14px;
   --radius-ctl: 8px;
@@ -127,8 +127,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 400 15px/1.5 var(--font-ui);
-  -webkit-font-smoothing: antialiased;
+  font: 400 15px/1.55 var(--font-ui);
   text-rendering: optimizeLegibility;
 }
 [hidden] { display: none !important; }
@@ -288,7 +287,7 @@ mark { background: var(--glow-soft); color: inherit; border-radius: 3px; padding
 
 .page { display: flex; flex-direction: column; gap: 22px; }
 .page-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 20px; }
-.page-title { font-family: var(--font-brand); font-weight: 600; font-size: 32px; letter-spacing: -0.01em; }
+.page-title { font-family: var(--font-ui); font-weight: 800; font-size: 29px; letter-spacing: -0.02em; line-height: 1.15; }
 .page-sub { color: var(--muted); margin-top: 4px; }
 .eyebrow { font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
 .page-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -446,7 +445,7 @@ mark { background: var(--glow-soft); color: inherit; border-radius: 3px; padding
 .suffix-wrap { position: relative; display: flex; align-items: center; }
 .suffix-wrap .input { padding-right: 48px; text-align: right; font-variant-numeric: tabular-nums; }
 .suffix { position: absolute; right: 12px; color: var(--muted); font-weight: 700; font-size: 14px; pointer-events: none; }
-.hint { font-size: 12.5px; color: var(--muted); }
+.hint { font-size: 13px; color: var(--muted); }
 .error-text { font-size: 13px; color: var(--bad); font-weight: 600; }
 .stepper { display: inline-flex; align-items: center; border: 1px solid var(--line-strong); border-radius: var(--radius-ctl); background: var(--surface); }
 .stepper button { width: 38px; height: 40px; border: 0; background: transparent; font-size: 18px; font-weight: 700; color: var(--ink-2); }
@@ -711,7 +710,7 @@ dialog { color: var(--ink); }
   padding: 18px 20px 32px; display: flex; flex-direction: column; gap: 18px;
 }
 .guide-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
-.guide-head h2 { font-family: var(--font-brand); font-size: 26px; font-weight: 600; }
+.guide-head h2 { font-family: var(--font-ui); font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
 .guide h3 { font-size: 13px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .checks { display: flex; flex-direction: column; gap: 8px; }
 .check { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
@@ -1219,4 +1218,23 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
   .table-tarjetas td.te-quitar { position: absolute; top: 12px; right: 8px; }
   .table-tarjetas td.num { text-align: left; font-weight: 700; }
   .table-tarjetas .w-xs, .table-tarjetas .w-sm { width: 100%; }
+}
+
+/* Legibilidad: suavizado fino solo en modo oscuro (en claro la letra queda más firme) y tamaños mínimos cómodos. */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) body { -webkit-font-smoothing: antialiased; } }
+:root[data-theme="dark"] body { -webkit-font-smoothing: antialiased; }
+@media (max-width: 760px) { .page-title { font-size: 25px; } }
+.row-sub, .tile-sub, .small { font-size: 13.5px; }
+.eyebrow { letter-spacing: 0.06em; }
+
+/* Celulares angostos (360 px): celdas más justas para que las tablas cortas entren enteras y no se corte la última columna (el monto). */
+@media (max-width: 380px) {
+  .table:not(.table-edit):not(.table-venta) { font-size: 13.5px; }
+  .table:not(.table-edit):not(.table-venta) th, .table:not(.table-edit):not(.table-venta) td { padding-left: 8px; padding-right: 8px; }
+  .table th { letter-spacing: 0.02em; }
+}
+@media (max-width: 380px) {
+  /* En las tablas compactas lo que ensancha las columnas de números es el título en mayúsculas, no el dato. */
+  .table-venta th { font-size: 11px; letter-spacing: 0; padding-left: 5px; padding-right: 5px; }
+  .table-venta td { padding-left: 5px; padding-right: 5px; }
 }

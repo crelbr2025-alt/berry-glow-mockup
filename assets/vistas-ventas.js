@@ -245,7 +245,7 @@
     const reg = BG.registrarDevolucion({ ventaId: v.id, item: st.item, cantidad: st.cantidad, tipo: st.tipo, productoId: st.productoId, talle: st.talle,
       motivo: st.motivo, nota: st.nota, destino: destino, autorizadoPor: autorizadoPor });
     BG.toast(reg.tipo === 'talle' ? 'Cambio de talle registrado.'
-      : reg.reintegro ? 'Listo: se le devuelven ' + gs(reg.reintegro) + ' en ' + BG.FORMAS[reg.forma].toLowerCase() + '.'
+      : reg.reintegro ? 'Listo: se le devuelven ' + gs(reg.reintegro) + ' en ' + BG.FORMAS[reg.forma].toLowerCase() + (reg.reintegro < reg.aFavor ? '; ' + gs(reg.aFavor - reg.reintegro) + ' de puntos quedan a su favor.' : '.')
         : reg.aFavor ? 'Listo: ' + gs(reg.aFavor) + ' quedan a favor de la clienta.'
           : 'Listo. La venta quedó en ' + gs(v.total) + (BG.saldoVenta(v) > 0 ? ', debe ' + gs(BG.saldoVenta(v)) : '') + '.');
     return true;
@@ -420,6 +420,7 @@
         + '<div class="row-sub">' + BG.fmtFecha(d.fecha) + ' a las ' + BG.fmtHora(d.ts) + ' · por ' + esc(d.usuario) + ' · <strong>' + esc(d.motivo) + '</strong>' + (d.nota ? ': ' + esc(d.nota) : '') + (d.talle ? ' · ' + esc(d.talle) : '') + '</div>'
         + (d.totalAntes !== d.totalDespues ? '<div class="row-sub">Total de la venta ' + gs(d.totalAntes) + ' → ' + gs(d.totalDespues) + '</div>' : '')
         + (d.aFavor ? '<p class="precio-info">' + (d.reintegro ? '<span class="pill pill-muted">' + icon('undo') + 'Se le devolvieron ' + gs(d.reintegro) + ' en ' + BG.FORMAS[d.forma].toLowerCase() + '</span>'
+          + (d.reintegro < d.aFavor ? ' ' + BG.pillFavor(d.aFavor - d.reintegro) + ' <span class="small muted">lo pagado con puntos quedó a favor</span>' : '')
           + (d.autorizadoPor ? ' <span class="small muted">autorizó ' + esc(d.autorizadoPor) + '</span>' : '') : BG.pillFavor(d.aFavor, true) + ' <span class="small muted">quedó a favor de la clienta</span>') + '</p>' : '')
         + '</li>';
     };

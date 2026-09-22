@@ -66,6 +66,8 @@
       saldoCuenta: BG.saldoCliente(cli.id),
       aFavor: BG.creditoCliente(cli.id),
       puntos: BG.puntosDe(cli.id),
+      // En el recibo de una compra que todavía debe: cuántos puntos va a sumar cuando la termine de pagar.
+      puntosAlPagar: tipo === 'v' && BG.configFidelidad().activo && BG.saldoVenta(ventas[0]) > 0 ? BG.puntosDeVenta(ventas[0]) : 0,
       clienteRef: cli,
     };
   }
@@ -87,7 +89,10 @@
       + (c.descuento ? '<tr><td colspan="3">Subtotal</td><td class="num">' + gs(c.subtotal) + '</td></tr><tr><td colspan="3">Descuento</td><td class="num">−' + gs(c.descuento) + '</td></tr>' : '')
       + '<tr><td colspan="3">Total de la compra</td><td class="num">' + gs(c.total) + '</td></tr></tfoot></table>'
       + (c.devoluciones.length ? '<h2 class="r-sub">Cambios y devoluciones</h2><table class="r-table"><tbody>' + c.devoluciones.map((d) => '<tr><td>' + BG.fmtFecha(d.fecha) + ' · ' + esc(d.texto)
-        + (d.aFavor ? '<div class="r-forms">' + (d.reintegro ? 'Se te devolvieron ' + gs(d.reintegro) + ' en ' + esc(d.forma) : gs(d.aFavor) + ' quedaron a tu favor') + '</div>' : '') + '</td></tr>').join('') + '</tbody></table>' : '')
+        + (d.aFavor ? '<div class="r-forms">' + (d.reintegro ? 'Se te devolvieron ' + gs(d.reintegro) + ' en ' + esc(d.forma)
+          // Lo que se había pagado con puntos no vuelve en plata: queda a favor para otra compra.
+          + (d.reintegro < d.aFavor ? '; los ' + gs(d.aFavor - d.reintegro) + ' que pagaste con puntos quedaron a tu favor' : '')
+          : gs(d.aFavor) + ' quedaron a tu favor') + '</div>' : '') + '</td></tr>').join('') + '</tbody></table>' : '')
       + '<h2 class="r-sub">Pagos realizados</h2>'
       + (c.pagos.length ? '<table class="r-table"><tbody>' + c.pagos.map((p) => '<tr' + (p.nuevo ? ' class="is-new"' : '') + '><td>' + BG.fmtFecha(p.fecha) + (p.nuevo ? ' <strong>· pago de hoy</strong>' : '')
         + '<div class="r-forms">' + p.formas.map((x) => x.forma + ' ' + gs(x.monto)).join(' + ') + (p.aFavor ? ' · ' + gs(p.aFavor) + ' quedó a tu favor' : '') + '</div></td>'
@@ -109,6 +114,7 @@
       + (deUnaCompra && d.saldoCuenta !== saldoPrincipal ? '<p class="r-account"><span>Saldo total de tu cuenta (todas las compras)</span><strong>' + gs(d.saldoCuenta) + '</strong></p>' : '')
       + (d.aFavor > 0 ? '<div class="r-favor"><span>Saldo a tu favor para la próxima compra</span><strong>' + gs(d.aFavor) + '</strong></div>' : '')
       + (d.puntos && d.puntos.puntos > 0 ? '<p class="r-account"><span>Tus puntos: ' + d.puntos.puntos + (d.puntos.canjeable ? ' · ya los podés usar' : '') + '</span><strong>' + gs(d.puntos.valor) + '</strong></p>' : '')
+      + (d.puntosAlPagar ? '<p class="r-account"><span>Al terminar de pagar esta compra sumás</span><strong>' + d.puntosAlPagar + ' puntos</strong></p>' : '')
       + '<footer class="r-foot"><p class="r-thanks">' + esc(t.mensaje || '¡Gracias por tu compra!') + '</p><p class="r-legal">' + esc(t.nombre) + ' · Comprobante interno de pago, no válido como factura.</p></footer>'
       + '</article>';
   }
@@ -228,7 +234,7 @@
       + '<li><strong>Límite de crédito:</strong> en Ajustes (general) y en la ficha de cada clienta (otro monto o solo al contado). Probá vender a cuenta a Lorena Giménez (tiene una cuota atrasada) o a Mirian Báez (solo contado): Jazmín ve el aviso y necesita el PIN 1234.</li>'
       + '<li><strong>Conteo de inventario:</strong> Productos → «Conteo de inventario». Escribí lo que contaste; las diferencias corrigen el stock con su motivo. Hay un conteo de ejemplo con dos faltantes.</li>'
       + '<li><strong>Pedidos al proveedor:</strong> menú «Pedidos»: pedido → en camino → llegó. En el que está en camino, «Llegó: cargar al stock» abre la carga con los artículos del pedido.</li>'
-      + '<li><strong>Clientas frecuentes:</strong> Reportes → «Clientas»: cumpleaños (con saludo por WhatsApp), frecuentes, puntos y las que hace mucho no compran. Camila Acosta cumple hoy: al venderle aparece el regalo del 10 %; María José Benítez tiene puntos para canjear.</li>'
+      + '<li><strong>Clientas frecuentes:</strong> Reportes → «Clientas»: cumpleaños (con saludo por WhatsApp), frecuentes, puntos y las que hace mucho no compran. Los puntos se suman cuando la compra queda pagada del todo (en cuotas, al pagar la última); lo pagado con puntos no suma y no se devuelve en plata. Camila Acosta cumple hoy: al venderle aparece el regalo del 10 %; María José Benítez tiene puntos para canjear y Tamara Cáceres los va a sumar cuando termine sus cuotas.</li>'
       + '<li><strong>Jazmín, más simple:</strong> no ve nada de esto; solo los avisos al vender (solo contado, regalo de cumpleaños, puntos para canjear) y ya no ve los controles contables internos.</li></ul>'
       + '<h3>Versión anterior</h3><ul class="bullets">'
       + '<li><strong>Tema claro u oscuro:</strong> el botón del sol/luna de arriba cambia entre automático, claro y oscuro (en el celular también está en «Más»).</li>'

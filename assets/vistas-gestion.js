@@ -287,7 +287,7 @@
           + tile('Cumpleaños en 30 días', String(cumples.filter((x) => x.k.dias >= 0).length), cumples.filter((x) => x.k.enSemana).length + ' en la semana del regalo')
           + tile('Puntos para canjear', gs(sum(canjeables, (x) => x.pts.valor)), canjeables.length + ' clientas ya pueden canjear')
           + tile('Canjeado este mes', gs(sum(canjesMes, (k) => k.monto)), canjesMes.length + ' canjes') + '</div>'
-          + (fid.activo ? '<p class="callout">' + icon('star') + '<span>Programa: 1 punto cada ' + gs(fid.cadaGs) + ' que pagan (cada punto vale ' + gs(fid.valorPunto) + ', canje desde ' + fid.minimo + ' puntos)'
+          + (fid.activo ? '<p class="callout">' + icon('star') + '<span>Programa: cuando una compra queda pagada del todo, suma 1 punto cada ' + gs(fid.cadaGs) + ' de su total (cada punto vale ' + gs(fid.valorPunto) + ', canje desde ' + fid.minimo + ' puntos); las compras en cuotas suman al pagar la última'
             + (fid.cumple.activo ? ' y ' + fid.cumple.porcentaje + ' % de regalo en la semana de su cumpleaños' : '') + '. Jazmín solo ve el aviso al venderle. <a href="#/ajustes">Cambiar</a></span></p>'
             : '<p class="callout callout-warn">' + icon('info') + '<span>El programa de clientas frecuentes está apagado. <a href="#/ajustes">Activarlo en Ajustes</a></span></p>')
           + '<section class="card stack"><div class="card-head"><h2>' + icon('gift') + 'Cumpleaños próximos</h2></div>'
@@ -511,7 +511,7 @@
         ? '<div class="field"><span class="field-label">1 punto cada</span>' + seg('fi-cada', [5000, 10000, 20000], f.cadaGs, gs) + '</div>'
           + '<div class="field"><span class="field-label">Cada punto vale</span>' + seg('fi-valor', [100, 200, 300, 500], f.valorPunto, gs) + '</div>'
           + '<div class="field"><span class="field-label">Se canjea desde</span>' + seg('fi-min', [20, 50, 100], f.minimo, (v) => v + ' puntos') + '</div>'
-          + '<p class="callout">' + icon('info') + '<span>Devuelve el ' + String(Math.round(pct * 10) / 10).replace('.', ',') + ' % de lo que pagan: una compra de ' + gs(300000) + ' suma ' + Math.floor(300000 / f.cadaGs) + ' puntos = ' + gs(Math.floor(300000 / f.cadaGs) * f.valorPunto) + '. '
+          + '<p class="callout">' + icon('info') + '<span>Los puntos se suman recién cuando la compra queda pagada del todo: al contado, en el momento; en cuotas, al pagar la última (los pagos parciales no suman). Devuelve el ' + String(Math.round(pct * 10) / 10).replace('.', ',') + ' %: una compra de ' + gs(300000) + ' pagada suma ' + Math.floor(300000 / f.cadaGs) + ' puntos = ' + gs(Math.floor(300000 / f.cadaGs) * f.valorPunto) + '. Lo que se paga con puntos no suma puntos. '
             + 'Al canjear, pasa a su saldo a favor y en la ganancia neta cuenta como gasto de beneficios.</span></p>'
         : '')
       + '<label class="check-inline"><input type="checkbox" id="fi-cumple"' + (f.activo && f.cumple.activo ? ' checked' : '') + (f.activo ? '' : ' disabled') + '> Regalo de cumpleaños</label>'
