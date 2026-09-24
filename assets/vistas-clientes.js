@@ -15,12 +15,30 @@
     const vendedora = BG.db.usuarios.find((x) => x.rol === 'vendedor') || { nombre: 'Jazmín', usuario: 'jazmin' };
     const perfil = (u, sub) => '<button type="button" class="btn btn-lg btn-block btn-perfil" data-demo="' + esc(u.usuario) + '">'
       + '<span class="avatar">' + esc(BG.iniciales(u.nombre)) + '</span><span class="grow"><strong>' + esc(u.nombre) + '</strong><small>' + sub + '</small></span></button>';
+    const nube = BG.nube || { configurada: false, estado: 'apagada' };
+    // Con la nube encendida se entra con la cuenta de cada uno: el perfil sale de ahí, no de un botón.
+    const conCuenta = nube.configurada && BG.modoDatos === 'mios' && nube.estado !== 'apagada' && !BG.soloEsteAparato;
+    // «Entrando…» solo si este aparato ya había entrado antes: si es la primera vez, se muestra el formulario.
+    const conectando = conCuenta && BG.entradoAntes && BG.entradoAntes() && (nube.estado === 'conectando' || !nube.disponible);
     $('#root').innerHTML = '<div class="login"><div class="login-card">'
       + '<div class="login-brand">' + BG.logo() + '</div>'
-      + (BG.modoDatos === 'mios'
+      + (conectando
+        ? '<h1>Entrando…</h1><p class="hint">Traemos tus datos de la nube. Si tarda, fijate si tenés internet.</p>'
+        : conCuenta
+        ? '<h1>Entrá con tu cuenta</h1>'
+          + '<form id="nube-form" class="stack" novalidate>'
+          + '<div class="field"><label for="n-correo">Correo</label><input id="n-correo" class="input" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" inputmode="email"></div>'
+          + '<div class="field"><label for="n-clave">Contraseña</label><input id="n-clave" class="input" type="password" autocomplete="current-password"></div>'
+          + '<p class="error-text" id="nube-error" hidden></p>'
+          + '<button class="btn btn-primary btn-lg btn-block" type="submit" id="n-entrar">Entrar</button></form>'
+          + '<p class="hint">Se escribe una sola vez en cada celular o computadora: después quedás adentro. Lo que cargue cada una se ve en todos los aparatos.</p>'
+          + '<p class="small muted">¿Todavía no tenés cuenta, o te quedaste sin internet? <button type="button" class="linkish" id="n-local">Entrar solo en este aparato</button></p>'
+          + '<p class="small muted">¿Querés practicar sin tocar lo de la tienda? <button type="button" class="linkish" data-action="modo-ejemplo">Entrar con datos de ejemplo</button></p>'
+        : BG.modoDatos === 'mios'
         ? '<h1>¿Quién está usando el sistema?</h1>'
           + '<div class="stack">' + perfil(duenio, 'Dueño · ve y cambia todo') + perfil(vendedora, 'Vendedora · vende, cobra y emite recibos') + '</div>'
           + '<p class="hint">Todavía sin contraseña: elegí tu perfil y listo. Los datos se guardan en este dispositivo, así que conviene bajar una copia de seguridad seguido (Ajustes → Tus datos).</p>'
+          + (nube.configurada && nube.estado !== 'apagada' ? '<p class="small muted">Para ver lo mismo desde cualquier aparato: <button type="button" class="linkish" id="n-nube">entrar con tu cuenta</button></p>' : '')
           + '<p class="small muted">¿Querés practicar sin tocar lo tuyo? <button type="button" class="linkish" data-action="modo-ejemplo">Entrar con datos de ejemplo</button></p>'
         : '<h1>Sistema de gestión · ingreso</h1>'
           + '<form id="login-form" class="stack" novalidate>'
@@ -49,6 +67,29 @@
     };
     const form = $('#login-form');
     if (form) form.addEventListener('submit', (e) => { e.preventDefault(); entrar($('#usuario').value); });
+    const aLocal = $('#n-local');
+    if (aLocal) aLocal.addEventListener('click', () => { BG.soloEsteAparato = true; BG.render(); });
+    const aNube = $('#n-nube');
+    if (aNube) aNube.addEventListener('click', () => { BG.soloEsteAparato = false; BG.render(); });
+    const formNube = $('#nube-form');
+    if (formNube) {
+      formNube.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const er = $('#nube-error');
+        const boton = $('#n-entrar');
+        er.hidden = true;
+        boton.disabled = true;
+        boton.textContent = 'Entrando…';
+        try {
+          await BG.nube.entrar($('#n-correo').value, $('#n-clave').value);
+        } catch (err) {
+          er.textContent = err.message || 'No se pudo entrar.';
+          er.hidden = false;
+          boton.disabled = false;
+          boton.textContent = 'Entrar';
+        }
+      });
+    }
     $$('[data-demo]').forEach((b) => b.addEventListener('click', () => entrar(b.dataset.demo)));
   };
 

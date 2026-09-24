@@ -533,9 +533,10 @@
       + '<p class="hint">Jazmín no ve esta configuración: al elegir la clienta le aparece el aviso con un botón para aplicar el beneficio.</p>';
   }
 
-  /** Los datos de la tienda viven en este dispositivo: acá se hace la copia de seguridad y se empieza de cero. */
+  /** Dónde están los datos (nube o este aparato), la copia de seguridad y empezar de cero. */
   function htmlMisDatos() {
     const mios = BG.modoDatos === 'mios';
+    const nube = BG.enLaNube();
     const info = BG.infoMisDatos();
     const copia = BG.fechaCopia();
     const dias = copia ? BG.diasEntre(copia.slice(0, 10), BG.hoy()) : null;
@@ -543,9 +544,15 @@
     return '<div class="card-head"><h2>' + icon('shield') + 'Tus datos y la copia de seguridad</h2></div>'
       + (mios
         ? '<p class="small">Tenés <strong>' + cuantos.c + (cuantos.c === 1 ? ' clienta' : ' clientas') + '</strong>, ' + cuantos.v + (cuantos.v === 1 ? ' venta' : ' ventas') + ' y ' + cuantos.p + (cuantos.p === 1 ? ' producto' : ' productos') + ' cargados.</p>'
+          + (nube
+            ? '<div class="callout callout-good">' + icon('shield') + '<span><strong>Están en la nube:</strong> los ven todos los aparatos que entren con tu cuenta o la de '
+              + esc(BG.nombreVendedora ? BG.nombreVendedora() : 'la vendedora') + '. Lo que cargás se sube solo. '
+              + (BG.nube.actualizado ? 'Último guardado: ' + BG.fmtFecha(String(BG.nube.actualizado).slice(0, 10)) + ' por ' + esc(BG.nube.por) + '.' : '') + '</span></div>'
+            : '')
           + '<div class="callout ' + (dias === null ? 'callout-warn' : dias > 7 ? 'callout-warn' : 'callout-good') + '">' + icon(dias === null || dias > 7 ? 'alert' : 'check')
           + '<span>' + (copia ? 'Última copia de seguridad: <strong>' + BG.fmtFecha(copia.slice(0, 10)) + '</strong>' + (dias > 7 ? ' (hace ' + dias + ' días: conviene bajar una nueva)' : '')
-            : '<strong>Todavía no bajaste ninguna copia.</strong> Mientras el sistema no tenga usuario y contraseña, los datos viven solo en este dispositivo: si se borra el navegador, se pierden.')
+            : nube ? '<strong>Todavía no bajaste ninguna copia.</strong> El plan de la base no guarda copias diarias todavía: bajá una de vez en cuando y guardala fuera del sistema.'
+              : '<strong>Todavía no bajaste ninguna copia.</strong> Estos datos viven solo en este dispositivo: si se borra el navegador, se pierden.')
           + '</span></div>'
         : '<p class="small">Estás viendo los datos de ejemplo. Tus datos están guardados aparte, sin tocar.</p>')
       + '<div class="row">'
@@ -622,7 +629,9 @@
       + '<p class="hint">Las de la lista son ejemplos: dejá las que realmente usan.</p></section>'
       + '<section class="card stack" id="aj-mios">' + htmlMisDatos() + '</section>'
       + '<section class="card stack"><div class="card-head"><h2>Respaldo y exportación</h2></div>'
-      + '<div class="note-mock">' + icon('info') + '<span>Por ahora los datos viven en este dispositivo y la copia de seguridad la bajás vos (arriba, en «Tus datos»). Cuando el sistema tenga usuario y contraseña, la copia va a ser automática todos los días y lo que cargue cada una se va a ver en los dos teléfonos.</span></div>'
+      + '<div class="note-mock">' + icon('info') + '<span>' + (BG.enLaNube()
+        ? 'Lo que cargan vos y ' + esc(BG.nombreVendedora ? BG.nombreVendedora() : 'la vendedora') + ' se ve en todos los aparatos. La copia de seguridad la bajás vos (arriba, en «Tus datos»): cuando pasemos la base al plan pago, se van a guardar copias todos los días solas.'
+        : 'Estos datos viven en este dispositivo y la copia de seguridad la bajás vos (arriba, en «Tus datos»). Entrando con tu cuenta, lo que cargues se comparte con los demás aparatos.') + '</span></div>'
       + (BG.publicado
         ? '<p class="small">Descargar los datos a Excel funciona en el mockup de la computadora; esta versión por link no permite descargas.</p>'
         : '<p class="small">Descargar los datos a Excel (CSV separado por punto y coma):</p><div class="row">'
@@ -652,7 +661,9 @@
               const texto = await file.text();
               const ok = await BG.modal({
                 titulo: 'Restaurar una copia de seguridad',
-                cuerpo: '<p>Los datos que tenés ahora en este dispositivo se <strong>reemplazan</strong> por los del archivo «' + esc(file.name) + '».</p>'
+                cuerpo: (BG.enLaNube()
+                  ? '<p>Los datos de la tienda se <strong>reemplazan en la nube</strong> por los del archivo «' + esc(file.name) + '»: el cambio lo van a ver <strong>todos los aparatos</strong>, también el de ' + esc(BG.nombreVendedora()) + '.</p>'
+                  : '<p>Los datos que tenés ahora en este dispositivo se <strong>reemplazan</strong> por los del archivo «' + esc(file.name) + '».</p>')
                   + '<p>Antes de guardar nada, el sistema controla que las cuentas de esa copia cuadren.</p>',
                 acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Restaurar', valor: 'ok', clase: 'btn-primary' }],
               });
@@ -791,7 +802,9 @@
           } else if (a === 'cero') {
             const ok = await BG.modal({
               titulo: 'Empezar de cero',
-              cuerpo: '<p>Se borran de este dispositivo <strong>todas las clientas, ventas, cobros y productos</strong> que cargaste, y el sistema queda vacío para arrancar.</p>'
+              cuerpo: (BG.enLaNube()
+                ? '<p>Se borran <strong>de la nube</strong> todas las clientas, ventas, cobros y productos: el sistema queda vacío <strong>para todos los aparatos</strong>, también el de ' + esc(BG.nombreVendedora()) + '.</p>'
+                : '<p>Se borran de este dispositivo <strong>todas las clientas, ventas, cobros y productos</strong> que cargaste, y el sistema queda vacío para arrancar.</p>')
                 + '<p>Los usuarios y los parámetros (dólar, courier, márgenes) se mantienen. Si querés conservar lo cargado, bajá antes una copia de seguridad.</p>',
               acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Borrar todo y empezar', valor: 'ok', clase: 'btn-danger-solid' }],
             });

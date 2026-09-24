@@ -63,7 +63,12 @@
   const quitar = (k) => { try { localStorage.removeItem(k); } catch (e) { /* sin almacenamiento */ } };
   /** 'mios' = los datos de la tienda (los de verdad); 'ejemplo' = los ficticios para probar. */
   BG.modoDatos = 'mios';
-  BG.guardar = () => BG.escribir(BG.modoDatos === 'mios' ? KEY_DB_MIOS : KEY_DB, BG.db);
+  /** ¿Los datos de la tienda están en la nube (todos los aparatos ven lo mismo)? Lo enciende nube.js. */
+  BG.enLaNube = () => !!(BG.nube && BG.nube.activa && BG.modoDatos === 'mios');
+  BG.guardar = () => {
+    if (BG.enLaNube()) return BG.nube.cambio();   // guarda en este aparato y lo sube (nube.js)
+    return BG.escribir(BG.modoDatos === 'mios' ? KEY_DB_MIOS : KEY_DB, BG.db);
+  };
   /** Una base guardada de una versión anterior se acepta si la forma de los datos no cambió. */
   const alDia = (d) => {
     if (!d || typeof d !== 'object' || !Array.isArray(d.clientes)) return null;
@@ -88,6 +93,18 @@
   };
   /** Pasa a los datos de la tienda: los recién cargados (db) o los que ya estaban guardados. */
   BG.usarMisDatos = (db, info) => {
+    // Con la nube encendida, «mis datos» es el documento compartido: se usa la copia local y se vuelve a leer.
+    if (!db && BG.nube && BG.nube.activa) {
+      const cache = BG.leer(BG.nube.KEY_CACHE);
+      const guardado = cache && alDia(cache.datos);
+      if (guardado) {
+        BG.modoDatos = 'mios';
+        BG.escribir(KEY_MODO, 'mios');
+        BG.db = guardado;
+        if (BG.nube.sincronizar) BG.nube.sincronizar();
+        return;
+      }
+    }
     if (db) {
       if (!BG.escribir(KEY_DB_MIOS, db)) throw new Error('No hay lugar en este navegador para guardar tus datos. Liberá espacio (o usá otra computadora) y probá de nuevo.');
       if (info) BG.escribir(KEY_MIOS_INFO, info);
@@ -101,7 +118,8 @@
   /** Deja la base de la tienda vacía: los dos usuarios y los parámetros, sin clientas, productos ni ventas. */
   BG.empezarDeCero = () => {
     const db = window.BGSeed.vacio(hoy());
-    BG.usarMisDatos(db, null);
+    // Con la nube encendida, vaciar es para todos los aparatos: se instala y se sube.
+    if (BG.enLaNube()) { BG.usarDatosDeLaNube(db); BG.guardar(); } else BG.usarMisDatos(db, null);
     quitar(KEY_MIOS_INFO);
     return db;
   };
@@ -110,6 +128,25 @@
     quitar(KEY_MIOS_INFO);
     BG.empezarDeCero();
   };
+
+  /* ── Puentes con la nube (nube.js) ───────────────────────────────────── */
+  /** Los datos de la tienda guardados en este aparato (o null). La nube no los toca. */
+  BG.datosDeEsteAparato = () => alDia(BG.leer(KEY_DB_MIOS));
+  /** Instala el documento que vino de la nube (no escribe sobre la base propia del aparato). */
+  BG.usarDatosDeLaNube = (db) => {
+    const d = alDia(db);
+    if (!d) throw new Error('Los datos que vinieron de la nube no son de este sistema.');
+    BG.modoDatos = 'mios';
+    BG.escribir(KEY_MODO, 'mios');
+    BG.db = d;
+  };
+  /** Al cerrar sesión se vuelve a lo que tenga este aparato (o a un sistema vacío). */
+  BG.volverALocal = () => {
+    try { BG.usarMisDatos(); } catch (e) { BG.empezarDeCero(); }
+    BG.renderChrome();
+    BG.render();
+  };
+  BG.esDuenaPerfil = (p) => !!p && p.rol === 'admin';
 
   /* ── Copia de seguridad (mientras los datos viven en este dispositivo) ── */
   BG.copiaDeSeguridad = () => JSON.stringify({ sistema: 'berry.Glow_py', version: VERSION_DB, fecha: ahora(), datos: BG.db });
@@ -132,7 +169,7 @@
       BG.db = antes;
     }
     if (problema) throw new Error('No se restauró nada: ' + problema + '.');
-    BG.usarMisDatos(d, null);
+    if (BG.enLaNube()) { BG.usarDatosDeLaNube(d); BG.guardar(); } else BG.usarMisDatos(d, null);
     return { clientes: d.clientes.length, ventas: d.ventas.length, fecha: c.fecha || '' };
   };
 
@@ -174,6 +211,7 @@
   BG.esDuena = () => !!BG.sesion && BG.sesion.rol === 'admin';
   BG.usuario = () => BG.db.usuarios.find((u) => u.id === (BG.sesion && BG.sesion.usuarioId)) || BG.db.usuarios[0];
   BG.nombreDuena = () => (BG.db.usuarios.find((u) => u.rol === 'admin') || { nombre: 'el dueño' }).nombre;
+  BG.nombreVendedora = () => (BG.db.usuarios.find((u) => u.rol === 'vendedor') || { nombre: 'la vendedora' }).nombre;
 
   /** Lo que el dueño puede habilitar o quitar a la vendedora (Ajustes → Usuarios y permisos). */
   BG.PERMISOS = [
@@ -1119,6 +1157,24 @@
     return items[items.length - 1][0] === '-' ? items.slice(0, -1) : items;
   }
 
+  /** Franja de arriba cuando los datos están en la nube: quién entró y si lo último ya quedó guardado. */
+  function htmlNube(esDuenia) {
+    const n = BG.nube;
+    const ic = { 'al-dia': 'check', guardando: 'refresh', 'sin-conexion': 'alert', conflicto: 'alert', conectando: 'refresh' }[n.estado] || 'shield';
+    return '<span><strong>' + esc((n.perfil && n.perfil.nombre) || 'Tus datos') + '</strong>'
+      + '<span class="mock-largo"> · en la nube: todos los aparatos ven lo mismo</span></span>'
+      + '<span class="nube-estado nube-' + n.estado + '">' + icon(ic, 'i-sm') + esc(n.texto()) + '</span>'
+      + (esDuenia ? '<a class="linkish" href="#/ajustes">Copia de seguridad</a>' : '');
+  }
+  /** La llama nube.js cada vez que cambia el estado de guardado (no repinta toda la pantalla). */
+  BG.pintarNube = () => {
+    const f = $('#mock-strip');
+    if (!f || !$('.app') || !BG.enLaNube()) return;
+    f.hidden = false;
+    f.classList.add('mock-strip-mios');
+    f.innerHTML = htmlNube(BG.esDuena());
+  };
+
   function renderChrome() {
     if (!$('.app')) return;   // en la pantalla de ingreso todavía no hay menú ni franja que pintar
     const d = BG.esDuena();
@@ -1137,20 +1193,23 @@
     const mios = BG.modoDatos === 'mios';
     const franja = $('#mock-strip');
     franja.classList.toggle('mock-strip-mios', mios);
-    franja.hidden = mios && !d;
+    franja.hidden = mios && !d && !BG.enLaNube();
     franja.innerHTML = mios
-      ? '<span><strong>Tus datos</strong><span class="mock-largo"> · se guardan en este dispositivo: hacé copias de seguridad seguido</span>'
-        + '<span class="mock-corto"> · en este dispositivo</span></span>'
-        + (d ? '<a class="linkish" href="#/ajustes">Copia de seguridad</a>' : '')
+      ? (BG.enLaNube()
+        ? htmlNube(d)
+        : '<span><strong>Tus datos</strong><span class="mock-largo"> · se guardan en este dispositivo: hacé copias de seguridad seguido</span>'
+          + '<span class="mock-corto"> · en este dispositivo</span></span>'
+          + (d ? '<a class="linkish" href="#/ajustes">Copia de seguridad</a>' : ''))
       : '<span><strong>Datos de ejemplo</strong><span class="mock-largo"> · para probar; no son los de la tienda</span></span>'
         + '<button type="button" class="linkish" data-action="modo-mios">Volver a mis datos</button>'
         + '<button type="button" class="linkish" data-action="guia">Guía de prueba</button>';
     const duenio = BG.db.usuarios.find((x) => x.rol === 'admin');
     const vendedora = BG.db.usuarios.find((x) => x.rol === 'vendedor');
-    $('#topbar-actions').innerHTML = '<span class="small muted hide-mobile">Ver como</span>'
-      + '<div class="seg hide-mobile" role="group" aria-label="Ver el sistema como">'
-      + '<button type="button" data-action="rol" data-rol="admin" aria-pressed="' + d + '">' + esc(duenio.nombre) + '</button>'
-      + '<button type="button" data-action="rol" data-rol="vendedor" aria-pressed="' + !d + '">' + esc(vendedora.nombre) + '</button></div>'
+    $('#topbar-actions').innerHTML = (BG.enLaNube() ? ''
+      : '<span class="small muted hide-mobile">Ver como</span>'
+        + '<div class="seg hide-mobile" role="group" aria-label="Ver el sistema como">'
+        + '<button type="button" data-action="rol" data-rol="admin" aria-pressed="' + d + '">' + esc(duenio.nombre) + '</button>'
+        + '<button type="button" data-action="rol" data-rol="vendedor" aria-pressed="' + !d + '">' + esc(vendedora.nombre) + '</button></div>')
       + (mios ? '' : '<button type="button" class="btn btn-quiet hide-mobile" data-action="guia">' + icon('guide') + '<span>Guía</span></button>')
       + '<button type="button" class="btn-icon btn-tema" data-action="tema" aria-label="Tema: ' + BG.TEMAS[BG.tema()].toLowerCase() + ' (tocá para cambiar)" title="Tema: ' + BG.TEMAS[BG.tema()].toLowerCase() + '">' + icon(BG.ICONO_TEMA[BG.tema()]) + '</button>'
       + (BG.puede('registrarVentas') ? '<a class="btn btn-primary hide-mobile" href="#/ventas/nueva">' + icon('plus') + '<span>Nueva venta</span></a>' : '')
@@ -1283,6 +1342,7 @@
     else if (a === 'rol') { e.preventDefault(); BG.cambiarRol(b.dataset.rol); }
     else if (a === 'salir') {
       e.preventDefault();
+      if (BG.nube && BG.nube.activa) { BG.nube.salir(); location.hash = '#/inicio'; return; }
       BG.sesion = null;
       BG.guardarSesion();
       location.hash = '#/inicio';
@@ -1335,5 +1395,6 @@
   BG.iniciar = () => {
     window.addEventListener('hashchange', BG.render);
     BG.render();
+    if (BG.nube && BG.nube.configurada) BG.nube.arrancar();
   };
 })();

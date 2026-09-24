@@ -1259,6 +1259,10 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 
 /* Datos reales traídos del Excel: la franja cambia de color para que nunca se confundan con los de ejemplo. */
 .mock-strip-mios { background: var(--good-soft); color: var(--good); }
+/* Estado de guardado en la nube: la persona tiene que ver de un vistazo si lo suyo ya subió. */
+.nube-estado { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; }
+.nube-sin-conexion, .nube-conflicto { color: var(--bad); }
+.nube-guardando, .nube-conectando { color: var(--ink-2); }
 .mock-strip-mios strong { color: var(--good); }
 
 /* Traer mis datos del Excel */
