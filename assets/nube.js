@@ -183,14 +183,20 @@
       BG.escribir(KEY_CACHE, { version: fila.version, datos: fila.datos });
       estado('al-dia');
     }
-    if (primera) {
-      const u = BG.db.usuarios.find((x) => x.rol === N.perfil.rol) || BG.db.usuarios[0];
-      BG.sesion = { usuarioId: u.id, rol: u.rol };
-      BG.guardarSesion();
-      if (!location.hash || location.hash === '#/') location.hash = '#/inicio';
-    }
+    ajustarSesion();
+    if (primera && (!location.hash || location.hash === '#/')) location.hash = '#/inicio';
     BG.renderChrome();
     BG.render();
+  }
+
+  /** El usuario del documento que corresponde a la cuenta con la que se entró. Nunca al revés. */
+  function ajustarSesion() {
+    if (!N.perfil || !BG.db) return;
+    const u = BG.db.usuarios.find((x) => x.rol === N.perfil.rol) || BG.db.usuarios[0];
+    if (!BG.sesion || BG.sesion.usuarioId !== u.id || BG.sesion.rol !== u.rol) {
+      BG.sesion = { usuarioId: u.id, rol: u.rol };
+      BG.guardarSesion();
+    }
   }
 
   /** Se llama en cada BG.guardar(): junta los cambios de la ráfaga y los sube una sola vez. */
@@ -248,6 +254,7 @@
     N.por = fila.por;
     BG.usarDatosDeLaNube(fila.datos);
     BG.escribir(KEY_CACHE, { version: fila.version, datos: fila.datos });
+    ajustarSesion();
     estado(motivo === 'conflicto' ? 'conflicto' : 'al-dia');
     BG.renderChrome();
     BG.render();

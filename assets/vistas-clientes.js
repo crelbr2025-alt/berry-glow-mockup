@@ -96,7 +96,8 @@
   BG.vistas.sinPermiso = () => ({
     html: '<div class="page"><div class="callout callout-warn">' + icon('lock') + '<div><strong>Tu usuario no tiene permiso para esta pantalla.</strong> '
       + 'Puede tener costos, dólar o márgenes, o ' + esc(BG.nombreDuena()) + ' todavía no te habilitó esta tarea (Ajustes → Usuarios y permisos). '
-      + '<button type="button" class="linkish" data-action="rol" data-rol="admin">Ver como ' + esc(BG.nombreDuena()) + '</button></div></div></div>',
+      + (BG.enLaNube() ? 'Si sos ' + esc(BG.nombreDuena()) + ', cerrá sesión y entrá con tu cuenta.'
+        : '<button type="button" class="linkish" data-action="rol" data-rol="admin">Ver como ' + esc(BG.nombreDuena()) + '</button>') + '</div></div></div>',
   });
 
   /* ── Inicio ──────────────────────────────────────────────────────────── */

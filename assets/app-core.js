@@ -208,8 +208,18 @@
     + Object.keys(BG.TEMAS).map((k) => '<button type="button" data-tema="' + k + '" aria-pressed="' + (BG.tema() === k) + '">' + BG.icon(BG.ICONO_TEMA[k], 'i-sm') + BG.TEMAS[k] + '</button>').join('') + '</div>';
   BG.aplicarTema(BG.tema());
 
-  BG.esDuena = () => !!BG.sesion && BG.sesion.rol === 'admin';
-  BG.usuario = () => BG.db.usuarios.find((u) => u.id === (BG.sesion && BG.sesion.usuarioId)) || BG.db.usuarios[0];
+  /**
+   * Con la nube encendida, quién sos lo dice la cuenta con la que entraste (el servidor), nunca lo que haya
+   * quedado guardado en este navegador: si no, alguien podría quedarse con el rol de otra sesión.
+   */
+  BG.rolActual = () => (BG.enLaNube() && BG.nube.perfil ? BG.nube.perfil.rol : (BG.sesion && BG.sesion.rol) || null);
+  BG.esDuena = () => BG.rolActual() === 'admin';
+  BG.usuario = () => {
+    if (BG.enLaNube() && BG.nube.perfil) {
+      return BG.db.usuarios.find((u) => u.rol === BG.nube.perfil.rol) || BG.db.usuarios[0];
+    }
+    return BG.db.usuarios.find((u) => u.id === (BG.sesion && BG.sesion.usuarioId)) || BG.db.usuarios[0];
+  };
   BG.nombreDuena = () => (BG.db.usuarios.find((u) => u.rol === 'admin') || { nombre: 'el dueño' }).nombre;
   BG.nombreVendedora = () => (BG.db.usuarios.find((u) => u.rol === 'vendedor') || { nombre: 'la vendedora' }).nombre;
 
@@ -228,7 +238,7 @@
   ];
   /** ¿El usuario actual puede hacer esto? El dueño puede todo; la vendedora, lo que tenga habilitado. */
   BG.puede = (permiso) => {
-    if (!BG.sesion) return false;
+    if (!BG.sesion && !(BG.enLaNube() && BG.nube.perfil)) return false;
     if (BG.esDuena()) return true;
     if (permiso === 'verVentas' || permiso === 'verClientes') return true;
     const u = BG.usuario();
@@ -1307,6 +1317,8 @@
   }
 
   BG.cambiarRol = (rol) => {
+    // Con la nube, el rol sale de la cuenta: «Ver como» no existe (y este atajo tampoco).
+    if (BG.enLaNube()) { BG.toast('Entrando con tu cuenta, el perfil lo decide la cuenta: para ver el otro, cerrá sesión y entrá con la otra.'); return; }
     const u = BG.db.usuarios.find((x) => x.rol === rol) || BG.db.usuarios[0];
     BG.sesion = { usuarioId: u.id, rol: u.rol };
     BG.guardarSesion();
