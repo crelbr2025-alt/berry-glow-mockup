@@ -29,6 +29,7 @@
   const KEY_ENTRADO = 'berryglow.nube.entrado';   // pista rápida para no mostrar la pantalla equivocada al abrir
   const KEY_CACHE = 'berryglow.nube.cache';       // copia local de lo que hay en la nube (para abrir rápido y sin internet)
   const KEY_DESCARTADO = 'berryglow.nube.descartado'; // último cambio que no se pudo guardar (ver «conflicto»)
+  const KEY_SOLO_ACA = 'berryglow.nube.soloaca';      // esta persona eligió trabajar sin cuenta en este aparato
 
   const N = {
     configurada: !!(CFG.url && CFG.clave),
@@ -43,6 +44,14 @@
   };
   BG.nube = N;
   BG.entradoAntes = () => { try { return localStorage.getItem(KEY_ENTRADO) === '1'; } catch (e) { return false; } };
+  /** «Entrar solo en este aparato»: se recuerda, así no se le vuelve a pedir la cuenta en cada apertura. */
+  BG.soloAca = (valor) => {
+    try {
+      if (valor === undefined) return localStorage.getItem(KEY_SOLO_ACA) === '1';
+      if (valor) localStorage.setItem(KEY_SOLO_ACA, '1'); else localStorage.removeItem(KEY_SOLO_ACA);
+    } catch (e) { /* sin almacenamiento */ }
+    return !!valor;
+  };
 
   let sb = null;
   let canal = null;
@@ -96,7 +105,15 @@
     }
     let ses = null;
     try { ses = (await c.auth.getSession()).data.session; } catch (e) { ses = null; }
-    if (!ses) { marcarEntrado(false); estado('sin-cuenta'); BG.render(); return; }
+    if (!ses) {
+      marcarEntrado(false);
+      // Aparato que ya venía con una sesión elegida a mano (de antes de las cuentas): que vea la pantalla de
+      // cuentas al menos una vez. Lo suyo no se toca: sigue guardado en este aparato.
+      if (BG.sesion && !BG.soloAca()) { BG.sesion = null; BG.guardarSesion(); }
+      estado('sin-cuenta');
+      BG.render();
+      return;
+    }
     await usarSesion(ses);
   };
 

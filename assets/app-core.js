@@ -1179,7 +1179,9 @@
   /** La llama nube.js cada vez que cambia el estado de guardado (no repinta toda la pantalla). */
   BG.pintarNube = () => {
     const f = $('#mock-strip');
-    if (!f || !$('.app') || !BG.enLaNube()) return;
+    if (!f || !$('.app')) return;
+    // Sin nube (todavía), la franja puede tener que aparecer igual para ofrecer entrar con la cuenta.
+    if (!BG.enLaNube()) { renderChrome(); return; }
     f.hidden = false;
     f.classList.add('mock-strip-mios');
     f.innerHTML = htmlNube(BG.esDuena());
@@ -1203,12 +1205,14 @@
     const mios = BG.modoDatos === 'mios';
     const franja = $('#mock-strip');
     franja.classList.toggle('mock-strip-mios', mios);
-    franja.hidden = mios && !d && !BG.enLaNube();
+    const invitaNube = mios && !BG.enLaNube() && BG.nube && BG.nube.configurada && BG.nube.disponible;
+    franja.hidden = mios && !d && !BG.enLaNube() && !invitaNube;
     franja.innerHTML = mios
       ? (BG.enLaNube()
         ? htmlNube(d)
-        : '<span><strong>Tus datos</strong><span class="mock-largo"> · se guardan en este dispositivo: hacé copias de seguridad seguido</span>'
-          + '<span class="mock-corto"> · en este dispositivo</span></span>'
+        : '<span><strong>Tus datos</strong><span class="mock-largo"> · se guardan solo en este aparato</span>'
+          + '<span class="mock-corto"> · solo acá</span></span>'
+          + (invitaNube ? '<button type="button" class="linkish" data-action="ir-cuenta">Entrar con mi cuenta</button>' : '')
           + (d ? '<a class="linkish" href="#/ajustes">Copia de seguridad</a>' : ''))
       : '<span><strong>Datos de ejemplo</strong><span class="mock-largo"> · para probar; no son los de la tienda</span></span>'
         + '<button type="button" class="linkish" data-action="modo-mios">Volver a mis datos</button>'
@@ -1350,6 +1354,14 @@
       renderChrome();
       BG.toast(a === 'modo-mios' ? 'Estás viendo tus datos, los de la tienda.' : 'Estás viendo los datos de ejemplo. Tus datos siguen guardados aparte.');
       if (location.hash === '#/inicio') BG.render(); else BG.ir('#/inicio');
+    }
+    else if (a === 'ir-cuenta') {
+      e.preventDefault();
+      if (BG.soloAca) BG.soloAca(false);
+      BG.sesion = null;
+      BG.guardarSesion();
+      location.hash = '#/inicio';
+      BG.render();
     }
     else if (a === 'rol') { e.preventDefault(); BG.cambiarRol(b.dataset.rol); }
     else if (a === 'salir') {

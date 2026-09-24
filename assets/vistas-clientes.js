@@ -17,7 +17,7 @@
       + '<span class="avatar">' + esc(BG.iniciales(u.nombre)) + '</span><span class="grow"><strong>' + esc(u.nombre) + '</strong><small>' + sub + '</small></span></button>';
     const nube = BG.nube || { configurada: false, estado: 'apagada' };
     // Con la nube encendida se entra con la cuenta de cada uno: el perfil sale de ahí, no de un botón.
-    const conCuenta = nube.configurada && BG.modoDatos === 'mios' && nube.estado !== 'apagada' && !BG.soloEsteAparato;
+    const conCuenta = nube.configurada && BG.modoDatos === 'mios' && nube.estado !== 'apagada' && !(BG.soloAca && BG.soloAca());
     // «Entrando…» solo si este aparato ya había entrado antes: si es la primera vez, se muestra el formulario.
     const conectando = conCuenta && BG.entradoAntes && BG.entradoAntes() && (nube.estado === 'conectando' || !nube.disponible);
     $('#root').innerHTML = '<div class="login"><div class="login-card">'
@@ -74,9 +74,9 @@
     const reintentar = $('#n-reintentar');
     if (reintentar) reintentar.addEventListener('click', () => { BG.nube.falla = null; BG.nube.arrancar(); BG.render(); });
     const aLocal = $('#n-local');
-    if (aLocal) aLocal.addEventListener('click', () => { BG.soloEsteAparato = true; BG.render(); });
+    if (aLocal) aLocal.addEventListener('click', () => { if (BG.soloAca) BG.soloAca(true); BG.render(); });
     const aNube = $('#n-nube');
-    if (aNube) aNube.addEventListener('click', () => { BG.soloEsteAparato = false; BG.render(); });
+    if (aNube) aNube.addEventListener('click', () => { if (BG.soloAca) BG.soloAca(false); BG.render(); });
     const formNube = $('#nube-form');
     if (formNube) {
       formNube.addEventListener('submit', async (e) => {
