@@ -38,7 +38,11 @@
         ? '<h1>¿Quién está usando el sistema?</h1>'
           + '<div class="stack">' + perfil(duenio, 'Dueño · ve y cambia todo') + perfil(vendedora, 'Vendedora · vende, cobra y emite recibos') + '</div>'
           + '<p class="hint">Todavía sin contraseña: elegí tu perfil y listo. Los datos se guardan en este dispositivo, así que conviene bajar una copia de seguridad seguido (Ajustes → Tus datos).</p>'
-          + (nube.configurada && nube.estado !== 'apagada' ? '<p class="small muted">Para ver lo mismo desde cualquier aparato: <button type="button" class="linkish" id="n-nube">entrar con tu cuenta</button></p>' : '')
+          + (nube.configurada && nube.estado !== 'apagada'
+            ? '<p class="small muted">Para ver lo mismo desde cualquier aparato: <button type="button" class="linkish" id="n-nube">entrar con tu cuenta</button></p>'
+            : nube.falla
+              ? '<div class="callout callout-warn">' + icon('alert') + '<span>' + esc(nube.falla) + ' Por ahora podés entrar acá y trabajar en este aparato. <button type="button" class="linkish" id="n-reintentar">Probar de nuevo</button></span></div>'
+              : '')
           + '<p class="small muted">¿Querés practicar sin tocar lo tuyo? <button type="button" class="linkish" data-action="modo-ejemplo">Entrar con datos de ejemplo</button></p>'
         : '<h1>Sistema de gestión · ingreso</h1>'
           + '<form id="login-form" class="stack" novalidate>'
@@ -67,6 +71,8 @@
     };
     const form = $('#login-form');
     if (form) form.addEventListener('submit', (e) => { e.preventDefault(); entrar($('#usuario').value); });
+    const reintentar = $('#n-reintentar');
+    if (reintentar) reintentar.addEventListener('click', () => { BG.nube.falla = null; BG.nube.arrancar(); BG.render(); });
     const aLocal = $('#n-local');
     if (aLocal) aLocal.addEventListener('click', () => { BG.soloEsteAparato = true; BG.render(); });
     const aNube = $('#n-nube');

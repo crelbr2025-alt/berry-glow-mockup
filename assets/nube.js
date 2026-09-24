@@ -22,6 +22,8 @@
     // Clave pública: está pensada para ir en la página. Lo que protege los datos son las reglas de la base
     // (sin cuenta no se ve nada) y no el secreto de esta clave.
     clave: 'sb_publishable_ZldDmTzmPla-hro_UBvXGw_EyixUHHv',
+    // La biblioteca viaja con el sistema (assets/supabase.js), así ningún bloqueador de navegador la corta.
+    // Si por algo no estuviera, se intenta traerla de internet como respaldo.
     biblioteca: 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm',
   };
   const KEY_ENTRADO = 'berryglow.nube.entrado';   // pista rápida para no mostrar la pantalla equivocada al abrir
@@ -58,10 +60,15 @@
     conflicto: 'Hubo un cambio desde otro aparato',
   })[N.estado] || '';
 
+  const OPCIONES = { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } };
   async function cliente() {
     if (sb) return sb;
-    const m = await import(/* webpackIgnore: true */ CFG.biblioteca);
-    sb = m.createClient(CFG.url, CFG.clave, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } });
+    let crear = window.supabase && window.supabase.createClient;   // la que viene con el sistema
+    if (!crear) {
+      const m = await import(/* webpackIgnore: true */ CFG.biblioteca);   // respaldo por internet
+      crear = m.createClient;
+    }
+    sb = crear(CFG.url, CFG.clave, OPCIONES);
     N.disponible = true;
     return sb;
   }
@@ -79,7 +86,14 @@
     if (!N.configurada) return;
     estado('conectando');
     let c;
-    try { c = await cliente(); } catch (e) { N.estado = 'apagada'; refrescar(); return; }
+    try {
+      c = await cliente();
+    } catch (e) {
+      N.falla = 'No se pudo cargar la conexión con la nube. Puede ser el bloqueador del navegador (en Brave, el escudo) o que no haya internet.';
+      N.estado = 'apagada';
+      refrescar();
+      return;
+    }
     let ses = null;
     try { ses = (await c.auth.getSession()).data.session; } catch (e) { ses = null; }
     if (!ses) { marcarEntrado(false); estado('sin-cuenta'); BG.render(); return; }
