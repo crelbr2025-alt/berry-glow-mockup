@@ -11,25 +11,34 @@
 
   BG.vistas.login = () => {
     document.title = 'Gestión berry.Glow';
+    const duenio = BG.db.usuarios.find((x) => x.rol === 'admin') || { nombre: 'Ariel', usuario: 'ariel' };
+    const vendedora = BG.db.usuarios.find((x) => x.rol === 'vendedor') || { nombre: 'Jazmín', usuario: 'jazmin' };
+    const perfil = (u, sub) => '<button type="button" class="btn btn-lg btn-block btn-perfil" data-demo="' + esc(u.usuario) + '">'
+      + '<span class="avatar">' + esc(BG.iniciales(u.nombre)) + '</span><span class="grow"><strong>' + esc(u.nombre) + '</strong><small>' + sub + '</small></span></button>';
     $('#root').innerHTML = '<div class="login"><div class="login-card">'
       + '<div class="login-brand">' + BG.logo() + '</div>'
-      + '<h1>Sistema de gestión · ingreso</h1>'
-      + '<form id="login-form" class="stack" novalidate>'
-      + '<div class="field"><label for="usuario">Usuario</label><input id="usuario" class="input" autocomplete="off" autocapitalize="none" spellcheck="false"></div>'
-      + '<div class="field"><label for="clave">Contraseña</label><input id="clave" class="input" type="password" autocomplete="off"></div>'
-      + '<p class="error-text" id="login-error" hidden></p>'
-      + '<button class="btn btn-primary btn-lg btn-block" type="submit">Entrar</button></form>'
-      + '<div class="demo-hint"><span><strong>Mockup:</strong> el ingreso es de mentira y no pide contraseña. Elegí con qué vista entrar:</span>'
-      + '<div class="row"><button type="button" class="btn btn-sm" data-demo="ariel">Entrar como Ariel (dueño)</button>'
-      + '<button type="button" class="btn btn-sm" data-demo="jazmin">Entrar como Jazmín (vendedora)</button></div>'
-      + '<span class="small">Jazmín vende, cobra, acuerda cuotas, hace devoluciones y cambios, emite recibos, prepara envíos y puede poner precios especiales (ve la ganancia de ese precio); no ve costos ni dólar y no puede anular. Ariel ve todo y el registro de lo que hace cada una.</span></div>'
+      + (BG.modoDatos === 'mios'
+        ? '<h1>¿Quién está usando el sistema?</h1>'
+          + '<div class="stack">' + perfil(duenio, 'Dueño · ve y cambia todo') + perfil(vendedora, 'Vendedora · vende, cobra y emite recibos') + '</div>'
+          + '<p class="hint">Todavía sin contraseña: elegí tu perfil y listo. Los datos se guardan en este dispositivo, así que conviene bajar una copia de seguridad seguido (Ajustes → Tus datos).</p>'
+          + '<p class="small muted">¿Querés practicar sin tocar lo tuyo? <button type="button" class="linkish" data-action="modo-ejemplo">Entrar con datos de ejemplo</button></p>'
+        : '<h1>Sistema de gestión · ingreso</h1>'
+          + '<form id="login-form" class="stack" novalidate>'
+          + '<div class="field"><label for="usuario">Usuario</label><input id="usuario" class="input" autocomplete="off" autocapitalize="none" spellcheck="false"></div>'
+          + '<div class="field"><label for="clave">Contraseña</label><input id="clave" class="input" type="password" autocomplete="off"></div>'
+          + '<p class="error-text" id="login-error" hidden></p>'
+          + '<button class="btn btn-primary btn-lg btn-block" type="submit">Entrar</button></form>'
+          + '<div class="demo-hint"><span><strong>Datos de ejemplo:</strong> el ingreso es de mentira y no pide contraseña. Elegí con qué vista entrar:</span>'
+          + '<div class="row"><button type="button" class="btn btn-sm" data-demo="ariel">Entrar como Ariel (dueño)</button>'
+          + '<button type="button" class="btn btn-sm" data-demo="jazmin">Entrar como Jazmín (vendedora)</button></div>'
+          + '<span class="small">Jazmín vende, cobra, acuerda cuotas, hace devoluciones y cambios, emite recibos, prepara envíos y puede poner precios especiales (ve la ganancia de ese precio); no ve costos ni dólar y no puede anular. Ariel ve todo y el registro de lo que hace cada una.</span></div>')
       + '<div class="login-tema"><span class="small muted">Tema de la pantalla</span>' + BG.selectorTema() + '</div>'
       + '</div></div>';
     const entrar = (usuario) => {
       const u = BG.db.usuarios.find((x) => x.usuario === String(usuario || '').trim().toLowerCase());
       if (!u) {
         const er = $('#login-error');
-        er.textContent = 'Ese usuario no existe. En el mockup hay dos: «ariel» y «jazmin».';
+        er.textContent = 'Ese usuario no existe. Escribí «ariel» o «jazmin».';
         er.hidden = false;
         return;
       }
@@ -38,7 +47,8 @@
       if (!location.hash || location.hash === '#/') location.hash = '#/inicio';
       BG.render();
     };
-    $('#login-form').addEventListener('submit', (e) => { e.preventDefault(); entrar($('#usuario').value); });
+    const form = $('#login-form');
+    if (form) form.addEventListener('submit', (e) => { e.preventDefault(); entrar($('#usuario').value); });
     $$('[data-demo]').forEach((b) => b.addEventListener('click', () => entrar(b.dataset.demo)));
   };
 
@@ -186,9 +196,25 @@
       + (pendientes.length ? '<ul class="list list-plain">' + pendientes.slice(0, 5).map((x) => '<li><a class="list-row" href="#/envios/' + x.id + '"><span class="avatar">' + icon('truck', 'i-sm') + '</span>'
         + '<span class="row-main"><span class="row-title">' + esc(x.destinatario.nombre) + ' → ' + esc(x.destinatario.ciudad) + '</span><span class="row-sub">' + esc(x.numero) + ' · ' + esc(x.empresa) + '</span></span>'
         + '<span class="row-end">' + BG.pillEnvio(x) + '</span></a></li>').join('') + '</ul>' : '<p class="empty">No hay envíos pendientes.</p>') + '</section>' : '';
+    // Sistema nuevo, sin nada cargado: en lugar de tarjetas vacías, los primeros pasos.
+    const enBlanco = BG.modoDatos === 'mios' && !BG.db.clientes.length && !BG.db.productos.length && !BG.db.ventas.length;
+    const cardPrimerosPasos = !enBlanco ? '' : '<section class="card stack" aria-labelledby="t-arranque">'
+      + '<div class="card-head"><h2 id="t-arranque">' + icon('star') + 'Tu sistema está listo y vacío</h2></div>'
+      + (duena
+        ? '<p class="small">Tres pasos para arrancar. Lo que cargues se guarda en este dispositivo: cuando tengas datos, bajá una copia de seguridad desde Ajustes.</p>'
+          + '<ol class="pasos">'
+          + '<li><strong>Cargá tus productos.</strong> Poné el costo en dólares y el peso: el sistema calcula el costo en guaraníes y te sugiere el precio. <a href="#/productos/nuevo">Cargar producto</a></li>'
+          + '<li><strong>Cargá tus clientas.</strong> Una por una, o traelas del Excel que ya usabas. <a href="#/clientes/nuevo">Nueva clienta</a> · <a href="#/ajustes/excel">Traer mi Excel</a></li>'
+          + '<li><strong>Vendé.</strong> Al contado o en cuotas, y el recibo sale listo para mandar por WhatsApp. <a href="#/ventas/nueva">Nueva venta</a></li>'
+          + '</ol>'
+          + '<p class="hint">Antes de la primera venta, revisá en Ajustes el dólar, el courier y tu PIN de autorización.</p>'
+        : '<p class="small">Todavía no hay nada cargado. ' + (BG.puede('editarClientes') ? 'Podés ir cargando las clientas; ' : '') + 'los productos y los precios los carga ' + esc(BG.nombreDuena()) + '.'
+          + (BG.puede('editarClientes') ? ' <a href="#/clientes/nuevo">Nueva clienta</a>' : '') + '</p>')
+      + '</section>';
     const tileLink = (href, label, valor, sub, cls) => '<a class="tile tile-link' + (cls ? ' ' + cls : '') + '" href="' + href + '"><span class="tile-label">' + label + '</span><span class="tile-value">' + valor + '</span><span class="tile-sub">' + sub + '</span></a>';
     const html = '<div class="page">'
       + '<div class="page-head"><div><p class="eyebrow">' + BG.fmtFechaLarga(h) + '</p><h1 class="page-title">' + saludo + ', ' + esc(u.nombre) + '</h1></div></div>'
+      + cardPrimerosPasos
       + (rapidas.length ? '<section class="quick" aria-label="Acciones rápidas">' + rapidas.join('') + '</section>' : '')
       + (meta ? '<section class="card" aria-label="Tu meta del mes">' + meta + '</section>' : '')
       + '<section class="tiles tiles-5 tiles-compact" aria-label="Resumen">'
@@ -250,7 +276,7 @@
     const totalFavor = sum(todos, (c) => Math.max(0, BG.creditoCliente(c.id)));
     const chip = (f, t, n) => '<button type="button" class="chip" data-filtro="' + f + '" aria-pressed="' + (e.filtro === f) + '">' + t + ' <span class="count">' + n + '</span></button>';
     const html = '<div class="page">'
-      + '<div class="page-head"><div><h1 class="page-title">Clientes</h1><p class="page-sub">' + todos.length + ' clientes · ' + gs(sum(BG.listaDeudores(), (d) => d.saldo)) + ' por cobrar'
+      + '<div class="page-head"><div><h1 class="page-title">Clientes</h1><p class="page-sub">' + todos.length + (todos.length === 1 ? ' clienta · ' : ' clientes · ') + gs(sum(BG.listaDeudores(), (d) => d.saldo)) + ' por cobrar'
       + (totalFavor ? ' · <span class="t-favor">' + gs(totalFavor) + ' de saldo a favor</span>' : '') + '</p></div>'
       + (BG.puede('editarClientes') ? '<div class="page-actions"><a class="btn btn-primary" href="#/clientes/nuevo">' + icon('plus') + 'Nuevo cliente</a></div>' : '') + '</div>'
       + '<div class="toolbar">'
@@ -278,7 +304,10 @@
       }
       $('#lista-clientes', root).innerHTML = lista.length
         ? lista.map((c) => '<li><a class="list-row" href="#/clientes/' + c.id + '">' + BG.filaCliente(c, q) + '</a></li>').join('')
-        : '<li class="empty">Ningún cliente coincide. <a href="#/clientes/nuevo?nombre=' + encodeURIComponent(q) + '">Crear «' + esc(q) + '»</a></li>';
+        : !todos.length
+          ? '<li class="empty">Todavía no cargaste ninguna clienta. <a href="#/clientes/nuevo">Cargar la primera</a></li>'
+          : q ? '<li class="empty">Ningún cliente coincide. <a href="#/clientes/nuevo?nombre=' + encodeURIComponent(q) + '">Crear «' + esc(q) + '»</a></li>'
+            : '<li class="empty">Ninguna clienta con ese filtro.</li>';
     };
     return {
       html: html,

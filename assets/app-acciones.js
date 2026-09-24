@@ -815,6 +815,16 @@
     BG.guardar();
   };
 
+  /** PIN con el que el dueño autoriza en el mostrador. Nunca se escribe el PIN en la auditoría. */
+  BG.cambiarPin = (nuevo) => {
+    soloDuenio('cambiar el PIN de autorización');
+    const pin = String(nuevo == null ? '' : nuevo).trim();
+    if (!/^[0-9]{4,6}$/.test(pin)) throw new Error('El PIN tiene que ser de 4 a 6 números.');
+    BG.db.config.pin = pin;
+    BG.auditar('seguridad', 'PIN de autorización', 'Cambiado por ' + BG.usuario().nombre + ' (el número no queda registrado)');
+    BG.guardar();
+  };
+
   /* ── Envíos por encomienda o courier ─────────────────────────────────── */
 
   BG.ESTADOS_ENVIO = { preparando: 'Preparando', listo: 'Listo para despachar', despachado: 'Despachado', entregado: 'Entregado', cancelado: 'Cancelado' };

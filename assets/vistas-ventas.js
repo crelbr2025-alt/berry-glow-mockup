@@ -351,7 +351,7 @@
       const vivas = lista.filter((v) => !v.anulada);
       $('#ventas-resumen', root).textContent = lista.length + (lista.length === 1 ? ' venta' : ' ventas') + ' · vendido ' + gs(sum(vivas, (v) => v.total))
         + ' · cobrado ' + gs(sum(vivas, BG.pagadoVenta)) + ' · saldo ' + gs(sum(vivas, BG.saldoVenta));
-      $('#lista-ventas', root).innerHTML = lista.length ? lista.map((v) => filaVentaConCliente(v, q)).join('') : '<li class="empty">No hay ventas con esos filtros.</li>';
+      $('#lista-ventas', root).innerHTML = lista.length ? lista.map((v) => filaVentaConCliente(v, q)).join('') : BG.db.ventas.length ? '<li class="empty">No hay ventas con esos filtros.</li>' : '<li class="empty">Todavía no registraste ninguna venta.</li>';
     };
     return {
       html: html,

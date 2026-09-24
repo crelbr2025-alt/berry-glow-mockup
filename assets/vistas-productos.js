@@ -265,7 +265,7 @@
       if (e.stock === 'con') lista = lista.filter((p) => BG.disponibles(p) > 0);
       if (e.stock === 'sin') lista = lista.filter((p) => BG.disponibles(p) <= 0);
       const valorStock = sum(lista, (p) => Math.max(0, BG.disponibles(p)) * (p.costoTotalGs || 0));
-      $('#p-resumen', root).textContent = lista.length + ' productos · ' + sum(lista, (p) => Math.max(0, BG.disponibles(p))) + ' unidades disponibles' + (duena ? ' · stock al costo ' + gs(valorStock) : '');
+      $('#p-resumen', root).textContent = lista.length + (lista.length === 1 ? ' producto · ' : ' productos · ') + sum(lista, (p) => Math.max(0, BG.disponibles(p))) + ' unidades disponibles' + (duena ? ' · stock al costo ' + gs(valorStock) : '');
       const quieto = (p) => (BG.disponibles(p) > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO ? '<span class="pill pill-warn pill-quieto">' + icon('pause') + BG.diasSinVender(p) + ' días sin venderse</span>' : '');
       const stockTxt = (p) => { const d = BG.disponibles(p); return d > 0 ? d + ' / ' + p.cantidad : '<span class="pill pill-muted">Agotado</span>'; };
       const precioTxt = (p) => (p.precioVenta ? gs(p.precioVenta) : '<span class="pill pill-warn">' + icon('alert') + 'Sin precio</span>');
@@ -281,7 +281,7 @@
         + '<span class="row-main"><span class="row-title">' + esc(p.descripcion) + '</span><span class="row-sub">' + esc(p.categoria) + ' · ' + (BG.disponibles(p) > 0 ? 'quedan ' + BG.disponibles(p) : 'agotado')
         + (duena && p.costoTotalGs ? ' · costo ' + gs(p.costoTotalGs) : '') + '</span>' + quieto(p) + '</span><span class="row-end"><span class="amount">' + (p.precioVenta ? gs(p.precioVenta) : 'Sin precio') + '</span>'
         + (duena && p.precioVenta && p.costoTotalGs ? '<span class="small muted">gana ' + gs(p.precioVenta - p.costoTotalGs) + '</span>' : '') + '</span></button></li>').join('') + '</ul>';
-      $('#p-lista', root).innerHTML = lista.length ? tabla + tarjetas : '<p class="empty">Ningún producto coincide.</p>';
+      $('#p-lista', root).innerHTML = lista.length ? tabla + tarjetas : BG.db.productos.length ? '<p class="empty">Ningún producto coincide.</p>' : '<p class="empty">Todavía no cargaste productos. <a href="#/productos/nuevo">Cargar el primero</a></p>';
     };
     return {
       html: html,

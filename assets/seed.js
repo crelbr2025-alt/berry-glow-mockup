@@ -261,7 +261,7 @@
     const gs = (n) => C.fmtGs(n);
 
     const db = {
-      version: 5,
+      version: 6,
       creado: hoy,
       config: {
         tienda: {
@@ -285,6 +285,8 @@
         proximoRecibo: 101,
         cajaCerradaHasta: F(1),
         precios: { margenMinimo: 30 },
+        // PIN con el que el dueño autoriza lo que la vendedora no puede hacer sola. Se cambia en Ajustes.
+        pin: '1234',
         // Ventas a cuenta: límite general por clienta y atraso máximo de cuotas (Ariel lo cambia en Ajustes).
         credito: { activo: true, limite: 1000000, diasAtraso: 15 },
         // Clientas frecuentes: 1 punto cada ₲ 10.000 pagados; cada punto vale ₲ 300 (3 %); canje desde 50 puntos; 10 % en su cumpleaños.
@@ -713,5 +715,28 @@
     return String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0');
   }
 
-  root.BGSeed = { crear: crear, PERMISOS_VENDEDORA: PERMISOS_VENDEDORA };
+  /**
+   * Base vacía para usar el sistema en serio: los dos usuarios y los parámetros de la tienda, sin clientas,
+   * productos ni ventas. Es lo que se crea la primera vez y con «Empezar de cero».
+   */
+  function vacio(hoy) {
+    const db = crear(hoy);
+    ['clientes', 'productos', 'pedidos', 'ventas', 'pagos', 'creditos', 'cierres', 'auditoria', 'emisiones',
+      'envios', 'egresos', 'gastos', 'canjes', 'conteos', 'ajustesStock'].forEach((k) => { db[k] = []; });
+    const cfg = db.config;
+    cfg.proximoRecibo = 1;
+    cfg.cajaCerradaHasta = null;
+    cfg.cotizacion = { valor: cfg.cotizacion.valor, fecha: hoy, ts: hoy + 'T09:00', usuario: ARIEL };
+    cfg.historialCotizacion = [cfg.cotizacion];
+    cfg.tarifa = { valor: cfg.tarifa.valor, fecha: hoy, ts: hoy + 'T09:00', usuario: ARIEL };
+    cfg.historialTarifa = [cfg.tarifa];
+    cfg.tienda = Object.assign({}, cfg.tienda, { whatsapp: '' });
+    cfg.fidelidad = Object.assign({}, cfg.fidelidad, { desde: hoy });
+    cfg.envios = Object.assign({}, cfg.envios, { proximo: 1 });
+    db.creado = hoy;
+    db.propia = true;  // datos de la tienda, no de ejemplo
+    return db;
+  }
+
+  root.BGSeed = { crear: crear, vacio: vacio, PERMISOS_VENDEDORA: PERMISOS_VENDEDORA };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

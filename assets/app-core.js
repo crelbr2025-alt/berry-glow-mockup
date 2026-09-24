@@ -49,58 +49,98 @@
 
   /* ── Datos (en el navegador) ─────────────────────────────────────────── */
 
-  const KEY_DB = 'berryglow.mockup.db.v1';
+  // Dos bases separadas en este navegador: la de la tienda (la que se usa en serio) y la de ejemplo (para probar).
+  const KEY_DB = 'berryglow.mockup.db.v1';       // datos de ejemplo
+  const KEY_DB_MIOS = 'berryglow.mockup.db.mios'; // datos de la tienda
   const KEY_SESION = 'berryglow.mockup.sesion';
-  // Los datos reales traídos del Excel viven en otra clave: nunca se mezclan con los de ejemplo ni se publican.
-  const KEY_DB_MIOS = 'berryglow.mockup.db.mios';
   const KEY_MIOS_INFO = 'berryglow.mockup.mios.info';
   const KEY_MODO = 'berryglow.mockup.modo';
-  const VERSION_DB = 5;
+  const KEY_COPIA = 'berryglow.mockup.copia';
+  const VERSION_DB = 6;
   BG.VERSION_DB = VERSION_DB;
   BG.leer = (k) => { try { const t = localStorage.getItem(k); return t ? JSON.parse(t) : null; } catch (e) { return null; } };
   BG.escribir = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } };
   const quitar = (k) => { try { localStorage.removeItem(k); } catch (e) { /* sin almacenamiento */ } };
-  /** 'ejemplo' = los datos ficticios del mockup; 'mios' = los datos reales traídos del Excel. */
-  BG.modoDatos = 'ejemplo';
+  /** 'mios' = los datos de la tienda (los de verdad); 'ejemplo' = los ficticios para probar. */
+  BG.modoDatos = 'mios';
   BG.guardar = () => BG.escribir(BG.modoDatos === 'mios' ? KEY_DB_MIOS : KEY_DB, BG.db);
-  /** Vuelve a los datos de ejemplo del día de hoy. No toca los datos del Excel. */
+  /** Una base guardada de una versión anterior se acepta si la forma de los datos no cambió. */
+  const alDia = (d) => {
+    if (!d || typeof d !== 'object' || !Array.isArray(d.clientes)) return null;
+    if (d.version === VERSION_DB) return d;
+    if (d.version === 5) { d.version = VERSION_DB; return d; }  // v5 → v6: misma forma, sin conversión
+    return null;
+  };
+  /** Vuelve a los datos de ejemplo del día de hoy. No toca los datos de la tienda. */
   BG.reiniciarDatos = () => {
     BG.modoDatos = 'ejemplo';
     BG.escribir(KEY_MODO, 'ejemplo');
     BG.db = window.BGSeed.crear(hoy());
     BG.guardar();
   };
-  /** Resumen de los datos del Excel guardados en este navegador (o null). No abre la base entera. */
+  /** Resumen de la última importación del Excel en este navegador (o null). */
   BG.infoMisDatos = () => BG.leer(KEY_MIOS_INFO);
   BG.usarDatosDeEjemplo = () => {
     BG.modoDatos = 'ejemplo';
     BG.escribir(KEY_MODO, 'ejemplo');
-    BG.db = BG.leer(KEY_DB);
-    if (!BG.db || BG.db.version !== VERSION_DB) BG.reiniciarDatos();
+    BG.db = alDia(BG.leer(KEY_DB));
+    if (!BG.db) BG.reiniciarDatos();
   };
-  /** Pasa a los datos del Excel: los recién importados (db) o los que ya estaban guardados (sin argumento). */
+  /** Pasa a los datos de la tienda: los recién cargados (db) o los que ya estaban guardados. */
   BG.usarMisDatos = (db, info) => {
     if (db) {
       if (!BG.escribir(KEY_DB_MIOS, db)) throw new Error('No hay lugar en este navegador para guardar tus datos. Liberá espacio (o usá otra computadora) y probá de nuevo.');
-      BG.escribir(KEY_MIOS_INFO, info || { importado: db.origen && db.origen.importado });
+      if (info) BG.escribir(KEY_MIOS_INFO, info);
     }
-    const d = db || BG.leer(KEY_DB_MIOS);
-    if (!d || d.version !== VERSION_DB) throw new Error('No hay datos del Excel guardados en este navegador: traelos desde Ajustes.');
+    const d = alDia(db || BG.leer(KEY_DB_MIOS));
+    if (!d) throw new Error('Todavía no hay datos de la tienda en este navegador.');
     BG.modoDatos = 'mios';
     BG.escribir(KEY_MODO, 'mios');
     BG.db = d;
   };
+  /** Deja la base de la tienda vacía: los dos usuarios y los parámetros, sin clientas, productos ni ventas. */
+  BG.empezarDeCero = () => {
+    const db = window.BGSeed.vacio(hoy());
+    BG.usarMisDatos(db, null);
+    quitar(KEY_MIOS_INFO);
+    return db;
+  };
   BG.borrarMisDatos = () => {
     quitar(KEY_DB_MIOS);
     quitar(KEY_MIOS_INFO);
-    if (BG.modoDatos === 'mios') BG.usarDatosDeEjemplo();
+    BG.empezarDeCero();
+  };
+
+  /* ── Copia de seguridad (mientras los datos viven en este dispositivo) ── */
+  BG.copiaDeSeguridad = () => JSON.stringify({ sistema: 'berry.Glow_py', version: VERSION_DB, fecha: ahora(), datos: BG.db });
+  BG.fechaCopia = () => BG.leer(KEY_COPIA);
+  BG.marcarCopia = () => BG.escribir(KEY_COPIA, ahora());
+  /** Reemplaza los datos de la tienda con los de una copia. Devuelve un resumen; no guarda nada si algo no cierra. */
+  BG.restaurarCopia = (texto) => {
+    let c;
+    try { c = JSON.parse(texto); } catch (e) { throw new Error('Ese archivo no es una copia de seguridad del sistema.'); }
+    const d = c && c.datos && c.datos.clientes ? c.datos : (c && c.clientes ? c : null);
+    if (!alDia(d)) throw new Error('Ese archivo no es una copia de este sistema (o es de una versión que ya no se puede leer).');
+    if (!Array.isArray(d.usuarios) || !d.usuarios.length || !d.config) throw new Error('La copia está incompleta: le faltan los usuarios o la configuración.');
+    const antes = BG.db;
+    let problema = null;
+    try {
+      BG.db = d;
+      if (!BG.cuadre().ok) problema = 'las cuentas por cobrar de esa copia no cuadran';
+      else if (!BG.cuadreFavor().ok) problema = 'los saldos a favor de esa copia no cuadran';
+    } finally {
+      BG.db = antes;
+    }
+    if (problema) throw new Error('No se restauró nada: ' + problema + '.');
+    BG.usarMisDatos(d, null);
+    return { clientes: d.clientes.length, ventas: d.ventas.length, fecha: c.fecha || '' };
   };
 
   BG.db = null;
-  if (BG.leer(KEY_MODO) === 'mios') {
-    try { BG.usarMisDatos(); } catch (e) { BG.escribir(KEY_MODO, 'ejemplo'); }
+  if (BG.leer(KEY_MODO) === 'ejemplo') BG.usarDatosDeEjemplo();
+  else {
+    try { BG.usarMisDatos(); } catch (e) { BG.empezarDeCero(); }
   }
-  if (!BG.db) BG.usarDatosDeEjemplo();
   BG.sesion = BG.leer(KEY_SESION);
   if (BG.sesion && !BG.db.usuarios.some((u) => u.id === BG.sesion.usuarioId)) BG.sesion = null;
   BG.guardarSesion = () => { if (BG.sesion) BG.escribir(KEY_SESION, BG.sesion); else { try { localStorage.removeItem(KEY_SESION); } catch (e) { /* sin almacenamiento */ } } };
@@ -886,16 +926,19 @@
     });
   };
 
+  /** PIN con el que el dueño autoriza en el mostrador lo que la vendedora no puede hacer sola. */
+  BG.pin = () => String((BG.db.config && BG.db.config.pin) || '1234');
   BG.pedirPin = async (motivo) => {
     const v = await BG.modal({
       titulo: 'Autorización de ' + BG.nombreDuena(),
       cuerpo: '<p>' + esc(motivo) + '</p>'
         + '<div class="field"><label for="pin">PIN de autorización</label>'
         + '<input id="pin" class="input" type="password" inputmode="numeric" autocomplete="off" maxlength="6">'
-        + '<p class="hint">En este mockup el PIN es <strong>1234</strong>.</p><p class="error-text" id="pin-error" hidden></p></div>',
+        + '<p class="hint">' + (BG.pin() === '1234' ? 'El PIN todavía es <strong>1234</strong>: cambialo en Ajustes para que sea solo de ' + esc(BG.nombreDuena()) + '.' : 'Lo pone ' + esc(BG.nombreDuena()) + '.')
+        + '</p><p class="error-text" id="pin-error" hidden></p></div>',
       acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Autorizar', valor: 'ok', clase: 'btn-primary', submit: true }],
       validar: (v, dlg) => {
-        if ($('#pin', dlg).value === '1234') return true;
+        if ($('#pin', dlg).value === BG.pin()) return true;
         const er = $('#pin-error', dlg);
         er.textContent = 'PIN incorrecto.';
         er.hidden = false;
@@ -1077,6 +1120,7 @@
   }
 
   function renderChrome() {
+    if (!$('.app')) return;   // en la pantalla de ingreso todavía no hay menú ni franja que pintar
     const d = BG.esDuena();
     const u = BG.usuario();
     const cfg = BG.db.config;
@@ -1089,16 +1133,17 @@
       + '<div class="user-box"><span class="avatar">' + esc(iniciales(u.nombre)) + '</span><div class="grow"><strong>' + esc(u.nombre) + '</strong>'
       + '<small>' + (d ? 'Dueño · ve y cambia todo' : 'Vendedora · sin costos') + '</small></div>'
       + '<button type="button" class="btn-icon" data-action="salir" aria-label="Cerrar sesión" title="Cerrar sesión">' + icon('logout') + '</button></div>';
-    // Franja de arriba: dice siempre qué datos se están viendo (los de ejemplo o los reales del Excel).
+    // Franja de arriba: avisa qué datos se están viendo. En uso real la vendedora no la necesita (las copias son del dueño).
     const mios = BG.modoDatos === 'mios';
     const franja = $('#mock-strip');
     franja.classList.toggle('mock-strip-mios', mios);
+    franja.hidden = mios && !d;
     franja.innerHTML = mios
-      ? '<span><strong>Tus datos del Excel</strong><span class="mock-largo"> · guardados solo en este navegador, aparte de los de ejemplo</span></span>'
-        + '<button type="button" class="linkish" data-action="modo-ejemplo">Ver los de ejemplo</button>'
-      : '<span><strong>Mockup para aprobar</strong><span class="mock-largo"> · datos de ejemplo guardados solo en este navegador</span>'
-        + '<span class="mock-corto"> · datos de ejemplo</span></span>'
-        + (d && BG.infoMisDatos() ? '<button type="button" class="linkish" data-action="modo-mios">Ver mis datos</button>' : '')
+      ? '<span><strong>Tus datos</strong><span class="mock-largo"> · se guardan en este dispositivo: hacé copias de seguridad seguido</span>'
+        + '<span class="mock-corto"> · en este dispositivo</span></span>'
+        + (d ? '<a class="linkish" href="#/ajustes">Copia de seguridad</a>' : '')
+      : '<span><strong>Datos de ejemplo</strong><span class="mock-largo"> · para probar; no son los de la tienda</span></span>'
+        + '<button type="button" class="linkish" data-action="modo-mios">Volver a mis datos</button>'
         + '<button type="button" class="linkish" data-action="guia">Guía de prueba</button>';
     const duenio = BG.db.usuarios.find((x) => x.rol === 'admin');
     const vendedora = BG.db.usuarios.find((x) => x.rol === 'vendedor');
@@ -1232,7 +1277,7 @@
       const guia = $('#guide');
       if (guia) guia.hidden = true;
       renderChrome();
-      BG.toast(a === 'modo-mios' ? 'Estás viendo tus datos del Excel.' : 'Estás viendo los datos de ejemplo. Tus datos del Excel siguen guardados.');
+      BG.toast(a === 'modo-mios' ? 'Estás viendo tus datos, los de la tienda.' : 'Estás viendo los datos de ejemplo. Tus datos siguen guardados aparte.');
       if (location.hash === '#/inicio') BG.render(); else BG.ir('#/inicio');
     }
     else if (a === 'rol') { e.preventDefault(); BG.cambiarRol(b.dataset.rol); }

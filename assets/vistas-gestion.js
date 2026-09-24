@@ -454,6 +454,20 @@
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
+  /** Baja un archivo con todo lo cargado, para guardarlo o pasarlo a otro dispositivo. */
+  function descargarCopia() {
+    const nombre = 'berry-glow-copia-' + BG.hoy() + '.json';
+    const url = URL.createObjectURL(new Blob([BG.copiaDeSeguridad()], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nombre;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    BG.marcarCopia();
+    return nombre;
+  }
   const EXPORTAR = {
     clientes: () => [['Nombre', 'CI/RUC', 'Teléfono', 'Dirección', 'Correo', 'Alta', 'Saldo pendiente', 'Saldo a favor']]
       .concat(BG.db.clientes.map((c) => [c.nombre, c.ci, c.telefono, c.direccion, c.email, BG.fmtFecha(c.alta), BG.saldoCliente(c.id), BG.creditoCliente(c.id)])),
@@ -519,22 +533,30 @@
       + '<p class="hint">Jazmín no ve esta configuración: al elegir la clienta le aparece el aviso con un botón para aplicar el beneficio.</p>';
   }
 
-  /** Tus datos reales traídos del Excel: se guardan aparte de los de ejemplo, solo en este navegador. */
+  /** Los datos de la tienda viven en este dispositivo: acá se hace la copia de seguridad y se empieza de cero. */
   function htmlMisDatos() {
-    const info = BG.infoMisDatos();
     const mios = BG.modoDatos === 'mios';
-    const cuando = info && info.importado ? BG.fmtFecha(info.importado.slice(0, 10)) + ' a las ' + BG.fmtHora(info.importado) : '';
-    return '<div class="card-head"><h2>' + icon('file') + 'Tus datos del Excel</h2></div>'
+    const info = BG.infoMisDatos();
+    const copia = BG.fechaCopia();
+    const dias = copia ? BG.diasEntre(copia.slice(0, 10), BG.hoy()) : null;
+    const cuantos = mios ? { c: BG.db.clientes.length, v: BG.db.ventas.filter((x) => !x.anulada).length, p: BG.db.productos.length } : null;
+    return '<div class="card-head"><h2>' + icon('shield') + 'Tus datos y la copia de seguridad</h2></div>'
       + (mios
-        ? '<p class="callout callout-good">' + icon('check') + '<span>Estás viendo <strong>tus datos del Excel</strong>' + (info && info.archivo ? ' (<span class="mx-archivo">' + esc(info.archivo) + '</span>)' : '') + (cuando ? ', traídos el ' + cuando : '') + '. Se guardan solo en este navegador.</span></p>'
-        : info
-          ? '<p class="small">Tenés tus datos del Excel guardados en este navegador' + (cuando ? ' (traídos el ' + cuando + ')' : '') + '. Ahora estás viendo los datos de ejemplo.</p>'
-          : '<p class="small">Traé el Excel con el que trabajabas y mirá dentro del sistema a tus clientas, lo que te deben y lo que queda en stock. El archivo se lee acá (no se sube a ningún lado) y queda separado de los datos de ejemplo.</p>')
+        ? '<p class="small">Tenés <strong>' + cuantos.c + (cuantos.c === 1 ? ' clienta' : ' clientas') + '</strong>, ' + cuantos.v + (cuantos.v === 1 ? ' venta' : ' ventas') + ' y ' + cuantos.p + (cuantos.p === 1 ? ' producto' : ' productos') + ' cargados.</p>'
+          + '<div class="callout ' + (dias === null ? 'callout-warn' : dias > 7 ? 'callout-warn' : 'callout-good') + '">' + icon(dias === null || dias > 7 ? 'alert' : 'check')
+          + '<span>' + (copia ? 'Última copia de seguridad: <strong>' + BG.fmtFecha(copia.slice(0, 10)) + '</strong>' + (dias > 7 ? ' (hace ' + dias + ' días: conviene bajar una nueva)' : '')
+            : '<strong>Todavía no bajaste ninguna copia.</strong> Mientras el sistema no tenga usuario y contraseña, los datos viven solo en este dispositivo: si se borra el navegador, se pierden.')
+          + '</span></div>'
+        : '<p class="small">Estás viendo los datos de ejemplo. Tus datos están guardados aparte, sin tocar.</p>')
       + '<div class="row">'
-      + (mios ? '<button type="button" class="btn btn-sm" data-action="modo-ejemplo">' + icon('refresh', 'i-sm') + 'Ver los de ejemplo</button>'
-        : info ? '<button type="button" class="btn btn-sm btn-primary" data-action="modo-mios">' + icon('eye', 'i-sm') + 'Ver mis datos</button>' : '')
-      + '<a class="btn btn-sm' + (info ? '' : ' btn-primary') + '" href="#/ajustes/excel">' + icon('upload', 'i-sm') + (info ? 'Volver a traer el Excel' : 'Traer mi Excel') + '</a>'
-      + (info ? '<button type="button" class="btn btn-sm btn-danger" data-accion="borrar-mios">' + icon('trash', 'i-sm') + 'Borrar mis datos</button>' : '')
+      + (mios
+        ? '<button type="button" class="btn btn-sm btn-primary" data-accion="copia">' + icon('download', 'i-sm') + 'Bajar copia de seguridad</button>'
+          + '<label class="btn btn-sm" for="aj-restaurar">' + icon('upload', 'i-sm') + 'Restaurar una copia</label>'
+          + '<input id="aj-restaurar" type="file" accept=".json,application/json" hidden>'
+          + '<a class="btn btn-sm" href="#/ajustes/excel">' + icon('file', 'i-sm') + (info ? 'Volver a traer el Excel' : 'Traer mi Excel') + '</a>'
+          + '<button type="button" class="btn btn-sm" data-action="modo-ejemplo">' + icon('eye', 'i-sm') + 'Ver los de ejemplo</button>'
+          + '<button type="button" class="btn btn-sm btn-danger" data-accion="cero">' + icon('trash', 'i-sm') + 'Empezar de cero</button>'
+        : '<button type="button" class="btn btn-sm btn-primary" data-action="modo-mios">' + icon('eye', 'i-sm') + 'Volver a mis datos</button>')
       + '</div>';
   }
 
@@ -555,7 +577,7 @@
       + '<div class="field"><span class="field-label" id="aj-m">Margen preseleccionado al cargar</span><div class="seg" role="radiogroup" aria-labelledby="aj-m">'
       + C.MARGENES.map((m) => '<label><input type="radio" name="aj-margen" value="' + m + '"' + (cfg.margenDefecto === m ? ' checked' : '') + '>' + m + ' %</label>').join('') + '</div>'
       + '<span class="hint">Siempre se muestran los cuatro (50, 80, 100 y 120 %); este es el que viene marcado.</span></div></section>'
-      + '<section class="card stack"><div class="card-head"><h2>Tienda y recibo</h2><a class="small" href="#/recibo/v/' + ultimaVentaId() + '">Ver un recibo</a></div>'
+      + '<section class="card stack"><div class="card-head"><h2>Tienda y recibo</h2>' + (ultimaVentaId() ? '<a class="small" href="#/recibo/v/' + ultimaVentaId() + '">Ver un recibo</a>' : '') + '</div>'
       + '<div class="fields">'
       + '<div class="field span-2"><label for="t-nombre">Nombre de la tienda</label><input id="t-nombre" class="input" value="' + esc(t.nombre) + '"></div>'
       + '<div class="field"><label for="t-wa">WhatsApp</label><input id="t-wa" class="input" type="tel" value="' + esc(t.whatsapp) + '"></div>'
@@ -581,6 +603,11 @@
       + '<div class="field"><span class="field-label" id="aj-min">Margen mínimo sin tu autorización</span><div class="seg" role="radiogroup" aria-labelledby="aj-min">'
       + [0, 20, 30, 40, 50].map((m) => '<label><input type="radio" name="aj-minimo" value="' + m + '"' + (BG.margenMinimo() === m ? ' checked' : '') + '>' + m + ' %</label>').join('') + '</div>'
       + '<span class="hint">Sobre el costo, como los precios sugeridos. Si un precio especial o un descuento de la vendedora deja menos margen, la venta pide tu PIN. Vender por debajo del costo siempre lo pide.</span></div>'
+      + '<div class="setting"><div><span class="field-label">Tu PIN de autorización</span><p class="setting-value">' + (BG.pin() === '1234' ? '1234 (el de fábrica)' : '••••') + '</p>'
+      + '<p class="hint">' + (BG.pin() === '1234'
+        ? 'Cambialo por uno que sepas solo vos: es lo que tecleás cuando Jazmín necesita tu permiso.'
+        : 'Lo tecleás vos cuando Jazmín necesita tu permiso. Nadie lo ve en pantalla ni queda en la auditoría.') + '</p></div>'
+      + '<button type="button" class="btn' + (BG.pin() === '1234' ? ' btn-primary' : '') + '" data-accion="pin">Cambiar PIN</button></div>'
       + '<p class="hint">Probalo con «Ver como» arriba (o en «Más» desde el celular). Cada cambio de permisos queda en la auditoría.</p></section>'
       + BG.db.usuarios.filter((u) => u.rol === 'vendedor').map((u) => '<section class="card stack" id="com-' + u.id + '">' + htmlComision(u) + '</section>').join('')
       + '<section class="card stack" id="aj-credito">' + htmlCredito() + '</section>'
@@ -595,7 +622,7 @@
       + '<p class="hint">Las de la lista son ejemplos: dejá las que realmente usan.</p></section>'
       + '<section class="card stack" id="aj-mios">' + htmlMisDatos() + '</section>'
       + '<section class="card stack"><div class="card-head"><h2>Respaldo y exportación</h2></div>'
-      + '<div class="note-mock">' + icon('info') + '<span>En el sistema real: copia de seguridad automática de la base de datos todos los días, guardada fuera del servidor. En este mockup los datos viven solo en este navegador.</span></div>'
+      + '<div class="note-mock">' + icon('info') + '<span>Por ahora los datos viven en este dispositivo y la copia de seguridad la bajás vos (arriba, en «Tus datos»). Cuando el sistema tenga usuario y contraseña, la copia va a ser automática todos los días y lo que cargue cada una se va a ver en los dos teléfonos.</span></div>'
       + (BG.publicado
         ? '<p class="small">Descargar los datos a Excel funciona en el mockup de la computadora; esta versión por link no permite descargas.</p>'
         : '<p class="small">Descargar los datos a Excel (CSV separado por punto y coma):</p><div class="row">'
@@ -616,6 +643,30 @@
         const repintar = (id, fn) => { const host = $('#' + id, root); if (host) { host.innerHTML = fn(); BG.enlazarCampos(host); } };
         root.addEventListener('change', async (e) => {
           const t = e.target;
+          if (t.id === 'aj-restaurar') {
+            const file = t.files && t.files[0];
+            t.value = '';
+            if (!file) return;
+            let r;
+            try {
+              const texto = await file.text();
+              const ok = await BG.modal({
+                titulo: 'Restaurar una copia de seguridad',
+                cuerpo: '<p>Los datos que tenés ahora en este dispositivo se <strong>reemplazan</strong> por los del archivo «' + esc(file.name) + '».</p>'
+                  + '<p>Antes de guardar nada, el sistema controla que las cuentas de esa copia cuadren.</p>',
+                acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Restaurar', valor: 'ok', clase: 'btn-primary' }],
+              });
+              if (ok !== 'ok') return;
+              r = BG.restaurarCopia(texto);
+            } catch (err) {
+              BG.toast(err.message || 'No se pudo leer ese archivo.', 'error');
+              return;
+            }
+            BG.renderChrome();
+            BG.toast('Copia restaurada: ' + r.clientes + ' clientas y ' + r.ventas + ' ventas.');
+            BG.ir('#/inicio');
+            return;
+          }
           if (t.id === 'cr-activo') { BG.guardarCredito({ activo: t.checked }); BG.toast(t.checked ? 'Límite de crédito activado.' : 'Sin control de límite.'); repintar('aj-credito', htmlCredito); return; }
           if (t.name === 'cr-dias') { BG.guardarCredito({ diasAtraso: Number(t.value) }); BG.toast('Atraso permitido: ' + t.value + ' días.'); return; }
           if (t.id === 'fi-activo') { BG.guardarFidelidad({ activo: t.checked }); BG.toast(t.checked ? 'Programa de clientas frecuentes activado.' : 'Programa desactivado.'); repintar('aj-fidelidad', htmlFidelidad); return; }
@@ -704,17 +755,51 @@
             BG.renderChrome();
             BG.toast('Datos de ejemplo reiniciados.');
             BG.ir('#/inicio');
-          } else if (a === 'borrar-mios') {
+          } else if (a === 'pin') {
+            let nuevo = null;
+            const r = await BG.modal({
+              titulo: 'Cambiar tu PIN de autorización',
+              cuerpo: '<p>Es el número que tecleás vos cuando Jazmín necesita tu permiso: vender fuera del límite de crédito, un precio especial por debajo del margen mínimo, devolver plata o anular con la caja cerrada.</p>'
+                + '<div class="fields"><div class="field"><label for="pin-n">PIN nuevo (4 a 6 números)</label>'
+                + '<input id="pin-n" class="input" type="password" inputmode="numeric" autocomplete="off" maxlength="6"></div>'
+                + '<div class="field"><label for="pin-r">Repetilo</label>'
+                + '<input id="pin-r" class="input" type="password" inputmode="numeric" autocomplete="off" maxlength="6"></div></div>'
+                + '<p class="error-text" id="pin-ne" hidden></p>'
+                + '<p class="hint">No uses 1234 ni tu año de nacimiento. Si te lo olvidás, cambialo de nuevo desde acá.</p>',
+              acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Guardar PIN', valor: 'ok', clase: 'btn-primary', submit: true }],
+              validar: (v, dlg) => {
+                const n = $('#pin-n', dlg).value.trim();
+                const rep = $('#pin-r', dlg).value.trim();
+                const er = $('#pin-ne', dlg);
+                const falla = !/^[0-9]{4,6}$/.test(n) ? 'El PIN tiene que ser de 4 a 6 números.'
+                  : n !== rep ? 'Los dos PIN no son iguales: escribilos de nuevo.'
+                    : n === '1234' ? 'Ese es el de fábrica: elegí otro.' : '';
+                if (falla) { er.textContent = falla; er.hidden = false; return false; }
+                nuevo = n;
+                return true;
+              },
+              onMount: (dlg) => $('#pin-n', dlg).focus(),
+            });
+            if (r !== 'ok') return;
+            BG.cambiarPin(nuevo);
+            BG.toast('PIN cambiado. Desde ahora Jazmín necesita el nuevo.');
+            BG.render();
+          } else if (a === 'copia') {
+            const nombre = descargarCopia();
+            BG.toast('Copia guardada: ' + nombre + '. Guardala en un lugar seguro (correo, Drive o pendrive).');
+            repintar('aj-mios', htmlMisDatos);
+          } else if (a === 'cero') {
             const ok = await BG.modal({
-              titulo: 'Borrar tus datos del Excel',
-              cuerpo: '<p>Se borran de este navegador las clientas, ventas y pagos que trajiste del Excel' + (BG.modoDatos === 'mios' ? ', y también lo que cargaste después sobre esos datos' : '') + '. Tu archivo de Excel no se toca: lo podés volver a traer cuando quieras.</p>',
-              acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Borrar', valor: 'ok', clase: 'btn-danger-solid' }],
+              titulo: 'Empezar de cero',
+              cuerpo: '<p>Se borran de este dispositivo <strong>todas las clientas, ventas, cobros y productos</strong> que cargaste, y el sistema queda vacío para arrancar.</p>'
+                + '<p>Los usuarios y los parámetros (dólar, courier, márgenes) se mantienen. Si querés conservar lo cargado, bajá antes una copia de seguridad.</p>',
+              acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Borrar todo y empezar', valor: 'ok', clase: 'btn-danger-solid' }],
             });
             if (ok !== 'ok') return;
-            BG.borrarMisDatos();
+            BG.empezarDeCero();
             BG.renderChrome();
-            BG.toast('Tus datos del Excel se borraron de este navegador.');
-            BG.render();
+            BG.toast('Listo: el sistema quedó vacío para empezar a cargar.');
+            BG.ir('#/inicio');
           }
         });
       },
@@ -746,7 +831,7 @@
       $('#aud-lista', root).innerHTML = '<div class="table-wrap"><table class="table table-compact"><thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>'
         + lista.slice(0, e.max).map((a) => '<tr><td class="nowrap">' + BG.fmtFecha(a.ts.slice(0, 10)) + ' ' + BG.fmtHora(a.ts) + '</td><td>' + esc(a.usuario) + '</td><td class="nowrap"><strong>' + esc(a.accion) + '</strong></td><td>' + esc(a.detalle) + '</td></tr>').join('')
         + '</tbody></table></div>' + (lista.length > e.max ? '<button type="button" class="btn btn-sm list-top" data-accion="mas">Mostrar más (' + (lista.length - e.max) + ')</button>' : '')
-        + (lista.length ? '' : '<p class="empty">No hay movimientos con ese filtro.</p>');
+        + (lista.length ? '' : BG.db.auditoria.length ? '<p class="empty">No hay movimientos con ese filtro.</p>' : '<p class="empty">Todavía no hay movimientos: acá va quedando todo lo que hagan vos y Jazmín.</p>');
     };
     return {
       html: html,
