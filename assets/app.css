@@ -1259,6 +1259,14 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 
 /* Datos reales traídos del Excel: la franja cambia de color para que nunca se confundan con los de ejemplo. */
 .mock-strip-mios { background: var(--good-soft); color: var(--good); }
+/* Aviso de versión nueva: el navegador puede estar corriendo la de ayer. */
+.version-nueva {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 90;
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center;
+  padding: 10px 16px; font-size: 14px; font-weight: 700;
+  background: var(--berry); color: var(--on-berry); box-shadow: var(--shadow-2);
+}
+.version-nueva .btn { background: var(--surface); color: var(--berry); border-color: var(--surface); }
 /* Estado de guardado en la nube: la persona tiene que ver de un vistazo si lo suyo ya subió. */
 .nube-estado { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; }
 .nube-sin-conexion, .nube-conflicto { color: var(--bad); }

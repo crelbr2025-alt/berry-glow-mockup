@@ -1404,9 +1404,46 @@
     window.scrollTo(0, 0);
   };
 
+  /* ── ¿El navegador está mostrando una versión vieja? ─────────────────── */
+  // Los navegadores guardan la página y pueden seguir corriendo la de ayer aunque uno recargue (a Brave le
+  // pasó). Cada archivo va con ?v=fecha: acá se compara la que está corriendo con la que hay publicada.
+  BG.VERSION_APP = (function () {
+    const s = document.currentScript || document.querySelector('script[src*="app-core.js"]');
+    const m = s && s.src && s.src.match(/[?&]v=([^&"]+)/);
+    return m ? m[1] : '';
+  })();
+  let avisandoVersion = false;
+  BG.controlarVersion = async () => {
+    if (!BG.VERSION_APP || avisandoVersion || location.protocol === 'file:') return null;
+    let texto;
+    try {
+      const r = await fetch(location.pathname.replace(/[^/]*$/, '') + 'index.html?t=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) return null;
+      texto = await r.text();
+    } catch (e) { return null; }
+    const m = texto.match(/app-core\.js\?v=([^&"]+)/);
+    if (!m || m[1] === BG.VERSION_APP) return null;
+    avisandoVersion = true;
+    const nueva = m[1];
+    const barra = document.createElement('div');
+    barra.className = 'version-nueva';
+    barra.innerHTML = '<span>Hay una versión nueva del sistema.</span>'
+      + '<button type="button" class="btn btn-sm btn-primary" id="bg-actualizar">Actualizar</button>';
+    document.body.appendChild(barra);
+    $('#bg-actualizar', barra).addEventListener('click', () => { location.replace(location.pathname + '?v=' + nueva); });
+    return nueva;
+  };
+
   BG.iniciar = () => {
     window.addEventListener('hashchange', BG.render);
     BG.render();
     if (BG.nube && BG.nube.configurada) BG.nube.arrancar();
+    setTimeout(BG.controlarVersion, 2500);
+    let ultimo = Date.now();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible' || Date.now() - ultimo < 300000) return;
+      ultimo = Date.now();
+      BG.controlarVersion();
+    });
   };
 })();
