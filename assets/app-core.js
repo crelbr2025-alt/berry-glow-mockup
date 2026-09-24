@@ -51,13 +51,56 @@
 
   const KEY_DB = 'berryglow.mockup.db.v1';
   const KEY_SESION = 'berryglow.mockup.sesion';
+  // Los datos reales traídos del Excel viven en otra clave: nunca se mezclan con los de ejemplo ni se publican.
+  const KEY_DB_MIOS = 'berryglow.mockup.db.mios';
+  const KEY_MIOS_INFO = 'berryglow.mockup.mios.info';
+  const KEY_MODO = 'berryglow.mockup.modo';
+  const VERSION_DB = 5;
+  BG.VERSION_DB = VERSION_DB;
   BG.leer = (k) => { try { const t = localStorage.getItem(k); return t ? JSON.parse(t) : null; } catch (e) { return null; } };
   BG.escribir = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } };
-  BG.guardar = () => BG.escribir(KEY_DB, BG.db);
-  BG.reiniciarDatos = () => { BG.db = window.BGSeed.crear(hoy()); BG.guardar(); };
+  const quitar = (k) => { try { localStorage.removeItem(k); } catch (e) { /* sin almacenamiento */ } };
+  /** 'ejemplo' = los datos ficticios del mockup; 'mios' = los datos reales traídos del Excel. */
+  BG.modoDatos = 'ejemplo';
+  BG.guardar = () => BG.escribir(BG.modoDatos === 'mios' ? KEY_DB_MIOS : KEY_DB, BG.db);
+  /** Vuelve a los datos de ejemplo del día de hoy. No toca los datos del Excel. */
+  BG.reiniciarDatos = () => {
+    BG.modoDatos = 'ejemplo';
+    BG.escribir(KEY_MODO, 'ejemplo');
+    BG.db = window.BGSeed.crear(hoy());
+    BG.guardar();
+  };
+  /** Resumen de los datos del Excel guardados en este navegador (o null). No abre la base entera. */
+  BG.infoMisDatos = () => BG.leer(KEY_MIOS_INFO);
+  BG.usarDatosDeEjemplo = () => {
+    BG.modoDatos = 'ejemplo';
+    BG.escribir(KEY_MODO, 'ejemplo');
+    BG.db = BG.leer(KEY_DB);
+    if (!BG.db || BG.db.version !== VERSION_DB) BG.reiniciarDatos();
+  };
+  /** Pasa a los datos del Excel: los recién importados (db) o los que ya estaban guardados (sin argumento). */
+  BG.usarMisDatos = (db, info) => {
+    if (db) {
+      if (!BG.escribir(KEY_DB_MIOS, db)) throw new Error('No hay lugar en este navegador para guardar tus datos. Liberá espacio (o usá otra computadora) y probá de nuevo.');
+      BG.escribir(KEY_MIOS_INFO, info || { importado: db.origen && db.origen.importado });
+    }
+    const d = db || BG.leer(KEY_DB_MIOS);
+    if (!d || d.version !== VERSION_DB) throw new Error('No hay datos del Excel guardados en este navegador: traelos desde Ajustes.');
+    BG.modoDatos = 'mios';
+    BG.escribir(KEY_MODO, 'mios');
+    BG.db = d;
+  };
+  BG.borrarMisDatos = () => {
+    quitar(KEY_DB_MIOS);
+    quitar(KEY_MIOS_INFO);
+    if (BG.modoDatos === 'mios') BG.usarDatosDeEjemplo();
+  };
 
-  BG.db = BG.leer(KEY_DB);
-  if (!BG.db || BG.db.version !== 5) BG.reiniciarDatos();
+  BG.db = null;
+  if (BG.leer(KEY_MODO) === 'mios') {
+    try { BG.usarMisDatos(); } catch (e) { BG.escribir(KEY_MODO, 'ejemplo'); }
+  }
+  if (!BG.db) BG.usarDatosDeEjemplo();
   BG.sesion = BG.leer(KEY_SESION);
   if (BG.sesion && !BG.db.usuarios.some((u) => u.id === BG.sesion.usuarioId)) BG.sesion = null;
   BG.guardarSesion = () => { if (BG.sesion) BG.escribir(KEY_SESION, BG.sesion); else { try { localStorage.removeItem(KEY_SESION); } catch (e) { /* sin almacenamiento */ } } };
@@ -996,6 +1039,7 @@
     [/^\/reportes$/, 'reportes', true],
     [/^\/caja$/, 'caja', 'verCaja'],
     [/^\/ajustes$/, 'ajustes', true],
+    [/^\/ajustes\/excel$/, 'migracion', true],
     [/^\/auditoria$/, 'auditoria', true],
     [/^\/recibo\/(v|c)\/([\w-]+)$/, 'recibo', 'emitirRecibos'],
   ];
@@ -1045,16 +1089,27 @@
       + '<div class="user-box"><span class="avatar">' + esc(iniciales(u.nombre)) + '</span><div class="grow"><strong>' + esc(u.nombre) + '</strong>'
       + '<small>' + (d ? 'Dueño · ve y cambia todo' : 'Vendedora · sin costos') + '</small></div>'
       + '<button type="button" class="btn-icon" data-action="salir" aria-label="Cerrar sesión" title="Cerrar sesión">' + icon('logout') + '</button></div>';
+    // Franja de arriba: dice siempre qué datos se están viendo (los de ejemplo o los reales del Excel).
+    const mios = BG.modoDatos === 'mios';
+    const franja = $('#mock-strip');
+    franja.classList.toggle('mock-strip-mios', mios);
+    franja.innerHTML = mios
+      ? '<span><strong>Tus datos del Excel</strong><span class="mock-largo"> · guardados solo en este navegador, aparte de los de ejemplo</span></span>'
+        + '<button type="button" class="linkish" data-action="modo-ejemplo">Ver los de ejemplo</button>'
+      : '<span><strong>Mockup para aprobar</strong><span class="mock-largo"> · datos de ejemplo guardados solo en este navegador</span>'
+        + '<span class="mock-corto"> · datos de ejemplo</span></span>'
+        + (d && BG.infoMisDatos() ? '<button type="button" class="linkish" data-action="modo-mios">Ver mis datos</button>' : '')
+        + '<button type="button" class="linkish" data-action="guia">Guía de prueba</button>';
     const duenio = BG.db.usuarios.find((x) => x.rol === 'admin');
     const vendedora = BG.db.usuarios.find((x) => x.rol === 'vendedor');
     $('#topbar-actions').innerHTML = '<span class="small muted hide-mobile">Ver como</span>'
       + '<div class="seg hide-mobile" role="group" aria-label="Ver el sistema como">'
       + '<button type="button" data-action="rol" data-rol="admin" aria-pressed="' + d + '">' + esc(duenio.nombre) + '</button>'
       + '<button type="button" data-action="rol" data-rol="vendedor" aria-pressed="' + !d + '">' + esc(vendedora.nombre) + '</button></div>'
-      + '<button type="button" class="btn btn-quiet hide-mobile" data-action="guia">' + icon('guide') + '<span>Guía</span></button>'
+      + (mios ? '' : '<button type="button" class="btn btn-quiet hide-mobile" data-action="guia">' + icon('guide') + '<span>Guía</span></button>')
       + '<button type="button" class="btn-icon btn-tema" data-action="tema" aria-label="Tema: ' + BG.TEMAS[BG.tema()].toLowerCase() + ' (tocá para cambiar)" title="Tema: ' + BG.TEMAS[BG.tema()].toLowerCase() + '">' + icon(BG.ICONO_TEMA[BG.tema()]) + '</button>'
       + (BG.puede('registrarVentas') ? '<a class="btn btn-primary hide-mobile" href="#/ventas/nueva">' + icon('plus') + '<span>Nueva venta</span></a>' : '')
-      + '<button type="button" class="btn-icon show-mobile" data-action="guia" aria-label="Guía de prueba">' + icon('guide') + '</button>';
+      + (mios ? '' : '<button type="button" class="btn-icon show-mobile" data-action="guia" aria-label="Guía de prueba">' + icon('guide') + '</button>');
     const tabs = ['<a class="tab" href="#/inicio" data-nav="inicio">' + icon('home') + '<span>Inicio</span></a>',
       '<a class="tab" href="#/clientes" data-nav="clientes">' + icon('users') + '<span>Clientes</span></a>'];
     tabs.push(BG.puede('registrarVentas')
@@ -1111,9 +1166,7 @@
       + '<aside class="sidebar" aria-label="Menú principal"><a class="brand" href="#/inicio" aria-label="Inicio">' + BG.logo() + '</a>'
       + '<nav class="nav" id="nav"></nav><div class="sidebar-foot" id="sidebar-foot"></div></aside>'
       + '<div class="main-col">'
-      + '<div class="mock-strip" role="note"><span><strong>Mockup para aprobar</strong><span class="mock-largo"> · datos de ejemplo guardados solo en este navegador</span>'
-      + '<span class="mock-corto"> · datos de ejemplo</span></span>'
-      + '<button type="button" class="linkish" data-action="guia">Guía de prueba</button></div>'
+      + '<div class="mock-strip" id="mock-strip" role="note"></div>'
       + '<header class="topbar"><a class="brand-mini" href="#/inicio" aria-label="Inicio">' + BG.marca() + '</a>'
       + '<div class="search" id="global-search"></div><div class="topbar-actions" id="topbar-actions"></div></header>'
       + '<main id="view" class="view" tabindex="-1"></main></div>'
@@ -1141,7 +1194,8 @@
         + item('#/resumen', 'pie', 'Resumen') + item('#/reportes', 'chart', 'Reportes') + item('#/auditoria', 'audit', 'Auditoría') + item('#/ajustes', 'sliders', 'Ajustes') : '')
       + '<div class="sheet-sep"></div>'
       + '<div class="sheet-tema"><span class="small muted">Tema</span>' + BG.selectorTema() + '</div>'
-      + '<button type="button" class="sheet-item" data-action="guia" data-cerrar-hoja>' + icon('guide') + 'Guía de prueba</button>'
+      + (BG.modoDatos === 'mios' ? '<button type="button" class="sheet-item" data-action="modo-ejemplo" data-cerrar-hoja>' + icon('refresh') + 'Ver los datos de ejemplo</button>'
+        : '<button type="button" class="sheet-item" data-action="guia" data-cerrar-hoja>' + icon('guide') + 'Guía de prueba</button>')
       + '<button type="button" class="sheet-item" data-action="rol" data-rol="' + (d ? 'vendedor' : 'admin') + '" data-cerrar-hoja>' + icon('eye') + 'Ver como ' + esc(otro.nombre) + (d ? ' (vendedora)' : ' (dueño)') + '</button>'
       + '<button type="button" class="sheet-item" data-action="salir" data-cerrar-hoja>' + icon('logout') + 'Cerrar sesión</button></div>';
     sheet.onclick = (e) => { if (e.target === sheet || e.target.closest('[data-cerrar-hoja]')) sheet.close(); };
@@ -1170,6 +1224,17 @@
       BG.toast('Tema: ' + BG.TEMAS[t].toLowerCase() + (t === 'auto' ? ' (sigue al del teléfono o la computadora)' : '') + '.');
     }
     else if (a === 'mas') { e.preventDefault(); abrirMas(); }
+    else if (a === 'modo-ejemplo' || a === 'modo-mios') {
+      e.preventDefault();
+      try {
+        if (a === 'modo-mios') BG.usarMisDatos(); else BG.usarDatosDeEjemplo();
+      } catch (err) { BG.toast(err.message, 'error'); return; }
+      const guia = $('#guide');
+      if (guia) guia.hidden = true;
+      renderChrome();
+      BG.toast(a === 'modo-mios' ? 'Estás viendo tus datos del Excel.' : 'Estás viendo los datos de ejemplo. Tus datos del Excel siguen guardados.');
+      if (location.hash === '#/inicio') BG.render(); else BG.ir('#/inicio');
+    }
     else if (a === 'rol') { e.preventDefault(); BG.cambiarRol(b.dataset.rol); }
     else if (a === 'salir') {
       e.preventDefault();

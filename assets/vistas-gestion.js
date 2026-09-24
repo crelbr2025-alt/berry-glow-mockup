@@ -519,6 +519,25 @@
       + '<p class="hint">Jazmín no ve esta configuración: al elegir la clienta le aparece el aviso con un botón para aplicar el beneficio.</p>';
   }
 
+  /** Tus datos reales traídos del Excel: se guardan aparte de los de ejemplo, solo en este navegador. */
+  function htmlMisDatos() {
+    const info = BG.infoMisDatos();
+    const mios = BG.modoDatos === 'mios';
+    const cuando = info && info.importado ? BG.fmtFecha(info.importado.slice(0, 10)) + ' a las ' + BG.fmtHora(info.importado) : '';
+    return '<div class="card-head"><h2>' + icon('file') + 'Tus datos del Excel</h2></div>'
+      + (mios
+        ? '<p class="callout callout-good">' + icon('check') + '<span>Estás viendo <strong>tus datos del Excel</strong>' + (info && info.archivo ? ' (<span class="mx-archivo">' + esc(info.archivo) + '</span>)' : '') + (cuando ? ', traídos el ' + cuando : '') + '. Se guardan solo en este navegador.</span></p>'
+        : info
+          ? '<p class="small">Tenés tus datos del Excel guardados en este navegador' + (cuando ? ' (traídos el ' + cuando + ')' : '') + '. Ahora estás viendo los datos de ejemplo.</p>'
+          : '<p class="small">Traé el Excel con el que trabajabas y mirá dentro del sistema a tus clientas, lo que te deben y lo que queda en stock. El archivo se lee acá (no se sube a ningún lado) y queda separado de los datos de ejemplo.</p>')
+      + '<div class="row">'
+      + (mios ? '<button type="button" class="btn btn-sm" data-action="modo-ejemplo">' + icon('refresh', 'i-sm') + 'Ver los de ejemplo</button>'
+        : info ? '<button type="button" class="btn btn-sm btn-primary" data-action="modo-mios">' + icon('eye', 'i-sm') + 'Ver mis datos</button>' : '')
+      + '<a class="btn btn-sm' + (info ? '' : ' btn-primary') + '" href="#/ajustes/excel">' + icon('upload', 'i-sm') + (info ? 'Volver a traer el Excel' : 'Traer mi Excel') + '</a>'
+      + (info ? '<button type="button" class="btn btn-sm btn-danger" data-accion="borrar-mios">' + icon('trash', 'i-sm') + 'Borrar mis datos</button>' : '')
+      + '</div>';
+  }
+
   BG.vistas.ajustes = () => {
     const cfg = BG.db.config;
     const hist = (lista, fmt) => '<ul class="hist">' + lista.slice().reverse().slice(0, 5).map((h) => '<li><span>' + fmt(h.valor) + '</span><span class="muted small">' + BG.fmtFecha(h.fecha) + ' · ' + esc(h.usuario) + '</span></li>').join('') + '</ul>';
@@ -574,6 +593,7 @@
       + '<div class="field"><label for="emp-servicio">Servicio</label><select id="emp-servicio" class="select"><option>Encomienda en ómnibus</option><option>Courier a domicilio</option><option>Correo</option><option>Transportadora</option></select></div></div>'
       + '<div class="form-actions"><button type="button" class="btn" data-accion="agregar-empresa">' + icon('plus') + 'Agregar empresa</button></div>'
       + '<p class="hint">Las de la lista son ejemplos: dejá las que realmente usan.</p></section>'
+      + '<section class="card stack" id="aj-mios">' + htmlMisDatos() + '</section>'
       + '<section class="card stack"><div class="card-head"><h2>Respaldo y exportación</h2></div>'
       + '<div class="note-mock">' + icon('info') + '<span>En el sistema real: copia de seguridad automática de la base de datos todos los días, guardada fuera del servidor. En este mockup los datos viven solo en este navegador.</span></div>'
       + (BG.publicado
@@ -582,7 +602,7 @@
           + '<button type="button" class="btn btn-sm" data-exportar="clientes">' + icon('download', 'i-sm') + 'Clientes</button>'
           + '<button type="button" class="btn btn-sm" data-exportar="ventas">' + icon('download', 'i-sm') + 'Ventas</button>'
           + '<button type="button" class="btn btn-sm" data-exportar="productos">' + icon('download', 'i-sm') + 'Productos</button></div>')
-      + '<div class="card-foot"><span class="small muted">¿Probaste mucho y querés empezar de nuevo?</span><button type="button" class="btn btn-sm btn-danger" data-accion="reiniciar">' + icon('refresh', 'i-sm') + 'Reiniciar datos de ejemplo</button></div></section>'
+      + (BG.modoDatos === 'mios' ? '' : '<div class="card-foot"><span class="small muted">¿Probaste mucho y querés empezar de nuevo?</span><button type="button" class="btn btn-sm btn-danger" data-accion="reiniciar">' + icon('refresh', 'i-sm') + 'Reiniciar datos de ejemplo</button></div>') + '</section>'
       + '</div></div>';
     return {
       html: html,
@@ -684,6 +704,17 @@
             BG.renderChrome();
             BG.toast('Datos de ejemplo reiniciados.');
             BG.ir('#/inicio');
+          } else if (a === 'borrar-mios') {
+            const ok = await BG.modal({
+              titulo: 'Borrar tus datos del Excel',
+              cuerpo: '<p>Se borran de este navegador las clientas, ventas y pagos que trajiste del Excel' + (BG.modoDatos === 'mios' ? ', y también lo que cargaste después sobre esos datos' : '') + '. Tu archivo de Excel no se toca: lo podés volver a traer cuando quieras.</p>',
+              acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Borrar', valor: 'ok', clase: 'btn-danger-solid' }],
+            });
+            if (ok !== 'ok') return;
+            BG.borrarMisDatos();
+            BG.renderChrome();
+            BG.toast('Tus datos del Excel se borraron de este navegador.');
+            BG.render();
           }
         });
       },

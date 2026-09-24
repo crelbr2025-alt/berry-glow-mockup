@@ -1238,3 +1238,31 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
   .table-venta th { font-size: 11px; letter-spacing: 0; padding-left: 5px; padding-right: 5px; }
   .table-venta td { padding-left: 5px; padding-right: 5px; }
 }
+
+/* Datos reales traídos del Excel: la franja cambia de color para que nunca se confundan con los de ejemplo. */
+.mock-strip-mios { background: var(--good-soft); color: var(--good); }
+.mock-strip-mios strong { color: var(--good); }
+
+/* Traer mis datos del Excel */
+.mx-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.mx-item { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; line-height: 1.5; color: var(--ink-2); }
+.mx-item .i { flex: none; margin-top: 2px; }
+.mx-bad .i { color: var(--bad); }
+.mx-warn .i { color: var(--warn); }
+.mx-info .i { color: var(--muted); }
+.mx-hojas .list-row { gap: 12px; }
+.mx-hoja.is-off .row-main { opacity: 0.55; }
+.mx-check { width: 20px; height: 20px; flex: none; accent-color: var(--berry); }
+.mx-fecha { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: none; }
+.mx-fecha .input { width: 152px; min-height: 38px; padding: 6px 8px; }
+.mx-grupo { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 10px; }
+.mx-variantes { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.mx-variantes label { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; line-height: 1.45; }
+.mx-variantes input { width: 18px; height: 18px; margin-top: 2px; flex: none; accent-color: var(--berry); }
+@media (max-width: 560px) {
+  .mx-hoja { flex-wrap: wrap; }
+  .mx-hoja .row-main { flex-basis: calc(100% - 40px); }
+  .mx-fecha { flex-direction: row; align-items: center; gap: 8px; margin-left: 32px; }
+}
+.mx-archivo { overflow-wrap: anywhere; }
+.callout span { min-width: 0; overflow-wrap: anywhere; }

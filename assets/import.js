@@ -187,6 +187,86 @@
     return salida;
   }
 
+  /* ── Libro completo: todas las hojas (sin DOMParser, así también corre en Node) ── */
+
+  const ENTIDADES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+  const desescapar = (s) => s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => (e[0] === '#'
+    ? String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10))
+    : (ENTIDADES[e] != null ? ENTIDADES[e] : m)));
+  function atributos(tag) {
+    const o = {};
+    tag.replace(/([\w:]+)\s*=\s*"([^"]*)"/g, (m, k, v) => { o[k] = desescapar(v); return m; });
+    return o;
+  }
+  /** Texto de un <si> o de un <is>: junta los <t>, sin la guía fonética (<rPh>). */
+  function textoDeRuns(fragmento) {
+    const partes = [];
+    fragmento.replace(/<rPh\b[\s\S]*?<\/rPh>/g, '').replace(/<t\b[^>]*?\/>|<t\b[^>]*>([\s\S]*?)<\/t>/g, (m, t) => { partes.push(t ? desescapar(t) : ''); return m; });
+    return partes.join('');
+  }
+  function filasDeHoja(xmlHoja, compartidos) {
+    const filas = [];
+    let siguiente = 0;
+    const reFila = /<row\b([^>]*?)\/>|<row\b([^>]*)>([\s\S]*?)<\/row>/g;
+    let m;
+    while ((m = reFila.exec(xmlHoja))) {
+      const a = atributos(m[1] != null ? m[1] : m[2]);
+      const idx = a.r ? parseInt(a.r, 10) - 1 : siguiente;
+      siguiente = idx + 1;
+      const fila = [];
+      const reCelda = /<c\b([^>]*?)\/>|<c\b([^>]*)>([\s\S]*?)<\/c>/g;
+      let c;
+      let col = 0;
+      while ((c = reCelda.exec(m[3] || ''))) {
+        const ca = atributos(c[1] != null ? c[1] : c[2]);
+        if (ca.r) col = indiceColumna(ca.r);
+        const interior = c[3] || '';
+        const vm = /<v\b[^>]*>([\s\S]*?)<\/v>/.exec(interior);
+        const v = vm ? desescapar(vm[1]) : null;
+        let valor = null;
+        if (ca.t === 's') valor = v == null ? '' : (compartidos[parseInt(v, 10)] || '');
+        else if (ca.t === 'inlineStr') valor = textoDeRuns(interior);
+        else if (ca.t === 'str') valor = v == null ? '' : v;
+        else if (ca.t === 'b') valor = v === '1';
+        else if (ca.t === 'e') valor = null;
+        else if (v != null && v !== '') { const n = Number(v); valor = Number.isFinite(n) ? n : v; }
+        fila[col] = valor;
+        col++;
+      }
+      filas[idx] = fila;
+    }
+    const salida = [];
+    for (let i = 0; i < filas.length; i++) {
+      const f = filas[i] || [];
+      const limpia = [];
+      for (let j = 0; j < f.length; j++) limpia.push(f[j] === undefined ? null : f[j]);
+      salida.push(limpia);
+    }
+    return salida;
+  }
+  /** Todas las hojas del libro, en orden: [{ nombre, oculta, filas }] con los valores que Excel dejó calculados. */
+  async function leerLibro(buffer) {
+    const zip = abrirZip(buffer);
+    const libro = await zip.texto('xl/workbook.xml');
+    if (!libro) throw new Error('El archivo no es un Excel .xlsx válido.');
+    const destinos = {};
+    ((await zip.texto('xl/_rels/workbook.xml.rels')) || '').replace(/<Relationship\b[^>]*>/g, (tag) => { const a = atributos(tag); destinos[a.Id] = a.Target || ''; return tag; });
+    const compartidos = [];
+    const ss = await zip.texto('xl/sharedStrings.xml');
+    if (ss) ss.replace(/<si\b[^>]*?\/>|<si\b[^>]*>([\s\S]*?)<\/si>/g, (m, cont) => { compartidos.push(cont ? textoDeRuns(cont) : ''); return m; });
+    const hojas = [];
+    for (const tag of libro.match(/<sheet\b[^>]*>/g) || []) {
+      const a = atributos(tag);
+      const rid = a['r:id'] || a.id || Object.keys(a).filter((k) => /:id$/.test(k)).map((k) => a[k])[0];
+      const t = destinos[rid] || '';
+      const ruta = t.startsWith('/') ? t.slice(1) : 'xl/' + t.replace(/^\.\//, '');
+      const x = await zip.texto(ruta);
+      hojas.push({ nombre: a.name || '', oculta: a.state === 'hidden' || a.state === 'veryHidden', filas: x ? filasDeHoja(x, compartidos) : [] });
+    }
+    if (!hojas.length) throw new Error('El Excel no tiene hojas con datos.');
+    return hojas;
+  }
+
   async function textoDeArchivo(file) {
     const buf = await file.arrayBuffer();
     try {
@@ -304,5 +384,5 @@
     return { filas: filas, filaEncabezado: filaEnc + 1, faltan: faltan };
   }
 
-  return { CAMPOS: CAMPOS, parseCSV: parseCSV, leerXLSX: leerXLSX, leerArchivo: leerArchivo, validar: validar, mapearEncabezados: mapearEncabezados };
+  return { CAMPOS: CAMPOS, parseCSV: parseCSV, leerXLSX: leerXLSX, leerLibro: leerLibro, leerArchivo: leerArchivo, validar: validar, mapearEncabezados: mapearEncabezados };
 });

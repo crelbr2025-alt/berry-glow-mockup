@@ -9,3 +9,6 @@ vender. Tema claro u oscuro. Es una maqueta para aprobar las pantallas: usa **da
 ficticios** y todo se guarda solo en el navegador de quien lo abre.
 
 Para entrar: «Entrar como Ariel (dueño)» o «Entrar como Jazmín (vendedora)». No pide contraseña.
+
+El dueño puede además **traer los datos de su propio Excel** (Ajustes → «Traer mi Excel»): el archivo se lee
+en el navegador, no se sube a ningún lado, y lo traído queda guardado aparte de los datos de ejemplo.
