@@ -1348,7 +1348,10 @@
       e.preventDefault();
       try {
         if (a === 'modo-mios') BG.usarMisDatos(); else BG.usarDatosDeEjemplo();
-      } catch (err) { BG.toast(err.message, 'error'); return; }
+      } catch (err) {
+        // Este aparato todavía no tiene datos propios: se arranca vacío en vez de dejarlo en los de ejemplo.
+        if (a === 'modo-mios') BG.empezarDeCero(); else { BG.toast(err.message, 'error'); return; }
+      }
       const guia = $('#guide');
       if (guia) guia.hidden = true;
       renderChrome();
@@ -1358,6 +1361,8 @@
     else if (a === 'ir-cuenta') {
       e.preventDefault();
       if (BG.soloAca) BG.soloAca(false);
+      // Puede venir de los datos de ejemplo: se vuelve a los de la tienda antes de pedir la cuenta.
+      if (BG.modoDatos !== 'mios') { try { BG.usarMisDatos(); } catch (err) { BG.empezarDeCero(); } }
       BG.sesion = null;
       BG.guardarSesion();
       location.hash = '#/inicio';

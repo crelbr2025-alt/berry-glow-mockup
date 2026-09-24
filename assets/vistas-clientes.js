@@ -50,6 +50,8 @@
           + '<div class="field"><label for="clave">Contraseña</label><input id="clave" class="input" type="password" autocomplete="off"></div>'
           + '<p class="error-text" id="login-error" hidden></p>'
           + '<button class="btn btn-primary btn-lg btn-block" type="submit">Entrar</button></form>'
+          + (nube.configurada ? '<div class="callout">' + icon('info') + '<span>Estás en los <strong>datos de ejemplo</strong>, para practicar: no son los de la tienda. '
+            + '<button type="button" class="linkish" data-action="ir-cuenta">Entrar con mi cuenta</button> para trabajar con los datos de verdad.</span></div>' : '')
           + '<div class="demo-hint"><span><strong>Datos de ejemplo:</strong> el ingreso es de mentira y no pide contraseña. Elegí con qué vista entrar:</span>'
           + '<div class="row"><button type="button" class="btn btn-sm" data-demo="ariel">Entrar como Ariel (dueño)</button>'
           + '<button type="button" class="btn btn-sm" data-demo="jazmin">Entrar como Jazmín (vendedora)</button></div>'
