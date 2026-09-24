@@ -166,14 +166,14 @@
     }
     const vacia = !fila.datos || !Array.isArray(fila.datos.clientes);
     if (vacia) {
+      // La nube está vacía: si el dueño ya tenía cargado algo en este aparato, eso es lo que sube.
       const mios = BG.datosDeEsteAparato();
-      const conCosas = mios && (mios.clientes.length || mios.productos.length || mios.ventas.length);
-      let db = mios && conCosas && BG.esDuenaPerfil(N.perfil) ? mios : window.BGSeed.vacio(BG.hoy());
-      if (mios && conCosas && BG.esDuenaPerfil(N.perfil)) BG.avisoSubida = { clientes: mios.clientes.length, ventas: mios.ventas.length };
+      const subeLoDeAca = !!(mios && (mios.clientes.length || mios.productos.length || mios.ventas.length) && BG.esDuenaPerfil(N.perfil));
       N.version = fila.version || 0;
       N.activa = true;
-      BG.usarDatosDeLaNube(db);
+      BG.usarDatosDeLaNube(subeLoDeAca ? mios : window.BGSeed.vacio(BG.hoy()));
       await empujarAhora(true);
+      if (subeLoDeAca) BG.toast('Subimos a la nube lo que tenías cargado en este aparato: ' + mios.clientes.length + ' clientas y ' + mios.ventas.length + ' ventas.');
     } else {
       N.version = fila.version;
       N.actualizado = fila.actualizado;
