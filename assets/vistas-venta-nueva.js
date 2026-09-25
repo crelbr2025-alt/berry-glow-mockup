@@ -123,6 +123,7 @@
       + '<div class="search" id="s-buscar"><label class="sr-only" for="q-prod">Buscar producto</label><div class="search-box">' + icon('search')
       + '<input id="q-prod" class="search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Buscar producto para agregar" role="combobox" aria-expanded="false" aria-controls="q-prod-lista" aria-autocomplete="list"></div>'
       + '<ul class="cb-list" id="q-prod-lista" role="listbox" hidden></ul></div>'
+      + '<div id="s-hay"></div>'
       + '<div class="lines" id="s-items"></div><div id="s-desc" class="stack"></div></section>'
       + '</div><div class="stack sticky-col">'
       + '<section class="card stack" aria-labelledby="t-cob"><h2 class="card-title" id="t-cob">3 · Cobro</h2>'
@@ -149,6 +150,8 @@
     const descuento = () => (!b.desc.activo || !b.desc.valor ? null : { tipo: b.desc.tipo, valor: b.desc.valor, motivo: b.desc.motivo || null, nota: b.desc.nota || '' });
     // Precio especial: cualquier precio distinto del de lista. La vendedora lo pone con motivo; el dueño, con motivo opcional.
     const puedeEspecial = duena || BG.puede('preciosEspeciales');
+    // La vendedora puede ajustar el precio, pero solo hacia arriba: bajar el precio es decisión del dueño.
+    const soloSubir = !duena;
     const esEspecial = (it) => it.precio !== BG.producto(it.productoId).precioVenta;
     const costoDe = (it) => BG.producto(it.productoId).costoTotalGs || 0;
     const infoItem = (it) => (esEspecial(it) && it.precio > 0 ? BG.infoPrecio(BG.evaluarPrecio(it.precio, costoDe(it)), true) : '');
@@ -204,13 +207,19 @@
         precio = '<p class="small muted">Precio de lista ' + gs(it.precio) + '</p>';
       } else if (!it.abierto) {
         precio = '<div class="precio-lista"><span class="small muted">Precio de lista ' + gs(p.precioVenta) + '</span>'
-          + '<button type="button" class="btn-link" data-accion="especial" data-i="' + i + '">' + icon('tag', 'i-sm') + 'Poner precio especial</button></div>';
+          + '<button type="button" class="btn-link" data-accion="especial" data-i="' + i + '">' + icon('tag', 'i-sm')
+          + (soloSubir ? 'Cobrar un precio más alto' : 'Poner precio especial') + '</button></div>';
       } else {
         precio = '<div class="especial">'
           + '<div class="precio-lista"><span class="small muted">Precio de lista <span class="strike">' + gs(p.precioVenta) + '</span></span>'
           + '<button type="button" class="btn-link" data-accion="lista" data-i="' + i + '">Volver al precio de lista</button></div>'
-          + '<div class="field"><label for="esp-' + i + '">Precio especial por unidad</label>' + BG.campoGs('esp-' + i, it.precio, 'data-i="' + i + '" data-otro="1"') + '</div>'
-          + camposMotivo(i, it, true)
+          + '<div class="field"><label for="esp-' + i + '">' + (soloSubir ? 'Precio por unidad para esta venta' : 'Precio especial por unidad') + '</label>'
+          + BG.campoGs('esp-' + i, it.precio, 'data-i="' + i + '" data-otro="1"')
+          + (soloSubir ? '<span class="hint">Tiene que ser igual o más que el de lista (' + gs(p.precioVenta) + '). Un precio más bajo lo hace ' + esc(BG.nombreDuena()) + '.</span>' : '') + '</div>'
+          + (soloSubir
+            ? '<div class="field"><label for="nota-' + i + '">¿Por qué este precio? <span class="small muted">(opcional)</span></label>'
+              + '<input id="nota-' + i + '" class="input" autocomplete="off" maxlength="120" data-nota="' + i + '" value="' + esc(it.nota || '') + '" placeholder="Ej.: se lo llevó con el envío incluido"></div>'
+            : camposMotivo(i, it, true))
           + '<p class="precio-info" id="pi-' + i + '">' + infoItem(it) + '</p></div>';
       }
       return '<div class="line"><div class="line-top"><div class="grow"><div class="row-title">' + esc(p.descripcion) + '</div>'
@@ -233,7 +242,7 @@
       const host = $('#s-desc', root);
       // El regalo de cumpleaños queda fijo (no se edita el %), así sigue valiendo como beneficio del programa.
       if (b.regalo && b.items.length) { host.innerHTML = '<p class="precio-info">' + icon('gift', 'i-sm') + '<span>Descuento de cumpleaños: <strong>' + b.regalo + ' %</strong></span></p>'; return; }
-      if (!b.items.length || !puedeEspecial) { host.innerHTML = ''; return; }
+      if (!b.items.length || !puedeEspecial || soloSubir) { host.innerHTML = ''; return; }
       host.innerHTML = '<label class="check-inline"><input type="checkbox" id="d-activo"' + (b.desc.activo ? ' checked' : '') + '> Aplicar un descuento a esta venta</label>'
         + (b.desc.activo ? '<div class="row"><div class="seg" role="radiogroup" aria-label="Tipo de descuento">'
           + '<label><input type="radio" name="d-tipo" value="monto"' + (b.desc.tipo === 'monto' ? ' checked' : '') + '>En ₲</label>'
@@ -291,6 +300,31 @@
       if (clave === 'editor') BG.pintarPlanPreview(host, 'pv', b.plan, resto);
     };
 
+    /** Productos con stock, del último cargado al primero (es lo que más se busca al vender). */
+    const disponibles = () => BG.db.productos.filter((p) => p.precioVenta && BG.disponibles(p) > 0)
+      .sort((a, b2) => String(b2.ts || b2.fechaCarga || '').localeCompare(String(a.ts || a.fechaCarga || '')));
+    const fila = (p) => '<button type="button" class="hay-item" data-accion="agregar-prod" data-id="' + esc(p.id) + '">'
+      + '<span class="grow"><span class="row-title">' + esc(p.descripcion) + '</span>'
+      + '<span class="row-sub">' + esc(p.categoria) + ' · quedan ' + BG.disponibles(p) + '</span></span>'
+      + '<span class="amount">' + gs(p.precioVenta) + '</span></button>';
+    const pintarHay = () => {
+      const host = $('#s-hay', root);
+      if (!host) return;
+      const lista = disponibles();
+      if (!lista.length) {
+        host.innerHTML = '<p class="hint">Todavía no hay artículos con stock y precio.' + (duena || BG.puede('cargarProductos') ? ' <a href="#/productos/nuevo">Cargar uno</a>' : '') + '</p>';
+        return;
+      }
+      const ultimos = lista.slice(0, 8);
+      const cats = {};
+      lista.forEach((p) => { (cats[p.categoria] || (cats[p.categoria] = [])).push(p); });
+      host.innerHTML = '<div class="hay"><p class="hay-tit">' + icon('tag', 'i-sm') + 'Últimos que entraron</p>'
+        + '<div class="hay-lista">' + ultimos.map(fila).join('') + '</div>'
+        + '<details class="hay-todo"><summary>Ver todo lo que hay (' + lista.length + (lista.length === 1 ? ' artículo' : ' artículos') + ')</summary>'
+        + Object.keys(cats).sort().map((c) => '<p class="hay-cat">' + esc(c) + '</p><div class="hay-lista">' + cats[c].map(fila).join('') + '</div>').join('')
+        + '</details>'
+        + (BG.puede('verPrecios') ? '<a class="small" href="#/productos">Ver la lista de precios completa</a>' : '') + '</div>';
+    };
     const agregar = (p) => {
       if (!p.precioVenta) { BG.toast('«' + p.descripcion + '» no tiene precio de venta: asignáselo en Productos antes de venderlo.', 'error'); return; }
       const ya = b.items.find((it) => it.productoId === p.id);
@@ -303,6 +337,7 @@
       }
       pintarItems();
       pintarTotales();
+      pintarHay();
     };
     const registrar = async () => {
       const err = $('#err-venta', root);
@@ -319,11 +354,19 @@
       if (b.fecha > BG.hoy()) return fallar('La fecha de la venta no puede ser futura.');
       if (b.desc.activo && b.desc.tipo === 'porcentaje' && b.desc.valor && C.cmp(C.asQ(b.desc.valor), C.Q(100n)) > 0) return fallar('El descuento no puede pasar del 100 %.');
       for (const it of b.items.filter(esEspecial)) {
-        const nombre = BG.producto(it.productoId).descripcion;
-        if (!duena && !it.motivo) return fallar('Elegí el motivo del precio especial de «' + nombre + '».');
+        const prod = BG.producto(it.productoId);
+        const nombre = prod.descripcion;
+        if (soloSubir) {
+          if (it.precio < prod.precioVenta) {
+            return fallar('«' + nombre + '» no puede ir a menos del precio de lista (' + gs(prod.precioVenta) + '). Para cobrar menos lo tiene que hacer ' + BG.nombreDuena() + '.');
+          }
+          it.motivo = BG.MOTIVO_ACORDADO;
+          continue;
+        }
         if (it.motivo === 'Otro' && !(it.nota || '').trim()) return fallar('Contá en «Detalle» el motivo del precio especial de «' + nombre + '».');
       }
-      if (descuento() && !duena && !b.desc.motivo) return fallar('Elegí el motivo del descuento.');
+      if (descuento() && soloSubir && !b.regalo) return fallar('El descuento de la venta lo hace ' + BG.nombreDuena() + '.');
+      if (descuento() && !duena && !b.regalo && !b.desc.motivo) return fallar('Elegí el motivo del descuento.');
       if (descuento() && b.desc.motivo === 'Otro' && !(b.desc.nota || '').trim()) return fallar('Contá en «Detalle» el motivo del descuento.');
       const t = calc();
       if (t.total <= 0) return fallar('El total quedó en ₲ 0: revisá el descuento.');
@@ -390,10 +433,13 @@
         pintarCliente();
         $('#s-fecha', root).innerHTML = campoFecha(b.fecha);
         pintarItems();
+        pintarHay();
         pintarPagos();
         pintarTotales();
         BG.combobox($('#q-prod', root), $('#q-prod-lista', root), {
-          buscar: (q) => BG.buscarProductos(q, 8).map((p) => ({ p: p })),
+          mostrarVacio: true,
+          buscar: (q) => (q.trim() ? BG.buscarProductos(q, 8) : disponibles().slice(0, 10)).map((p) => ({ p: p })),
+          vacio: () => 'No hay artículos con stock y precio para vender.',
           pintar: (it, q) => {
             const p = it.p;
             const disp = BG.disponibles(p);
@@ -471,7 +517,9 @@
             const pts = BG.puntosDe(b.clienteId);
             BG.modal({
               titulo: 'Canjear puntos',
-              cuerpo: '<p>' + pts.puntos + ' puntos = <strong>' + gs(pts.valor) + '</strong>. Se suman a su saldo a favor y se descuentan de esta compra.</p>',
+              cuerpo: '<p>' + pts.puntos + ' puntos = <strong>' + gs(pts.valor) + '</strong>. Se suman a su saldo a favor y se descuentan de esta compra.</p>'
+                + '<p class="hint">Si al final no registrás esta venta, los puntos ya canjeados le quedan como saldo a favor para la próxima compra.</p>'
+                + '<details class="terminos"><summary>Condiciones del programa (leéselas a la clienta si pregunta)</summary><p>' + esc(BG.configFidelidad().terminos) + '</p></details>',
               acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Canjear', valor: 'ok', clase: 'btn-primary' }],
             }).then((ok) => {
               if (ok !== 'ok') return;
@@ -484,7 +532,8 @@
               } catch (er) { BG.toast(er.message, 'error'); }
             });
           }
-          else if (a === 'quitar-item') { b.items.splice(i, 1); pintarItems(); pintarTotales(); }
+          else if (a === 'quitar-item') { b.items.splice(i, 1); pintarItems(); pintarTotales(); pintarHay(); }
+          else if (a === 'agregar-prod') { const p2 = BG.producto(btn.dataset.id); if (p2) agregar(p2); }
           else if (a === 'especial') {
             b.items[i].abierto = true;
             pintarItems();

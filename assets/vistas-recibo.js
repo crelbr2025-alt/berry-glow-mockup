@@ -68,6 +68,10 @@
       puntos: BG.puntosDe(cli.id),
       // En el recibo de una compra que todavía debe: cuántos puntos va a sumar cuando la termine de pagar.
       puntosAlPagar: tipo === 'v' && BG.configFidelidad().activo && BG.saldoVenta(ventas[0]) > 0 ? BG.puntosDeVenta(ventas[0]) : 0,
+      // Compras de este recibo que YA quedaron pagadas: los puntos que sumaron (es lo que la clienta quiere ver).
+      puntosGanados: BG.configFidelidad().activo
+        ? ventas.filter((v) => !v.anulada && BG.saldoVenta(v) <= 0).reduce((a, v) => a + BG.puntosDeVenta(v), 0) : 0,
+      terminosPuntos: BG.configFidelidad().activo ? BG.configFidelidad().terminos : '',
       clienteRef: cli,
     };
   }
@@ -104,7 +108,9 @@
         + (q.vencida ? 'venció el ' : 'vence el ') + BG.fmtFecha(q.vence) + '</td><td class="num">' + gs(q.falta) + '</td></tr>').join('') + '</tbody></table>' : '')
       + (unaCompra ? '' : '<p class="r-account"><span>Saldo de esta compra</span><strong>' + gs(c.saldo) + '</strong></p>')
       + '</section>';
-    return '<article class="receipt' + (formato === 'ticket' ? ' is-ticket' : '') + '" id="recibo" style="--r-brand:' + esc(m.principal) + ';--r-accent:' + esc(m.acento) + ';--mark-berry:' + esc(m.principal) + ';--mark-glow:' + esc(m.acento) + '">'
+    const filas = d.compras.reduce((a, c) => a + c.items.length + c.pagos.length + c.cuotas.length + c.devoluciones.length + 3, 0);
+    const largo = filas > 16;
+    return '<article class="receipt' + (formato === 'ticket' ? ' is-ticket' : '') + (largo ? ' is-largo' : '') + '" id="recibo" style="--r-brand:' + esc(m.principal) + ';--r-accent:' + esc(m.acento) + ';--mark-berry:' + esc(m.principal) + ';--mark-glow:' + esc(m.acento) + '">'
       + '<header class="r-head"><div class="r-logo">' + BG.logo(true) + '</div>'
       + '<div class="r-doc"><h1>' + esc(d.titulo) + '</h1>' + (d.numero ? '<p class="r-num">' + BG.fmtRecibo(d.numero) + '</p>' : '') + '<p>Emitido el ' + BG.fmtFecha(d.emision) + '</p></div></header>'
       + '<p class="r-contact">' + [t.whatsapp && 'WhatsApp ' + esc(t.whatsapp), t.instagram && 'Instagram ' + esc(t.instagram), t.direccion && esc(t.direccion)].filter(Boolean).map((x) => '<span>' + x + '</span>').join('') + '</p>'
@@ -113,8 +119,11 @@
       + '<div class="r-saldo' + (saldoPrincipal > 0 ? '' : ' is-paid') + '"><span>' + etiquetaSaldo + '</span><strong>' + gs(saldoPrincipal) + '</strong></div>'
       + (deUnaCompra && d.saldoCuenta !== saldoPrincipal ? '<p class="r-account"><span>Saldo total de tu cuenta (todas las compras)</span><strong>' + gs(d.saldoCuenta) + '</strong></p>' : '')
       + (d.aFavor > 0 ? '<div class="r-favor"><span>Saldo a tu favor para la próxima compra</span><strong>' + gs(d.aFavor) + '</strong></div>' : '')
-      + (d.puntos && d.puntos.puntos > 0 ? '<p class="r-account"><span>Tus puntos: ' + d.puntos.puntos + (d.puntos.canjeable ? ' · ya los podés usar' : '') + '</span><strong>' + gs(d.puntos.valor) + '</strong></p>' : '')
+      + (d.puntosGanados ? '<p class="r-account r-puntos"><span>' + (d.compras.length === 1 ? 'Esta compra te sumó' : 'Estas compras te sumaron') + '</span><strong>' + d.puntosGanados + (d.puntosGanados === 1 ? ' punto' : ' puntos') + '</strong></p>' : '')
+      + (d.puntos && d.puntos.puntos > 0 ? '<p class="r-account"><span>Tus puntos acumulados: ' + d.puntos.puntos + (d.puntos.canjeable ? ' · ya los podés usar' : '') + '</span><strong>' + gs(d.puntos.valor) + '</strong></p>' : '')
       + (d.puntosAlPagar ? '<p class="r-account"><span>Al terminar de pagar esta compra sumás</span><strong>' + d.puntosAlPagar + ' puntos</strong></p>' : '')
+      + ((d.puntosGanados || d.puntosAlPagar || (d.puntos && d.puntos.puntos > 0)) && d.terminosPuntos
+        ? '<p class="r-terminos"><strong>Programa de clientas frecuentes:</strong> ' + esc(d.terminosPuntos) + '</p>' : '')
       + '<footer class="r-foot"><p class="r-thanks">' + esc(t.mensaje || '¡Gracias por tu compra!') + '</p><p class="r-legal">' + esc(t.nombre) + ' · Comprobante interno de pago, no válido como factura.</p></footer>'
       + '</article>';
   }
@@ -144,11 +153,7 @@
     const cli = d.clienteRef;
     const ventasOrig = tipo === 'v' ? [BG.venta(args[1])] : BG.ventasDeCliente(cli.id);
     const prox = d.compras.length === 1 && d.compras[0].cuotas.length ? d.compras[0].cuotas[0] : null;
-    const textoWa = 'Hola ' + cli.nombre.split(' ')[0] + ', te paso el resumen de tu cuenta en ' + d.tienda.nombre + ': '
-      + (d.compras.length === 1 ? 'compra ' + BG.fmtRecibo(d.compras[0].numero) + ' por ' + gs(d.compras[0].total) + ', pagado ' + gs(d.compras[0].pagado) + '. ' : '')
-      + (d.saldoCuenta > 0 ? 'Saldo pendiente: ' + gs(d.saldoCuenta) + '.' : '¡Tu cuenta está al día!')
-      + (prox ? ' Próxima cuota: ' + gs(prox.falta) + ' el ' + BG.fmtFecha(prox.vence) + '.' : '')
-      + (d.aFavor > 0 ? ' Tenés ' + gs(d.aFavor) + ' a favor para tu próxima compra.' : '') + ' ¡Gracias!';
+    const textoWa = BG.textosWa.recibo(cli, d, prox);
     const volver = tipo === 'v' ? '#/ventas/' + args[1] : '#/clientes/' + cli.id;
     const html = '<div class="page">'
       + '<div class="receipt-toolbar no-print"><a class="back-link" href="' + volver + '">' + icon('left', 'i-sm') + 'Volver</a>'

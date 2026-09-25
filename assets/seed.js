@@ -175,6 +175,7 @@
   const DE_JAZMIN = new Set([16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29]);
   // Permisos de la vendedora: Ariel los puede cambiar desde Ajustes.
   const PERMISOS_VENDEDORA = {
+    cargarProductos: true,
     emitirRecibos: true, registrarVentas: true, registrarCobros: true, editarClientes: true,
     verPrecios: true, verCaja: true, prepararEnvios: true, preciosEspeciales: true, verGanancia: true, devoluciones: true,
   };
@@ -255,13 +256,28 @@
 
   function crear(hoy) {
     const F = (dias) => sumarDias(hoy, -dias);
-    const T = (dias, hora) => F(dias) + 'T' + hora;
+    // Lo de HOY no puede figurar en una hora que todavía no pasó: si son las 9 de la mañana, una venta
+    // «de hoy a las 19:40» se lee como un error. Las horas del día de hoy se acomodan dentro de lo ya vivido,
+    // manteniendo el orden entre ellas.
+    const ahora = new Date();
+    const minutosAhora = ahora.getHours() * 60 + ahora.getMinutes();
+    const ABRE = 7 * 60;
+    const CIERRA = 21 * 60;
+    const finHoy = Math.max(ABRE + 30, minutosAhora - 5);
+    const enHoras = (min) => String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(Math.round(min % 60)).padStart(2, '0');
+    const horaDeHoy = (hora) => {
+      const min = Number(hora.slice(0, 2)) * 60 + Number(hora.slice(3, 5));
+      if (min <= finHoy) return hora;
+      const proporcion = (min - ABRE) / (CIERRA - ABRE);
+      return enHoras(Math.max(ABRE, Math.min(finHoy, ABRE + proporcion * (finHoy - ABRE))));
+    };
+    const T = (dias, hora) => F(dias) + 'T' + (dias === 0 ? horaDeHoy(hora) : hora);
     const auditoria = [];
     const log = (ts, tipo, accion, detalle, usuario) => auditoria.push({ id: 'a' + (auditoria.length + 1), ts: ts, usuario: usuario || USUARIO, tipo: tipo, accion: accion, detalle: detalle });
     const gs = (n) => C.fmtGs(n);
 
     const db = {
-      version: 6,
+      version: 7,
       creado: hoy,
       config: {
         tienda: {
@@ -290,7 +306,7 @@
         // Ventas a cuenta: límite general por clienta y atraso máximo de cuotas (Ariel lo cambia en Ajustes).
         credito: { activo: true, limite: 1000000, diasAtraso: 15 },
         // Clientas frecuentes: 1 punto cada ₲ 10.000 pagados; cada punto vale ₲ 300 (3 %); canje desde 50 puntos; 10 % en su cumpleaños.
-        fidelidad: { activo: true, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: F(90), cumple: { activo: true, porcentaje: 10 } },
+        fidelidad: { activo: true, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: F(90), cumple: { activo: true, porcentaje: 10 }, terminos: '' },
         envios: {
           origen: { ciudad: 'Coronel Oviedo', departamento: 'Caaguazú' },
           empresas: [

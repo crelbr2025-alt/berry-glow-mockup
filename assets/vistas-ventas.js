@@ -60,6 +60,8 @@
 
   BG.ajustarPrecioUI = async (v) => {
     const pagado = BG.pagadoVenta(v);
+    // La vendedora puede corregir hacia arriba; bajar el precio ya cobrado lo decide el dueño.
+    const soloSubir = !BG.esDuena();
     const vivos = v.items.map((it, i) => ({ it: it, i: i })).filter((x) => BG.cantidadViva(x.it) > 0);
     const st = { item: vivos.length === 1 ? vivos[0].i : null, precio: 0, motivo: null, nota: '' };
     const totalCon = (precio) => BG.totalesDe(v, v.items.map((x, i) => (i === st.item ? Object.assign({}, x, { precio: precio }) : x))).total;
@@ -81,8 +83,12 @@
             + vivos.map((x) => '<label class="dest"><input type="radio" name="aj-item" value="' + x.i + '"><span class="grow"><span class="row-title">' + esc(x.it.descripcion) + '</span>'
               + '<span class="row-sub">' + BG.cantidadViva(x.it) + ' × ' + gs(x.it.precio) + '</span></span></label>').join('') + '</div></div>'
           : '<p><strong>' + esc(vivos[0].it.descripcion) + '</strong> · ' + BG.cantidadViva(vivos[0].it) + ' × ' + gs(vivos[0].it.precio) + '</p>')
-        + '<div class="field"><label for="aj-precio">Precio nuevo por unidad</label>' + BG.campoGs('aj-precio', '', '') + '</div>'
-        + BG.camposMotivo('aj', st, true)
+        + '<div class="field"><label for="aj-precio">Precio nuevo por unidad</label>' + BG.campoGs('aj-precio', '', '')
+        + (soloSubir ? '<span class="hint">Tiene que ser igual o más que el precio de lista. Bajarlo lo hace ' + esc(BG.nombreDuena()) + '.</span>' : '') + '</div>'
+        + (soloSubir
+          ? '<div class="field"><label for="nota-aj">¿Por qué este precio? <span class="small muted">(opcional)</span></label>'
+            + '<input id="nota-aj" class="input" autocomplete="off" maxlength="120" placeholder="Ej.: se lo llevó con el envío incluido"></div>'
+          : BG.camposMotivo('aj', st, true))
         + '<div id="aj-info"></div><p class="error-text" id="aj-error" role="alert" hidden></p>',
       acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Guardar precio nuevo', valor: 'ok', clase: 'btn-primary', submit: true }],
       validar: (val, dlg) => {
@@ -91,8 +97,14 @@
         if (st.item == null) return falla('Elegí el artículo.');
         if (!(st.precio > 0)) return falla('Escribí el precio nuevo.');
         if (st.precio === v.items[st.item].precio) return falla('Es el mismo precio que ya tiene.');
-        if (!st.motivo) return falla('Elegí el motivo del cambio.');
-        if (st.motivo === 'Otro' && !st.nota.trim()) return falla('Contá el motivo en «Detalle».');
+        if (soloSubir) {
+          const lista = v.items[st.item].precioLista || 0;
+          if (st.precio < lista) return falla('No puede quedar por debajo del precio de lista (' + gs(lista) + '): eso lo decide ' + BG.nombreDuena() + '.');
+          st.motivo = BG.MOTIVO_ACORDADO;
+        } else {
+          if (!st.motivo) return falla('Elegí el motivo del cambio.');
+          if (st.motivo === 'Otro' && !st.nota.trim()) return falla('Contá el motivo en «Detalle».');
+        }
         if (totalCon(st.precio) < pagado) return falla('Con ese precio la venta quedaría en menos de lo que ya pagó (' + gs(pagado) + ').');
         return true;
       },
@@ -433,8 +445,7 @@
           + (BG.puede('registrarCobros') ? '<a class="btn btn-sm btn-primary" href="#/cobros/nuevo?cliente=' + cli.id + '&venta=' + v.id + '">' + icon('cash', 'i-sm') + 'Cobrar la cuota</a>' : '') + '</div>' : '')
         : '<p class="small">Quedó a cuenta sin fechas. Acordá cuotas para ver qué vence esta semana y qué está atrasado.</p>')
       + '</section>' : '';
-    const textoWa = 'Hola ' + cli.nombre.split(' ')[0] + ', gracias por tu compra en ' + BG.db.config.tienda.nombre + '. Total ' + gs(v.total)
-      + ', pagado ' + gs(pagado) + (saldo > 0 ? ', saldo pendiente ' + gs(saldo) : ', ¡quedó saldada!') + '. Recibo ' + BG.fmtRecibo(v.recibo) + '.';
+    const textoWa = BG.textosWa.compra(cli, v);
 
     const html = '<div class="page">'
       + '<a class="back-link" href="#/clientes/' + cli.id + '">' + icon('left', 'i-sm') + esc(cli.nombre) + '</a>'

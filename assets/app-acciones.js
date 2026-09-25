@@ -165,6 +165,7 @@
         margen: it.margen == null ? null : it.margen, precioLista: p.precioVenta, especial: especial,
       };
     });
+    const fid = BG.configFidelidad();
     const conDescuento = !!(d.descuento && d.descuento.valor);
     // El regalo de cumpleaños es un beneficio del programa: se puede aplicar aunque no tenga precios especiales habilitados.
     const regalo = BG.regaloCumple(d.clienteId);
@@ -174,6 +175,11 @@
     }
     if (!BG.puede('preciosEspeciales') && ((conDescuento && !esRegalo) || items.some((it) => it.especial))) {
       throw new Error('Tu usuario vende con el precio de lista: ' + BG.nombreDuena() + ' no te habilitó los precios especiales.');
+    }
+    if (!BG.esDuena()) {
+      const bajo = items.find((it) => it.precio < it.precioLista);
+      if (bajo) throw new Error('«' + bajo.descripcion + '» no puede ir a menos del precio de lista (' + gs(bajo.precioLista) + '): cobrar menos lo decide ' + BG.nombreDuena() + '.');
+      if (conDescuento && !esRegalo) throw new Error('El descuento de la venta lo hace ' + BG.nombreDuena() + '.');
     }
     // El plan de cuotas se valida antes de guardar nada, así un dato mal puesto no deja la venta a medias.
     if (d.plan && (!BG.FRECUENCIAS[d.plan.frecuencia] || !d.plan.primera || d.plan.primera < d.fecha)) {
@@ -197,6 +203,8 @@
       },
       subtotal: t.subtotal, total: t.total, anulada: null, usuario: quien, autorizadoPor: d.autorizadoPor || null, ajustes: [],
       devoluciones: [], aFavor: 0, plan: null,
+      // Regla de puntos vigente el día de la venta: si mañana cambia el programa, esta compra sigue valiendo lo mismo.
+      fidelidad: fid.activo && d.fecha >= fid.desde ? { cadaGs: fid.cadaGs, valorPunto: fid.valorPunto } : null,
       creditoAutorizado: !credito0.ok ? { por: d.creditoAutorizadoPor || quien, motivo: BG.textoCredito(credito0) } : null,
     };
     BG.db.ventas.push(v);
@@ -320,7 +328,10 @@
     if (!it || !(precio > 0)) throw new Error('Escribí el precio nuevo.');
     if (precio === it.precio) throw new Error('Es el mismo precio que ya tiene.');
     if (!BG.cantidadViva(it)) throw new Error('Ese artículo ya se devolvió entero.');
-    if (!d.motivo) throw new Error('Elegí el motivo del cambio.');
+    if (!BG.esDuena() && precio < (it.precioLista || 0)) {
+      throw new Error('No podés dejarlo por debajo del precio de lista (' + gs(it.precioLista) + '): eso lo decide ' + BG.nombreDuena() + '.');
+    }
+    if (!d.motivo && BG.esDuena()) throw new Error('Elegí el motivo del cambio.');
     const nuevos = v.items.map((x, i) => (i === d.item ? Object.assign({}, x, { precio: precio }) : x));
     const t = BG.totalesDe(v, nuevos);
     const pagado = BG.pagadoVenta(v);
@@ -459,6 +470,14 @@
   };
   BG.guardarFidelidad = (datos) => {
     soloDuenio('cambiar el programa de clientas frecuentes');
+    const antes = BG.configFidelidad();
+    // Antes de cambiar la regla, se le deja escrita a cada venta la que tenía: lo que una clienta ya ganó
+    // no puede moverse porque hoy se cambie el programa (vale también para las ventas viejas o importadas).
+    if (antes.activo && (('cadaGs' in datos && datos.cadaGs !== antes.cadaGs) || ('valorPunto' in datos && datos.valorPunto !== antes.valorPunto))) {
+      BG.db.ventas.forEach((v) => {
+        if (!v.fidelidad && !v.anulada && v.fecha >= antes.desde) v.fidelidad = { cadaGs: antes.cadaGs, valorPunto: antes.valorPunto };
+      });
+    }
     const f = Object.assign(BG.configFidelidad(), datos);
     if (datos.cumple) f.cumple = Object.assign({}, BG.configFidelidad().cumple, datos.cumple);
     BG.db.config.fidelidad = f;

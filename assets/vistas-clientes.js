@@ -236,7 +236,7 @@
     const rapidas = [
       BG.puede('registrarVentas') && qb('#/ventas/nueva', 'bag', 'Nueva venta', 'Uno o varios artículos', true),
       BG.puede('registrarCobros') && qb('#/cobros/nuevo', 'cash', 'Registrar cobro', 'También pagos mixtos'),
-      duena && qb('#/productos/nuevo', 'tag', 'Cargar producto', 'Calcula el precio de venta'),
+      (duena || BG.puede('cargarProductos')) && qb('#/productos/nuevo', 'tag', 'Cargar producto', 'Calcula el precio de venta'),
       BG.puede('prepararEnvios') && qb('#/envios/nuevo', 'truck', 'Preparar envío', 'Etiqueta lista para pegar'),
       BG.puede('editarClientes') && qb('#/clientes/nuevo', 'user', 'Nuevo cliente', 'Avisa si ya existe'),
       !duena && BG.puede('verPrecios') && qb('#/productos', 'tag', 'Lista de precios', 'Precios y stock'),
@@ -504,10 +504,7 @@
     const primerNombre = c.nombre.split(' ')[0];
     const cuotas = BG.cuotasPendientes().filter((x) => x.cliente.id === c.id);
     const puedeDevolver = BG.esDuena() || BG.puede('devoluciones');
-    const textoWa = saldo > 0
-      ? 'Hola ' + primerNombre + ', te escribimos de ' + BG.db.config.tienda.nombre + '. Tu saldo pendiente es de ' + gs(saldo) + '.' + (aFavor > 0 ? ' Además tenés ' + gs(aFavor) + ' a favor.' : '') + ' ¡Gracias!'
-      : aFavor > 0 ? 'Hola ' + primerNombre + ', te escribimos de ' + BG.db.config.tienda.nombre + '. Tenés ' + gs(aFavor) + ' a favor para tu próxima compra. ¡Te esperamos!'
-        : 'Hola ' + primerNombre + ', te escribimos de ' + BG.db.config.tienda.nombre + '.';
+    const textoWa = BG.textosWa.cuenta(c, { saldo: saldo, aFavor: aFavor, proxima: cuotas.length ? cuotas[0].cuota : null });
     const html = '<div class="page">'
       + '<a class="back-link" href="#/clientes">' + icon('left', 'i-sm') + 'Clientes</a>'
       + '<div class="profile-head"><span class="avatar avatar-lg">' + esc(BG.iniciales(c.nombre)) + '</span>'

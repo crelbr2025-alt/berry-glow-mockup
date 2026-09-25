@@ -729,6 +729,23 @@ dialog { color: var(--ink); }
   background: var(--berry-soft); color: var(--berry); font-weight: 800; font-size: 13px;
 }
 .pasos strong { color: var(--ink); }
+/* «Lo que hay»: el stock a la vista al vender, para no depender de la memoria. */
+.hay { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface-2); }
+.hay-tit { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 800; letter-spacing: 0.03em; text-transform: uppercase; color: var(--muted); }
+.hay-lista { display: flex; flex-direction: column; gap: 6px; }
+.hay-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: inherit; font: inherit;
+}
+.hay-item:hover { border-color: var(--berry); background: var(--berry-soft); }
+.hay-item .row-title { font-size: 14px; }
+.hay-todo { border-top: 1px solid var(--line); padding-top: 8px; }
+.hay-todo summary { font-weight: 700; font-size: 13.5px; color: var(--berry); cursor: pointer; }
+.hay-todo > .hay-lista { margin-top: 8px; }
+.hay-todo[open] { max-height: 360px; overflow-y: auto; }
+.hay-cat { margin-top: 10px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.terminos summary { font-weight: 700; color: var(--berry); cursor: pointer; }
+.terminos p { margin-top: 6px; font-size: 13px; color: var(--ink-2); }
 .bullets { display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--ink-2); }
 .bullets li { padding-left: 14px; position: relative; }
 .bullets li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 5px; height: 5px; border-radius: 50%; background: var(--glow); }
@@ -1032,6 +1049,18 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 .r-saldo.is-paid { background: #1E7A4C; }
 .r-account { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--r-muted); padding: 0 4px 10px; }
 .r-account strong { color: var(--r-ink); }
+.r-puntos strong { color: var(--r-brand); }
+/* Condiciones del programa de puntos: letra chica, al pie, como en cualquier comprobante. */
+.r-terminos { font-size: 10.5px; line-height: 1.45; color: var(--r-muted); padding: 8px 10px; margin-bottom: 12px; border-radius: 6px; background: var(--r-soft); }
+.r-terminos strong { color: var(--r-ink); }
+/* Recibos largos (muchos artículos o muchos pagos): todo más junto, para que no se vaya de hoja. */
+.receipt.is-largo { font-size: 12.5px; }
+.receipt.is-largo .r-table { font-size: 12px; }
+.receipt.is-largo .r-table td { padding: 4px 4px; }
+.receipt.is-largo .r-table th { padding: 4px 4px; }
+.receipt.is-largo .r-section { margin-bottom: 12px; }
+.receipt.is-largo .r-client { padding: 8px 12px; margin-bottom: 12px; }
+.receipt.is-largo .r-saldo strong { font-size: 22px; }
 .r-foot { text-align: center; padding-top: 14px; border-top: 1px solid var(--r-line); display: flex; flex-direction: column; gap: 4px; }
 .r-thanks { font-family: var(--font-brand); font-style: italic; font-size: 18px; color: var(--r-brand); }
 .r-legal { font-size: 11px; color: var(--r-muted); }
@@ -1068,6 +1097,19 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
   body.route-print .receipt { box-shadow: none; max-width: none; border-radius: 0; padding: 0; }
   body.route-print .receipt.is-ticket { max-width: none; }
   .receipt, .receipt * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  /* Muchos artículos = varias hojas: que nada se parta al medio y que el encabezado se repita. */
+  .receipt .r-table thead { display: table-header-group; }
+  .receipt .r-table tfoot { display: table-row-group; }
+  .receipt .r-table tr,
+  .receipt .r-client,
+  .receipt .r-saldo,
+  .receipt .r-favor,
+  .receipt .r-terminos,
+  .receipt .r-foot { break-inside: avoid; page-break-inside: avoid; }
+  .receipt .r-head,
+  .receipt .r-section h2,
+  .receipt .r-sub { break-after: avoid; page-break-after: avoid; }
+  .receipt .r-foot { break-before: avoid; page-break-before: avoid; }
 }
 
 /* ── Tema, saldo a favor, cuotas, devoluciones, meta y rotación ───────── */

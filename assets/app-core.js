@@ -56,7 +56,7 @@
   const KEY_MIOS_INFO = 'berryglow.mockup.mios.info';
   const KEY_MODO = 'berryglow.mockup.modo';
   const KEY_COPIA = 'berryglow.mockup.copia';
-  const VERSION_DB = 6;
+  const VERSION_DB = 7;
   BG.VERSION_DB = VERSION_DB;
   BG.leer = (k) => { try { const t = localStorage.getItem(k); return t ? JSON.parse(t) : null; } catch (e) { return null; } };
   BG.escribir = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } };
@@ -73,7 +73,9 @@
   const alDia = (d) => {
     if (!d || typeof d !== 'object' || !Array.isArray(d.clientes)) return null;
     if (d.version === VERSION_DB) return d;
-    if (d.version === 5) { d.version = VERSION_DB; return d; }  // v5 → v6: misma forma, sin conversión
+    // v5, v6 → v7: los campos nuevos (condiciones de los puntos, regla de puntos de cada venta) son opcionales
+    // y el sistema funciona igual sin ellos, así que la base vieja se acepta tal cual.
+    if (d.version === 5 || d.version === 6) { d.version = VERSION_DB; return d; }
     return null;
   };
   /** Vuelve a los datos de ejemplo del día de hoy. No toca los datos de la tienda. */
@@ -233,6 +235,7 @@
     ['devoluciones', 'Devoluciones y cambios', 'Devolver o cambiar un artículo de una venta. Lo que sobra queda como saldo a favor; devolver plata en efectivo pide tu PIN.'],
     ['editarClientes', 'Crear y editar clientes', 'Alta de clientes nuevos y corrección de datos.'],
     ['verPrecios', 'Ver la lista de precios', 'Precios de venta y stock, sin costos.'],
+    ['cargarProductos', 'Cargar productos nuevos', 'Da de alta artículos que llegaron. Para calcular el precio escribe el costo en dólares, así que ve el costo y el margen de lo que carga ella.'],
     ['verCaja', 'Caja del día', 'Ver lo cobrado y hacer el cierre (reabrir es solo del dueño).'],
     ['prepararEnvios', 'Preparar envíos', 'Cargar envíos, imprimir etiquetas y registrar el despacho.'],
   ];
@@ -420,9 +423,7 @@
     if (c.estado === 'semana') return '<span class="pill pill-warn">' + BG.icon('clock') + (c.dias === 1 ? 'Vence mañana' : 'Vence en ' + c.dias + ' días') + '</span>';
     return '<span class="pill pill-muted">' + BG.icon('calendar') + 'Vence el ' + fmtFechaCorta(c.vence) + '</span>';
   };
-  BG.textoRecordatorio = (cli, v, c) => 'Hola ' + cli.nombre.split(' ')[0] + ', te escribimos de ' + BG.db.config.tienda.nombre + '. '
-    + (c.estado === 'vencida' ? 'El ' + fmtFecha(c.vence) + ' venció' : c.estado === 'hoy' ? 'Hoy vence' : 'El ' + fmtFecha(c.vence) + ' vence')
-    + ' tu cuota ' + c.n + ' de ' + c.de + ' por ' + gs(c.falta) + ' (compra ' + fmtRecibo(v.recibo) + '). ¡Gracias!';
+  BG.textoRecordatorio = (cli, v, c) => BG.textosWa.cuota(cli, v, c);
 
   /* ── Rotación del stock ────────────────────────────────────────────── */
 
@@ -518,9 +519,15 @@
 
   /* ── Clientas frecuentes: puntos, cumpleaños y compras ─────────────── */
 
+  /** Condiciones del programa de puntos, tal como se le muestran a la clienta (el dueño las edita en Ajustes). */
+  BG.TERMINOS_PUNTOS = 'Los puntos son un beneficio de la tienda. Se suman cuando la compra queda pagada del todo '
+    + '(si es en cuotas, al pagar la última). Lo que pagues con puntos no suma puntos y no se devuelve en plata. '
+    + 'Los puntos no son dinero, no se cambian por efectivo y se usan como descuento en una próxima compra. '
+    + 'La tienda puede cambiar o terminar el programa avisando por sus redes.';
   BG.configFidelidad = () => {
     const f = Object.assign({ activo: false, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: '0000-00-00' }, BG.db.config.fidelidad);
     f.cumple = Object.assign({ activo: false, porcentaje: 10 }, f.cumple);
+    if (!f.terminos || !String(f.terminos).trim()) f.terminos = BG.TERMINOS_PUNTOS;
     return f;
   };
   /** Parte de los pagos vivos de una venta que se hizo con saldo a favor que venía de puntos canjeados. */
@@ -546,8 +553,9 @@
     let pendientes = 0;
     const porGanar = [];
     for (const v of BG.ventasDeCliente(cid)) {
-      if (v.anulada || v.fecha < f.desde) continue;
-      const pts = Math.floor(Math.max(0, v.total - BG.canjeAplicado(v)) / f.cadaGs);
+      // Una sola fórmula para los puntos de una venta: BG.puntosDeVenta. Tenerla escrita dos veces hacía que
+      // arreglar una dejara la otra mal (y los puntos de la clienta cambiaban solos).
+      const pts = BG.puntosDeVenta(v);
       if (!pts) continue;
       if (BG.saldoVenta(v) <= 0) ganados += pts;
       else { pendientes += pts; porGanar.push({ v: v, puntos: pts }); }
@@ -560,7 +568,9 @@
   BG.puntosDeVenta = (v) => {
     const f = BG.configFidelidad();
     if (!f.activo || v.anulada || v.fecha < f.desde) return 0;
-    return Math.floor(Math.max(0, v.total - BG.canjeAplicado(v)) / f.cadaGs);
+    // Con la regla que tenía la venta cuando se hizo (las viejas, sin regla guardada, usan la de hoy).
+    const cada = v.fidelidad && v.fidelidad.cadaGs > 0 ? v.fidelidad.cadaGs : f.cadaGs;
+    return Math.floor(Math.max(0, v.total - BG.canjeAplicado(v)) / cada);
   };
   /** Próximo cumpleaños: días que faltan (negativo si fue hace poco) y si está en la semana del regalo (7 días antes o después). */
   BG.cumpleDe = (c) => {
@@ -652,6 +662,8 @@
   };
   /* Precios especiales: el margen se mide sobre el costo congelado, igual que los sugeridos (50, 80, 100 y 120 %). */
   BG.MOTIVOS_PRECIO = ['Promoción', 'Cliente frecuente', 'Cumpleaños', 'Detalle en la prenda', 'Liquidación', 'Otro'];
+  /** Precio que la vendedora cobra por encima del de lista: no es promoción ni descuento. */
+  BG.MOTIVO_ACORDADO = 'Precio acordado';
   BG.margenMinimo = () => { const p = BG.db.config.precios; return p && p.margenMinimo != null ? p.margenMinimo : 30; };
   /**
    * Ganancia y margen de vender a `precio` lo que costó `costo` (sirve por unidad o para toda la venta).
@@ -1112,7 +1124,7 @@
     [/^\/cuotas$/, 'cuotas'],
     [/^\/cobros\/nuevo$/, 'cobro', 'registrarCobros'],
     [/^\/productos$/, 'productos', 'verPrecios'],
-    [/^\/productos\/nuevo$/, 'productoNuevo', true],
+    [/^\/productos\/nuevo$/, 'productoNuevo', 'cargarProductos'],
     [/^\/productos\/pedido$/, 'pedido', true],
     [/^\/productos\/importar$/, 'importar', true],
     [/^\/productos\/conteo$/, 'conteo', true],

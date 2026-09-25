@@ -528,6 +528,13 @@
           + '<p class="callout">' + icon('info') + '<span>Los puntos se suman recién cuando la compra queda pagada del todo: al contado, en el momento; en cuotas, al pagar la última (los pagos parciales no suman). Devuelve el ' + String(Math.round(pct * 10) / 10).replace('.', ',') + ' %: una compra de ' + gs(300000) + ' pagada suma ' + Math.floor(300000 / f.cadaGs) + ' puntos = ' + gs(Math.floor(300000 / f.cadaGs) * f.valorPunto) + '. Lo que se paga con puntos no suma puntos. '
             + 'Al canjear, pasa a su saldo a favor y en la ganancia neta cuenta como gasto de beneficios.</span></p>'
         : '')
+      + (f.activo
+        ? '<div class="field"><label for="fi-terminos">Condiciones del programa <span class="small muted">(se imprimen en el recibo y se muestran al canjear)</span></label>'
+          + '<textarea id="fi-terminos" class="textarea" rows="4" maxlength="600">' + esc(f.terminos) + '</textarea>'
+          + '<div class="row"><button type="button" class="btn btn-sm" data-accion="guardar-terminos">Guardar condiciones</button>'
+          + '<button type="button" class="btn btn-sm btn-quiet" data-accion="terminos-defecto">Volver al texto sugerido</button></div>'
+          + '<span class="hint">Escribilas como se las dirías a una clienta. Tienen que decir la verdad de cómo funciona el programa.</span></div>'
+        : '')
       + '<label class="check-inline"><input type="checkbox" id="fi-cumple"' + (f.activo && f.cumple.activo ? ' checked' : '') + (f.activo ? '' : ' disabled') + '> Regalo de cumpleaños</label>'
       + (f.activo && f.cumple.activo ? '<div class="field"><span class="field-label">Descuento en la semana de su cumpleaños</span>' + seg('fi-pct', [5, 10, 15, 20], f.cumple.porcentaje, (v) => v + ' %') + '</div>' : '')
       + '<p class="hint">Jazmín no ve esta configuración: al elegir la clienta le aparece el aviso con un botón para aplicar el beneficio.</p>';
@@ -731,6 +738,14 @@
           }
           const b = e.target.closest('[data-accion], [data-exportar]');
           if (!b) return;
+          if (b.dataset.accion === 'guardar-terminos' || b.dataset.accion === 'terminos-defecto') {
+            const campo = $('#fi-terminos', root);
+            const texto = b.dataset.accion === 'terminos-defecto' ? BG.TERMINOS_PUNTOS : (campo ? campo.value.trim() : '');
+            BG.guardarFidelidad({ terminos: texto || BG.TERMINOS_PUNTOS });
+            BG.toast('Condiciones guardadas: salen en el recibo y al canjear puntos.');
+            repintar('aj-fidelidad', htmlFidelidad);
+            return;
+          }
           if (b.dataset.accion === 'guardar-limite') {
             const lim = BG.leerGs($('#cr-limite', root));
             if (!(lim > 0)) { BG.toast('Escribí el límite general (por ejemplo ₲ 1.000.000).', 'error'); return; }
@@ -839,7 +854,9 @@
       + '<div id="aud-lista"></div></div>';
     const pintar = (root) => {
       const q = BG.norm(e.q.trim());
-      const lista = BG.db.auditoria.filter((a) => (e.tipo === 'todo' || a.tipo === e.tipo) && (e.usuario === 'todos' || a.usuario === e.usuario)
+      // Siempre de lo más nuevo a lo más viejo: con dos aparatos (y dos relojes) el orden de llegada no alcanza.
+      const lista = BG.db.auditoria.slice().sort((a, b) => String(b.ts).localeCompare(String(a.ts)))
+        .filter((a) => (e.tipo === 'todo' || a.tipo === e.tipo) && (e.usuario === 'todos' || a.usuario === e.usuario)
         && (!q || BG.norm(a.accion + ' ' + a.detalle + ' ' + a.usuario).includes(q)));
       $('#aud-lista', root).innerHTML = '<div class="table-wrap"><table class="table table-compact"><thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>'
         + lista.slice(0, e.max).map((a) => '<tr><td class="nowrap">' + BG.fmtFecha(a.ts.slice(0, 10)) + ' ' + BG.fmtHora(a.ts) + '</td><td>' + esc(a.usuario) + '</td><td class="nowrap"><strong>' + esc(a.accion) + '</strong></td><td>' + esc(a.detalle) + '</td></tr>').join('')

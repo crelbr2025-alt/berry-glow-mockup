@@ -250,9 +250,11 @@
     const chips = (grupo, pares) => '<div class="chips" role="group">' + pares.map(([k, t]) => '<button type="button" class="chip" data-' + grupo + '="' + esc(k) + '" aria-pressed="' + (e[grupo] === k) + '">' + esc(t) + '</button>').join('') + '</div>';
     const html = '<div class="page">'
       + '<div class="page-head"><div><h1 class="page-title">' + (duena ? 'Productos' : 'Lista de precios') + '</h1><p class="page-sub" id="p-resumen"></p></div>'
-      + (duena ? '<div class="page-actions"><a class="btn" href="#/productos/conteo">' + icon('count') + 'Conteo de inventario</a><a class="btn" href="#/pedidos">' + icon('box2') + 'Pedidos al proveedor</a><a class="btn" href="#/productos/importar">' + icon('file') + 'Importar Excel</a>'
-        + '<a class="btn" href="#/productos/pedido">' + icon('truck') + 'Cargar pedido</a>'
-        + '<a class="btn btn-primary" href="#/productos/nuevo">' + icon('plus') + 'Cargar producto</a></div>' : '') + '</div>'
+      + (duena || BG.puede('cargarProductos')
+        ? '<div class="page-actions">'
+          + (duena ? '<a class="btn" href="#/productos/conteo">' + icon('count') + 'Conteo de inventario</a><a class="btn" href="#/pedidos">' + icon('box2') + 'Pedidos al proveedor</a><a class="btn" href="#/productos/importar">' + icon('file') + 'Importar Excel</a>'
+            + '<a class="btn" href="#/productos/pedido">' + icon('truck') + 'Cargar pedido</a>' : '')
+          + '<a class="btn btn-primary" href="#/productos/nuevo">' + icon('plus') + 'Cargar producto</a></div>' : '') + '</div>'
       + (duena ? BG.htmlParametros() : '<div class="note-mock">' + icon('eye') + '<span>Vista de vendedor/a: se ven precio y stock; los costos, el dólar y los márgenes están ocultos.</span></div>')
       + '<div class="toolbar"><div class="search-box grow"><label class="sr-only" for="q-prod-lista">Buscar producto</label>' + icon('search')
       + '<input id="q-prod-lista" class="search-input" type="search" autocomplete="off" placeholder="Buscar producto"></div>'
