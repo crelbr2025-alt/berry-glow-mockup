@@ -105,7 +105,9 @@
         favor > 0 ? gs(favor) + ' a favor' : '',
         pts && pts.puntos ? pts.puntos + ' puntos' + (pts.canjeable ? ' (ya canjea)' : '') : '',
       ].filter(Boolean).join(' · ');
-      return '<button type="button" class="hay-item" data-accion="elegir-cliente" data-id="' + esc(c.id) + '">'
+      // Tono suave para el que debe: se distingue de un vistazo sin gritar (atrasado, un poco más marcado).
+      const clase = saldo > 0 ? (atras ? ' debe atrasado' : ' debe') : '';
+      return '<button type="button" class="hay-item' + clase + '" data-accion="elegir-cliente" data-id="' + esc(c.id) + '">'
         + '<span class="avatar">' + esc(BG.iniciales(c.nombre)) + '</span>'
         + '<span class="grow"><span class="row-title">' + esc(c.nombre) + '</span><span class="row-sub">' + esc(detalle) + '</span></span>'
         + (saldo > 0 ? '<span class="amount">' + gs(saldo) + '</span>' : '') + '</button>';
@@ -341,7 +343,7 @@
     };
 
     /** Productos con stock, del último cargado al primero (es lo que más se busca al vender). */
-    const disponibles = () => BG.db.productos.filter((p) => p.precioVenta && BG.disponibles(p) > 0)
+    const disponibles = () => BG.db.productos.filter((p) => p.precioVenta && !p.archivado && BG.disponibles(p) > 0)
       .sort((a, b2) => String(b2.ts || b2.fechaCarga || '').localeCompare(String(a.ts || a.fechaCarga || '')));
     const fila = (p) => '<button type="button" class="hay-item" data-accion="agregar-prod" data-id="' + esc(p.id) + '">'
       + '<span class="grow"><span class="row-title">' + esc(p.descripcion) + '</span>'

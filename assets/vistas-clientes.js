@@ -492,6 +492,53 @@
   }
 
   /**
+   * Borrar una clienta. Si nunca movió plata, es un borrado simple. Si tiene ventas o cobros, se le muestra
+   * exactamente qué se va a ir (y qué días de caja cambian) y se pide el PIN: no es una anulación, es un
+   * borrado de verdad, pensado para las clientas de prueba o cargadas por error.
+   */
+  BG.borrarClienteUI = async (c) => {
+    const puede = BG.puedeBorrarCliente(c);
+    if (!puede.ok) { BG.toast(puede.razon, 'error'); return false; }
+    const lo = puede.lo;
+    const linea = (n, uno, varios, extra) => (n ? '<li>' + n + ' ' + (n === 1 ? uno : varios) + (extra || '') + '</li>' : '');
+    const detalle = lo.conMovimientos
+      ? '<div class="callout callout-warn">' + icon('alert') + '<div><strong>Se borra también todo lo suyo:</strong><ul class="efecto-lista">'
+        + linea(lo.ventas.length, 'venta', 'ventas', ' por ' + gs(lo.vendido))
+        + linea(lo.pagos.length, 'cobro', 'cobros', ' por ' + gs(lo.cobrado))
+        + (lo.devuelto ? '<li>' + gs(lo.devuelto) + ' que se le devolvieron en plata</li>' : '')
+        + (lo.aFavor > 0 ? '<li>' + gs(lo.aFavor) + ' de saldo a favor</li>' : '')
+        + linea(lo.canjes.length, 'canje de puntos', 'canjes de puntos', '')
+        + linea(lo.envios.length, 'envío', 'envíos', '')
+        + linea(lo.emisiones.length, 'recibo emitido', 'recibos emitidos', '')
+        + '</ul>'
+        + '<p class="small">Esto <strong>cambia los números</strong> de esos días: la caja, los reportes y la ganancia del período dejan de contar esas ventas y esos cobros. '
+        + 'Los recibos que ya le diste en papel o por WhatsApp no se pueden deshacer.</p>'
+        + (lo.diasCerrados.length ? '<p class="small t-devuelto">Tiene movimientos en ' + lo.diasCerrados.length + (lo.diasCerrados.length === 1 ? ' día con la caja ya cerrada' : ' días con la caja ya cerrada')
+          + ' (' + lo.diasCerrados.slice(0, 3).map(BG.fmtFechaCorta).join(', ') + (lo.diasCerrados.length > 3 ? '…' : '') + '): el arqueo de ' + (lo.diasCerrados.length === 1 ? 'ese día' : 'esos días') + ' va a cambiar.</p>' : '')
+        + '</div></div>'
+        + '<p class="hint">Si lo que querés es dejar sin efecto una compra, no borres la clienta: <strong>anulá esa venta</strong> y queda todo registrado.</p>'
+      : '<div class="callout">' + icon('info') + '<div>Esta clienta <strong>no tiene ninguna compra ni cobro</strong>: borrarla no cambia ningún número. Queda anotada en la auditoría.</div></div>';
+    let motivo = '';
+    const r = await BG.modal({
+      titulo: 'Borrar a ' + c.nombre,
+      cuerpo: detalle
+        + '<div class="field"><label for="bc-motivo">Motivo <span class="small muted">(opcional)</span></label>'
+        + '<input id="bc-motivo" class="input" maxlength="120" autocomplete="off" placeholder="Ej.: era una clienta de prueba"></div>',
+      acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Borrar clienta', valor: 'ok', clase: 'btn-danger-solid' }],
+      validar: (v, dlg) => { motivo = $('#bc-motivo', dlg).value.trim(); return true; },
+      onMount: (dlg) => $('#bc-motivo', dlg).focus(),
+    });
+    if (r !== 'ok') return false;
+    if (lo.conMovimientos && !(await BG.pedirPin('Vas a borrar a ' + c.nombre + ' con ' + lo.ventas.length + (lo.ventas.length === 1 ? ' venta' : ' ventas') + ' y ' + lo.pagos.length + (lo.pagos.length === 1 ? ' cobro' : ' cobros') + '.'))) return false;
+    try {
+      BG.borrarCliente(c.id, motivo);
+      BG.toast(c.nombre + ' y todo lo suyo se borraron.');
+      BG.ir('#/clientes');
+      return true;
+    } catch (err) { BG.toast(err.message, 'error'); return false; }
+  };
+
+  /**
    * Tarjeta de puntos de la clienta: la ven los dos perfiles, porque es lo que se le contesta cuando pregunta
    * «¿cuántos puntos tengo?». Tiene el comprobante para imprimir o mandar, el mensaje de WhatsApp y el canje.
    */
@@ -611,7 +658,11 @@
       + '<span>' + icon('phone', 'i-sm') + esc(c.telefono) + '</span>'
       + (c.direccion ? '<span>' + esc(c.direccion) + '</span>' : '') + (c.email ? '<span>' + esc(c.email) + '</span>' : '')
       + '<span class="muted">Cliente desde el ' + BG.fmtFecha(c.alta) + '</span></p></div>'
-      + (BG.puede('editarClientes') ? '<div class="page-actions"><a class="btn btn-quiet" href="#/clientes/' + c.id + '/editar">' + icon('edit') + 'Editar</a></div>' : '') + '</div>'
+      + (BG.puede('editarClientes') || BG.esDuena()
+        ? '<div class="page-actions">'
+          + (BG.puede('editarClientes') ? '<a class="btn btn-quiet" href="#/clientes/' + c.id + '/editar">' + icon('edit') + 'Editar</a>' : '')
+          + (BG.esDuena() ? '<button type="button" class="btn btn-quiet btn-del" data-accion="borrar-cliente">' + icon('trash') + 'Borrar</button>' : '')
+          + '</div>' : '') + '</div>'
       + (aFavor > 0 ? '<section class="favor-banner" aria-label="Saldo a favor"><span class="favor-ic">' + icon('wallet') + '</span>'
         + '<div class="grow"><p class="favor-label">Saldo a favor</p><p class="favor-monto">' + gs(aFavor) + '</p>'
         + '<p class="small">La tienda le debe este monto. Se descuenta solo en su próxima compra' + (saldo > 0 ? ' o al cobrarle lo que debe' : '') + '; el detalle está en la pestaña «Saldo a favor».</p></div>'
@@ -676,6 +727,7 @@
           try {
             if (b.dataset.accion === 'devolver-favor' && (await BG.devolverFavorUI(c))) BG.render();
             else if (b.dataset.accion === 'canjear-puntos' && (await BG.canjeUI(c.id))) BG.render();
+            else if (b.dataset.accion === 'borrar-cliente') await BG.borrarClienteUI(c);
           } catch (err) { BG.toast(err.message, 'error'); }
         });
       },

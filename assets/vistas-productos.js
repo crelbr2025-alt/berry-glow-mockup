@@ -174,18 +174,30 @@
     const disp = BG.disponibles(p);
     const ultima = BG.ultimaVentaDe(p.id);
     const quieto = disp > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO;
+    // Lo que volvió al stock: unidades de ventas anuladas y unidades devueltas. Se muestra para que nadie tenga
+    // que adivinar por qué el disponible subió de nuevo.
+    const deAnuladas = BG.db.ventas.filter((v) => v.anulada).reduce((a, v) => a + v.items.filter((it) => it.productoId === p.id).reduce((b2, it) => b2 + BG.cantidadViva(it), 0), 0);
+    const devueltas = BG.db.ventas.filter((v) => !v.anulada).reduce((a, v) => a + v.items.filter((it) => it.productoId === p.id).reduce((b2, it) => b2 + (it.devueltas || 0), 0), 0);
     const stock = '<dl class="kv"><dt>Cargados</dt><dd>' + p.cantidad + '</dd><dt>Vendidos</dt><dd>' + BG.vendidas(p.id) + '</dd>'
+      + (deAnuladas ? '<dt>Volvieron de ventas anuladas</dt><dd>' + deAnuladas + '</dd>' : '')
+      + (devueltas ? '<dt>Volvieron por devolución</dt><dd>' + devueltas + '</dd>' : '')
       + (BG.ajusteStock(p.id) ? '<dt>Ajuste por conteo</dt><dd>' + (BG.ajusteStock(p.id) > 0 ? '+' : '') + BG.ajusteStock(p.id) + '</dd>' : '') + '<dt>Disponibles</dt><dd>' + disp + '</dd>'
       + '<dt>Última venta</dt><dd>' + (ultima ? BG.fmtFecha(ultima) + ' (' + BG.haceDias(ultima) + ')' : 'nunca se vendió') + '</dd></dl>'
       + (quieto ? '<p class="callout callout-warn">' + icon('pause') + '<span>Lleva <strong>' + BG.diasSinVender(p) + ' días</strong> sin venderse: candidato a liquidación o promoción.</span></p>' : '');
     const cabecera = '<p class="muted small">' + esc(p.codigo) + ' · ' + esc(p.categoria) + (duena ? ' · ' + esc(p.proveedor) : '') + ' · cargado el ' + BG.fmtFecha(p.fechaCarga)
       + (p.usuario ? ' por ' + esc(p.usuario) : '') + '</p>';
-    // Se cargó por error: se puede borrar solo si nunca se movió (sin ventas ni conteos). Queda en la auditoría.
+    // Se cargó por error: se puede borrar solo si nunca se movió (sin ventas vivas ni conteos). Queda en la auditoría.
+    // Si ya se vendió, no se borra: se archiva, y así sale de las listas sin tocar ninguna venta.
     const borrable = BG.puedeBorrarProducto(p);
+    const archivable = BG.puedeArchivarProducto(p);
     const accionBorrar = borrable.ok ? [{ texto: 'Borrar', valor: 'borrar', clase: 'btn-danger' }] : [];
-    const avisoBorrar = borrable.ok
-      ? '<p class="hint">Se cargó por error? Con <strong>Borrar</strong> desaparece de la lista (queda anotado en la auditoría). Se puede porque todavía no se vendió ni entró en un conteo.</p>'
-      : '<p class="hint">No se puede borrar: ' + esc(borrable.razon) + '</p>';
+    const accionArchivar = (!borrable.ok && archivable.ok) || p.archivado
+      ? [{ texto: p.archivado ? 'Volver a la lista' : 'Archivar', valor: 'archivar', clase: 'btn-quiet' }] : [];
+    const avisoBorrar = p.archivado
+      ? '<p class="hint">Este artículo está <strong>archivado</strong> desde el ' + BG.fmtFecha(p.archivado.fecha) + ': no aparece en la lista de precios ni al vender. Con «Volver a la lista» se muestra de nuevo.</p>'
+      : borrable.ok
+        ? '<p class="hint">¿Se cargó por error? Con <strong>Borrar</strong> desaparece de la lista (queda anotado en la auditoría). Se puede porque no está en ninguna venta viva ni en un conteo.</p>'
+        : '<p class="hint">No se puede borrar: ' + esc(borrable.razon) + (archivable.ok ? '' : ' ' + esc(archivable.razon)) + '</p>';
     if (!duena) {
       const rv = await BG.modal({
         titulo: p.descripcion, cuerpo: cabecera + '<p class="hero-figure">' + (p.precioVenta ? gs(p.precioVenta) : 'Sin precio') + '</p>' + stock
@@ -213,13 +225,13 @@
     let nuevo = null;
     const r = await BG.modal({
       titulo: p.descripcion, ancho: 'wide', cuerpo: cuerpo,
-      acciones: [{ texto: 'Cerrar', valor: 'cancelar', clase: 'btn-quiet' }].concat(accionBorrar)
+      acciones: [{ texto: 'Cerrar', valor: 'cancelar', clase: 'btn-quiet' }].concat(accionBorrar).concat(accionArchivar)
         .concat([{ texto: det ? 'Guardar precio' : 'Calcular y guardar', valor: 'ok', clase: 'btn-primary' }]),
       onMount: (dlg) => {
         dlg.addEventListener('focusin', (e) => { if (e.target.dataset && e.target.dataset.otroDe) { const rd = $('input[name="pp"][value="otro"]', dlg); if (rd) rd.checked = true; } });
       },
       validar: (v, dlg) => {
-        if (v === 'borrar') return true;   // borrar no necesita precio: justamente se usa cuando se cargó mal
+        if (v === 'borrar' || v === 'archivar') return true;   // no necesitan precio: se usan cuando el artículo ya no va
         if (!det) {
           const q = C.parseNum($('#pp-costo', dlg).value, 'decimal');
           if (!q || C.isZero(q)) { const er = $('#pp-e', dlg); er.textContent = 'Escribí el costo en dólares.'; er.hidden = false; return false; }
@@ -239,7 +251,11 @@
       },
     });
     if (r === 'borrar') { await borrarProductoUI(p); return; }
-    if (r !== 'ok' || !nuevo) return;
+    if (r === 'archivar') { await archivarProductoUI(p); return; }
+    if (r !== 'ok') return;
+    // Siempre tiene que haber una respuesta: apretar «Guardar» y que no pase nada deja a la persona sin saber
+    // si guardó o no. Si no cambió el precio, se lo decimos igual.
+    if (!nuevo) { BG.toast('No se cambió nada: «' + p.descripcion + '» sigue en ' + (p.precioVenta ? gs(p.precioVenta) : 'sin precio') + '.'); return; }
     if (nuevo.costo) {
       const res = C.calcularProducto({ costoUSD: nuevo.costo, envioUnitUSD: p.envioUnitUSD, cotizacion: p.cotizacion, redondeo: BG.db.config.redondeo });
       p.costoUSD = C.qToString(nuevo.costo);
@@ -252,6 +268,8 @@
     } else if (nuevo.precio !== p.precioVenta || nuevo.margen !== p.margen) {
       BG.actualizarPrecio(p.id, nuevo.margen, nuevo.precio);
       BG.toast('Precio de venta actualizado: ' + gs(nuevo.precio) + '.');
+    } else {
+      BG.toast('El precio quedó igual: ' + gs(p.precioVenta) + '.');
     }
     BG.render();
   };
@@ -286,6 +304,41 @@
   }
   BG.borrarProductoUI = borrarProductoUI;
 
+  /**
+   * Archivar o volver a la lista. Archivar no borra nada: el artículo sale de la lista de precios y de las
+   * pantallas de venta, y las ventas, los recibos y los reportes viejos quedan iguales.
+   */
+  async function archivarProductoUI(p) {
+    if (p.archivado) {
+      BG.archivarProducto(p.id, false);
+      BG.toast('«' + p.descripcion + '» vuelve a la lista de precios.');
+      BG.render();
+      return true;
+    }
+    const puede = BG.puedeArchivarProducto(p);
+    if (!puede.ok) { BG.toast(puede.razon, 'error'); return false; }
+    let motivo = '';
+    const r = await BG.modal({
+      titulo: 'Archivar «' + p.descripcion + '»',
+      cuerpo: '<p>Se vendió todo y no lo vas a reponer: <strong>archivarlo</strong> lo saca de la lista de precios y de las pantallas de venta.</p>'
+        + '<div class="callout">' + icon('info') + '<div>No se borra nada: las ventas donde aparece, los recibos ya emitidos y los reportes quedan <strong>exactamente igual</strong>. '
+        + 'Lo podés volver a la lista cuando quieras.</div></div>'
+        + '<div class="field"><label for="ap-motivo">Nota <span class="small muted">(opcional)</span></label>'
+        + '<input id="ap-motivo" class="input" maxlength="120" autocomplete="off" placeholder="Ej.: no se repone"></div>',
+      acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Archivar', valor: 'ok', clase: 'btn-primary' }],
+      validar: (v, dlg) => { motivo = $('#ap-motivo', dlg).value.trim(); return true; },
+      onMount: (dlg) => $('#ap-motivo', dlg).focus(),
+    });
+    if (r !== 'ok') return false;
+    try {
+      BG.archivarProducto(p.id, true, motivo);
+      BG.toast('«' + p.descripcion + '» archivado: ya no aparece en las listas.');
+      BG.render();
+      return true;
+    } catch (err) { BG.toast(err.message, 'error'); return false; }
+  }
+  BG.archivarProductoUI = archivarProductoUI;
+
   /* ── Lista de productos ──────────────────────────────────────────────── */
 
   BG.vistas.productos = (args, params) => {
@@ -304,16 +357,20 @@
       + '<div class="toolbar"><div class="search-box grow"><label class="sr-only" for="q-prod-lista">Buscar producto</label>' + icon('search')
       + '<input id="q-prod-lista" class="search-input" type="search" autocomplete="off" placeholder="Buscar producto"></div>'
       + chips('cat', [['todas', 'Todas']].concat(cats.map((c) => [c, c + (c.endsWith('o') || c.endsWith('a') ? 's' : '')])))
-      + chips('stock', [['todos', 'Todo'], ['con', 'Con stock'], ['sin', 'Agotados']]) + '</div>'
+      + chips('stock', [['todos', 'Todo'], ['con', 'Con stock'], ['sin', 'Agotados']].concat(BG.archivados() ? [['arch', 'Archivados (' + BG.archivados() + ')']] : [])) + '</div>'
       + '<div id="p-lista"></div></div>';
     const pintar = (root) => {
       let lista = e.q.trim() ? BG.buscarProductos(e.q, 500) : BG.db.productos.slice().sort((a, b) => b.ts.localeCompare(a.ts) || a.codigo.localeCompare(b.codigo));
       if (e.cat !== 'todas') lista = lista.filter((p) => p.categoria === e.cat);
+      // Los archivados tienen su propio filtro: en el resto de las vistas no aparecen.
+      lista = e.stock === 'arch' ? lista.filter((p) => p.archivado) : lista.filter((p) => !p.archivado);
       if (e.stock === 'con') lista = lista.filter((p) => BG.disponibles(p) > 0);
       if (e.stock === 'sin') lista = lista.filter((p) => BG.disponibles(p) <= 0);
       const valorStock = sum(lista, (p) => Math.max(0, BG.disponibles(p)) * (p.costoTotalGs || 0));
-      $('#p-resumen', root).textContent = lista.length + (lista.length === 1 ? ' producto · ' : ' productos · ') + sum(lista, (p) => Math.max(0, BG.disponibles(p))) + ' unidades disponibles' + (duena ? ' · stock al costo ' + gs(valorStock) : '');
-      const quieto = (p) => (BG.disponibles(p) > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO ? '<span class="pill pill-warn pill-quieto">' + icon('pause') + BG.diasSinVender(p) + ' días sin venderse</span>' : '');
+      $('#p-resumen', root).textContent = lista.length + (lista.length === 1 ? ' producto · ' : ' productos · ') + sum(lista, (p) => Math.max(0, BG.disponibles(p))) + ' unidades disponibles' + (duena ? ' · stock al costo ' + gs(valorStock) : '')
+        + (e.stock !== 'arch' && BG.archivados() ? ' · ' + BG.archivados() + (BG.archivados() === 1 ? ' archivado' : ' archivados') + ' fuera de la lista' : '');
+      const quieto = (p) => (p.archivado ? '<span class="pill pill-muted">' + icon('box2') + 'Archivado</span>'
+        : BG.disponibles(p) > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO ? '<span class="pill pill-warn pill-quieto">' + icon('pause') + BG.diasSinVender(p) + ' días sin venderse</span>' : '');
       const stockTxt = (p) => { const d = BG.disponibles(p); return d > 0 ? d + ' / ' + p.cantidad : '<span class="pill pill-muted">Agotado</span>'; };
       const precioTxt = (p) => (p.precioVenta ? gs(p.precioVenta) : '<span class="pill pill-warn">' + icon('alert') + 'Sin precio</span>');
       // Ícono para borrar lo que se cargó por error (solo en los que nunca se movieron; queda en la auditoría).

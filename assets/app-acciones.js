@@ -36,6 +36,79 @@
     return c;
   };
 
+  /** Todo lo que cuelga de una clienta. Sirve para mostrarle a la persona qué se va a borrar antes de borrarlo. */
+  BG.loDeCliente = (id) => {
+    const ventas = BG.db.ventas.filter((v) => v.clienteId === id);
+    const pagos = BG.db.pagos.filter((p) => p.clienteId === id);
+    const egresos = (BG.db.egresos || []).filter((e) => e.clienteId === id);
+    const vivas = ventas.filter((v) => !v.anulada);
+    const pagosVivos = pagos.filter((p) => !p.anulado);
+    return {
+      ventas: ventas, pagos: pagos, egresos: egresos,
+      creditos: BG.db.creditos.filter((x) => x.clienteId === id),
+      canjes: (BG.db.canjes || []).filter((k) => k.clienteId === id),
+      envios: BG.db.envios.filter((e) => e.clienteId === id),
+      emisiones: BG.db.emisiones.filter((e) => e.clienteId === id),
+      vendido: sum(vivas, (v) => v.total),
+      cobrado: sum(pagosVivos, (p) => p.total + (p.excedente || 0)),
+      devuelto: sum(egresos, (e) => e.monto),
+      saldo: BG.saldoCliente(id),
+      aFavor: BG.creditoCliente(id),
+      /** Días con caja cerrada donde tiene movimientos: borrarlos cambia el arqueo de esos días. */
+      diasCerrados: Array.from(new Set(vivas.map((v) => v.fecha).concat(pagosVivos.map((p) => p.fecha)).concat(egresos.map((e) => e.fecha))))
+        .filter((f) => BG.cajaCerrada(f)).sort(),
+      /** ¿Movió plata alguna vez? Si no, borrarla no cambia ningún número. */
+      conMovimientos: ventas.length > 0 || pagos.length > 0 || egresos.length > 0
+        || BG.db.creditos.some((x) => x.clienteId === id) || BG.db.envios.some((e) => e.clienteId === id),
+    };
+  };
+
+  /**
+   * ¿Se puede borrar esta clienta? Solo el dueño, y si la borra con movimientos se van con ella sus ventas,
+   * cobros y devoluciones: eso cambia la caja y los reportes de esos días (por eso la pantalla pide el PIN).
+   */
+  BG.puedeBorrarCliente = (c) => {
+    if (!c) return { ok: false, razon: 'No encontramos esa clienta.' };
+    if (!BG.esDuena()) return { ok: false, razon: 'Borrar clientas lo hace ' + BG.nombreDuena() + '.' };
+    return { ok: true, razon: '', lo: BG.loDeCliente(c.id) };
+  };
+
+  /**
+   * Borra una clienta y todo lo suyo (ventas, cobros, saldo a favor, canjes, envíos y recibos emitidos).
+   * Es para limpiar pruebas o una clienta cargada por error, no para esconder una venta: queda escrito en la
+   * auditoría con los totales que se van. Si después del borrado los dos cuadres no cierran, no se guarda nada.
+   */
+  BG.borrarCliente = (id, motivo) => {
+    soloDuenio('borrar clientas');
+    const c = BG.cliente(id);
+    if (!c) throw new Error('No encontramos esa clienta.');
+    const lo = BG.loDeCliente(id);
+    const respaldo = JSON.parse(JSON.stringify(BG.db));
+    const ids = new Set(lo.ventas.map((v) => v.id));
+    BG.db.clientes = BG.db.clientes.filter((x) => x.id !== id);
+    BG.db.ventas = BG.db.ventas.filter((v) => v.clienteId !== id);
+    BG.db.pagos = BG.db.pagos.filter((p) => p.clienteId !== id && !(p.ventaId && ids.has(p.ventaId)));
+    BG.db.creditos = BG.db.creditos.filter((x) => x.clienteId !== id);
+    if (BG.db.canjes) BG.db.canjes = BG.db.canjes.filter((k) => k.clienteId !== id);
+    if (BG.db.egresos) BG.db.egresos = BG.db.egresos.filter((e) => e.clienteId !== id);
+    BG.db.envios = BG.db.envios.filter((e) => e.clienteId !== id);
+    BG.db.emisiones = BG.db.emisiones.filter((e) => e.clienteId !== id);
+    const cu = BG.cuadre();
+    const cf = BG.cuadreFavor();
+    if (!cu.ok || !cf.ok) {
+      BG.db = respaldo;   // si no cierran las cuentas, no se borra nada
+      throw new Error('No se borró nada: después de sacarla, las cuentas no cerraban. Contale esto a quien hizo el sistema.');
+    }
+    BG.auditar('clientes', 'Cliente borrado', c.nombre + (c.ci ? ' · CI ' + c.ci : '') + ' · se borraron '
+      + lo.ventas.length + (lo.ventas.length === 1 ? ' venta' : ' ventas') + ' por ' + gs(lo.vendido) + ', '
+      + lo.pagos.length + (lo.pagos.length === 1 ? ' cobro' : ' cobros') + ' por ' + gs(lo.cobrado)
+      + (lo.devuelto ? ', ' + gs(lo.devuelto) + ' devueltos en plata' : '')
+      + (lo.envios.length ? ', ' + lo.envios.length + (lo.envios.length === 1 ? ' envío' : ' envíos') : '')
+      + (limpiar(motivo) ? ' · motivo: ' + limpiar(motivo) : ''));
+    BG.guardar();
+    return lo;
+  };
+
   /** Clientes que podrían ser la misma persona (misma CI, mismo teléfono o nombre muy parecido). */
   BG.posiblesDuplicados = (datos, excluirId) => {
     const ci = BG.soloDigitos(datos.ci);
@@ -772,6 +845,22 @@
     BG.auditar('productos', 'Artículo borrado', p.codigo + ' · ' + p.descripcion + ' · ' + p.categoria + ' · ' + p.cantidad + (p.cantidad === 1 ? ' unidad' : ' unidades')
       + (p.precioVenta ? ' · precio ' + gs(p.precioVenta) : ' · sin precio') + ' · cargado el ' + BG.fmtFecha(p.fechaCarga) + (p.usuario ? ' por ' + p.usuario : '')
       + (limpiar(motivo) ? ' · motivo: ' + limpiar(motivo) : ''));
+    BG.guardar();
+    return p;
+  };
+
+  /**
+   * Archiva (o desarchiva) un artículo: sale de la lista de precios y de las pantallas de venta, pero no se
+   * borra nada. Las ventas, los recibos y los reportes viejos quedan exactamente igual.
+   */
+  BG.archivarProducto = (id, si, motivo) => {
+    const p = BG.producto(id);
+    const puede = BG.puedeArchivarProducto(p);
+    if (si && !puede.ok) throw new Error(puede.razon);
+    if (!BG.esDuena()) throw new Error('Archivar artículos lo hace ' + BG.nombreDuena() + '.');
+    p.archivado = si ? { fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, motivo: limpiar(motivo) } : null;
+    BG.auditar('productos', si ? 'Artículo archivado' : 'Artículo desarchivado', p.codigo + ' · ' + p.descripcion
+      + (si ? ' · sale de la lista de precios (el historial no se toca)' + (limpiar(motivo) ? ' · ' + limpiar(motivo) : '') : ' · vuelve a la lista de precios'));
     BG.guardar();
     return p;
   };

@@ -319,10 +319,12 @@
     }
     const reg = BG.registrarDevolucion({ ventaId: v.id, item: st.item, cantidad: st.cantidad, tipo: st.tipo, productoId: st.productoId, talle: st.talle,
       motivo: st.motivo, nota: st.nota, destino: destino, autorizadoPor: autorizadoPor });
-    BG.toast(reg.tipo === 'talle' ? 'Cambio de talle registrado.'
-      : reg.reintegro ? 'Listo: se le devuelven ' + gs(reg.reintegro) + ' en ' + BG.FORMAS[reg.forma].toLowerCase() + (reg.reintegro < reg.aFavor ? '; ' + gs(reg.aFavor - reg.reintegro) + ' de puntos quedan a su favor.' : '.')
+    // El cambio de talle no mueve el stock (es el mismo artículo en otro talle); la devolución y el cambio sí.
+    const alStock = reg.tipo === 'talle' ? '' : ' ' + reg.cantidad + (reg.cantidad === 1 ? ' unidad vuelve' : ' unidades vuelven') + ' al stock.';
+    BG.toast(reg.tipo === 'talle' ? 'Cambio de talle registrado (el stock no cambia: es el mismo artículo).'
+      : (reg.reintegro ? 'Listo: se le devuelven ' + gs(reg.reintegro) + ' en ' + BG.FORMAS[reg.forma].toLowerCase() + (reg.reintegro < reg.aFavor ? '; ' + gs(reg.aFavor - reg.reintegro) + ' de puntos quedan a su favor.' : '.')
         : reg.aFavor ? 'Listo: ' + gs(reg.aFavor) + ' quedan a favor de la clienta.'
-          : 'Listo. La venta quedó en ' + gs(v.total) + (BG.saldoVenta(v) > 0 ? ', debe ' + gs(BG.saldoVenta(v)) : '') + '.');
+          : 'Listo. La venta quedó en ' + gs(v.total) + (BG.saldoVenta(v) > 0 ? ', debe ' + gs(BG.saldoVenta(v)) : '') + '.') + alStock);
     return true;
   };
 

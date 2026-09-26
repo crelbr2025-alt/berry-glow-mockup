@@ -254,6 +254,22 @@
       estados: [['preparando', 0, '11:00', 'j']] },
   ];
 
+  /**
+   * «Lo que pedí» de un pedido que ya llegó: las mismas líneas, escritas como las escribe una persona
+   * (coma decimal). En pd1 se cambian tres a propósito para que la comparación del pedido tenga qué mostrar.
+   */
+  function pedidoOriginal(ped) {
+    const filas = ped.items
+      .filter((it) => !(ped.id === 'pd1' && it[1] === 'Collar de perlas'))     // llegó sin estar en el pedido
+      .map((it) => ({
+        desc: it[1], cat: it[2], nota: '',
+        cant: String(ped.id === 'pd1' && it[1] === 'Campera de jean clásica' ? it[3] + 2 : it[3]),
+        costo: String(it[4]).replace('.', ','), peso: String(it[5]).replace('.', ','),
+      }));
+    if (ped.id === 'pd1') filas.push({ desc: 'Pantalón cargo verde', cat: 'Prenda', cant: '3', costo: '27,00', peso: '0,500', nota: 'No vino: sin stock' });
+    return filas;
+  }
+
   function crear(hoy) {
     const F = (dias) => sumarDias(hoy, -dias);
     // Lo de HOY no puede figurar en una hora que todavía no pasó: si son las 9 de la mañana, una venta
@@ -346,6 +362,9 @@
       const reparto = ped.modo === 'total' ? C.prorratearEnvio(lineas, ped.envioTotal) : null;
       db.pedidos.push({
         id: ped.id, estado: 'recibido', fechaPedido: F(ped.dias + 12), fecha: fecha, ts: ts, proveedor: ped.proveedor, cotizacion: ped.cot,
+        // Lo que se había encargado, para poder compararlo con lo que llegó. En pd1 hay diferencias a propósito
+        // (algo llegó de menos, algo no llegó y algo llegó sin estar en el pedido), como pasa en la vida real.
+        items: pedidoOriginal(ped),
         historial: [
           { estado: 'pedido', ts: T(ped.dias + 12, '10:00'), usuario: USUARIO, nota: '' },
           { estado: 'en_camino', ts: T(ped.dias + 5, '09:00'), usuario: USUARIO, nota: 'Courier Miami–Asunción' },

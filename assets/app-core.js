@@ -457,15 +457,15 @@
    */
   BG.puedeBorrarProducto = (p) => {
     if (!p) return { ok: false, razon: 'No encontramos ese artículo.' };
-    const enVentas = BG.db.ventas.filter((v) => v.items.some((it) => it.productoId === p.id));
-    if (enVentas.length) {
-      const viva = enVentas.some((v) => !v.anulada);
-      return { ok: false, razon: viva
-        ? 'Ya se vendió (está en ' + enVentas.length + (enVentas.length === 1 ? ' venta' : ' ventas') + '): para sacarlo del stock usá un conteo de inventario.'
-        : 'Está en una venta anulada: queda en el historial, así que el artículo no se borra.' };
+    // Una venta anulada no es historia viva: si todas las ventas que lo nombran están anuladas, el artículo
+    // se puede borrar sin cambiar ningún número (esas ventas guardan su propia descripción y su precio).
+    const vivas = BG.db.ventas.filter((v) => !v.anulada && v.items.some((it) => it.productoId === p.id));
+    if (vivas.length) {
+      return { ok: false, archivar: true, razon: 'Ya se vendió (está en ' + vivas.length + (vivas.length === 1 ? ' venta' : ' ventas')
+        + '): borrarlo cambiaría esa compra y el recibo que ya se emitió. Si no lo tenés más, archivalo.' };
     }
     if ((BG.db.ajustesStock || []).some((a) => a.productoId === p.id)) {
-      return { ok: false, razon: 'Ya entró en un conteo de inventario: se corrige con otro conteo, no borrando.' };
+      return { ok: false, archivar: true, razon: 'Ya entró en un conteo de inventario: se corrige con otro conteo, no borrando.' };
     }
     // La vendedora puede borrar lo que cargó ella (los de antes, sin usuario anotado, solo el dueño).
     const mio = !!p.usuario && p.usuario === BG.usuario().nombre;
@@ -474,6 +474,25 @@
     }
     return { ok: true, razon: '', quien: mio ? 'propio' : 'duena' };
   };
+  /**
+   * Archivar es lo contrario de borrar: el artículo queda entero en el historial (las ventas viejas siguen
+   * igual) pero desaparece de la lista de precios y de las pantallas de venta. Es para lo que ya no se tiene.
+   * Solo se archiva lo que no tiene stock: esconder mercadería que está en el local sería mentirle al sistema.
+   */
+  BG.puedeArchivarProducto = (p) => {
+    if (!p) return { ok: false, razon: 'No encontramos ese artículo.' };
+    if (!BG.esDuena()) return { ok: false, razon: 'Archivar artículos lo hace ' + BG.nombreDuena() + '.' };
+    if (p.archivado) return { ok: true, razon: '', desarchivar: true };
+    const quedan = BG.disponibles(p);
+    if (quedan > 0) {
+      return { ok: false, razon: 'Todavía figuran ' + quedan + (quedan === 1 ? ' unidad' : ' unidades') + ' en stock. Si ya no las tenés, hacé un conteo de inventario y después archivalo.' };
+    }
+    return { ok: true, razon: '' };
+  };
+  BG.productoArchivado = (p) => !!(p && p.archivado);
+  /** Los artículos que se ven en las listas y en las pantallas de venta (sin los archivados). */
+  BG.productosVivos = () => BG.db.productos.filter((p) => !p.archivado);
+  BG.archivados = () => BG.db.productos.filter((p) => !!p.archivado).length;
 
   /* ── Meta y comisión de la vendedora ───────────────────────────────── */
 
@@ -735,6 +754,80 @@
     return t;
   };
 
+  /**
+   * Compara lo que se pidió al proveedor con lo que después se cargó al stock desde ese pedido.
+   * Empareja por descripción (igual, o una contenida en la otra) y dice, artículo por artículo, si llegó
+   * completo, si llegó de menos, de más o si no llegó; y qué llegó que no estaba en el pedido.
+   * Los dólares se suman con la calculadora exacta, igual que en el resto del sistema.
+   */
+  BG.compararPedido = (ped) => {
+    const cargados = (ped.productos || []).map((id) => BG.producto(id)).filter(Boolean);
+    const usados = new Set();
+    const buscar = (desc) => {
+      const d = norm(desc);
+      if (!d) return null;
+      return cargados.find((p) => !usados.has(p.id) && norm(p.descripcion) === d)
+        || cargados.find((p) => !usados.has(p.id) && (norm(p.descripcion).includes(d) || d.includes(norm(p.descripcion)))) || null;
+    };
+    let usdPedido = C.Q(0n);
+    let usdReal = C.Q(0n);
+    const filas = (ped.items || []).map((it) => {
+      const m = buscar(it.desc);
+      if (m) usados.add(m.id);
+      const pedidas = C.parseEntero(it.cant) || 0;
+      const llegaron = m ? m.cantidad : 0;
+      const costoPedido = C.parseNum(it.costo, 'decimal');
+      const costoReal = m && m.costoUSD != null ? C.asQ(m.costoUSD) : null;
+      if (costoPedido) usdPedido = C.add(usdPedido, C.mul(costoPedido, C.Q(BigInt(pedidas))));
+      if (costoReal) usdReal = C.add(usdReal, C.mul(costoReal, C.Q(BigInt(llegaron))));
+      return {
+        desc: it.desc, cat: it.cat, pedidas: pedidas, llegaron: llegaron, producto: m,
+        costoPedido: costoPedido, costoReal: costoReal,
+        masCaro: costoPedido && costoReal ? C.cmp(costoReal, costoPedido) > 0 : false,
+        masBarato: costoPedido && costoReal ? C.cmp(costoReal, costoPedido) < 0 : false,
+        estado: !m ? 'falta' : llegaron === pedidas ? 'ok' : llegaron < pedidas ? 'menos' : 'mas',
+      };
+    });
+    const extras = cargados.filter((p) => !usados.has(p.id));
+    for (const p of extras) if (p.costoUSD != null) usdReal = C.add(usdReal, C.mul(C.asQ(p.costoUSD), C.Q(BigInt(p.cantidad))));
+    return {
+      filas: filas, extras: extras, usdPedido: usdPedido, usdReal: usdReal,
+      llegaron: filas.filter((f) => f.estado === 'ok').length,
+      problemas: filas.filter((f) => f.estado !== 'ok').length + extras.length,
+      cargado: cargados.length > 0,
+    };
+  };
+
+  /**
+   * Lee un carrito pegado (SHEIN u otra tienda) y saca artículo, cantidad y precio en dólares.
+   * Es a propósito tolerante: acepta «Remera negra $12.99 x2», «Remera negra US$ 12,99», la descripción y el
+   * precio en líneas separadas, y «Cant: 2» o «x 2». Lo que no entiende queda como descripción sin precio,
+   * para completarlo a mano. Nunca inventa un precio.
+   */
+  BG.leerCarrito = (texto) => {
+    const lineas = String(texto || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const RE_PRECIO = /(?:us\$|usd|\$)\s*([0-9]+(?:[.,][0-9]{1,2})?)|([0-9]+[.,][0-9]{2})\s*$/i;
+    const RE_CANT = /(?:^|\s)(?:x\s*([0-9]{1,3})\b|cant(?:idad)?\.?\s*[:=]?\s*([0-9]{1,3})\b|([0-9]{1,3})\s*(?:uds?|unid(?:ades)?|pcs?|piezas?)\b)/i;
+    const soloPrecio = (l) => { const m = l.match(/^(?:us\$|usd|\$)?\s*([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:us\$|usd|\$)?$/i); return m ? m[1] : null; };
+    const limpiarDesc = (s) => s.replace(RE_PRECIO, ' ').replace(RE_CANT, ' ').replace(/[\s·|,;:–—-]+$/g, '').replace(/^[\s·|,;:–—-]+/g, '').replace(/\s{2,}/g, ' ').trim();
+    const salida = [];
+    for (let i = 0; i < lineas.length; i++) {
+      const l = lineas[i];
+      if (soloPrecio(l)) continue;                        // un precio suelto sin descripción arriba: se ignora
+      if (/^(total|subtotal|env[ií]o|shipping|cup[oó]n|descuento|carrito|cart)\b/i.test(l)) continue;
+      const mp = l.match(RE_PRECIO);
+      const mc = l.match(RE_CANT);
+      let precio = mp ? (mp[1] || mp[2]) : null;
+      // Descripción y precio en líneas separadas: si la que sigue es solo un precio, es de este artículo.
+      if (!precio && i + 1 < lineas.length && soloPrecio(lineas[i + 1])) { precio = soloPrecio(lineas[i + 1]); i++; }
+      const desc = limpiarDesc(l);
+      if (!desc) continue;
+      const cant = mc ? Number(mc[1] || mc[2] || mc[3]) : 1;
+      salida.push({ desc: desc, cant: String(cant > 0 ? cant : 1), costo: precio ? String(precio).replace('.', ',') : '', cat: 'Prenda', peso: '', nota: '' });
+    }
+    return salida;
+  };
+
   /** Los cuatro precios sugeridos sobre el costo congelado del producto, con el redondeo vigente. */
   BG.preciosProducto = (p) => {
     if (p.costoTotalGs == null) return [];
@@ -936,6 +1029,7 @@
     if (!t) return [];
     const res = [];
     for (const p of BG.db.productos) {
+      if (p.archivado) continue;              // archivado = fuera de las listas y de las pantallas de venta
       if (filtro && !filtro(p)) continue;
       const s = puntajeTexto(t, p.descripcion + ' ' + p.categoria);
       if (s > 0) res.push({ p: p, s: s });

@@ -738,6 +738,12 @@ dialog { color: var(--ink); }
   padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: inherit; font: inherit;
 }
 .hay-item:hover { border-color: var(--berry); background: var(--berry-soft); }
+.hay-item .grow { display: flex; flex-direction: column; min-width: 0; }
+/* En «Cobrar»: un tono apenas marcado para diferenciar al que debe del que está al día. */
+.hay-item.debe { background: var(--warn-soft); border-color: transparent; }
+.hay-item.debe.atrasado { background: var(--bad-soft); }
+.hay-item.debe .amount { color: var(--bad); }
+.hay-item.debe:hover { border-color: var(--berry); }
 .hay-item .row-title { font-size: 14px; }
 .hay-todo { border-top: 1px solid var(--line); padding-top: 8px; }
 .hay-todo summary { font-weight: 700; font-size: 13.5px; color: var(--berry); cursor: pointer; }

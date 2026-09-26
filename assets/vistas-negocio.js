@@ -168,7 +168,7 @@
       + '<button type="button" class="btn btn-primary btn-lg btn-block" data-accion="guardar">' + icon('check') + 'Guardar conteo</button></section></div>'
       + '<section class="card stack"><div class="card-head"><h2>Conteos anteriores</h2></div><div id="conteo-hist"></div></section></div>';
     let root = null;
-    const productos = () => BG.db.productos.filter((p) => (e.agotados || BG.disponibles(p) > 0) && (e.cat === 'todas' || p.categoria === e.cat)
+    const productos = () => BG.db.productos.filter((p) => !p.archivado && (e.agotados || BG.disponibles(p) > 0) && (e.cat === 'todas' || p.categoria === e.cat)
       && (!e.q.trim() || BG.norm(p.descripcion + ' ' + p.codigo).includes(BG.norm(e.q.trim()))));
     const dif = (p) => { const c = cuenta[p.id]; return c && c.contado !== '' ? Number(c.contado) - BG.disponibles(p) : null; };
     const pill = (d) => (d == null ? '' : d === 0 ? '<span class="pill pill-good">' + icon('check') + 'Coincide</span>' : d < 0 ? '<span class="pill pill-bad">Faltan ' + (-d) + '</span>' : '<span class="pill pill-warn">Sobran ' + d + '</span>');
@@ -314,6 +314,37 @@
     return true;
   };
 
+  /**
+   * Pedido contra realidad: lo que encargué, lo que llegó y en qué se diferencian (cantidades y costo en
+   * dólares). Sale recién cuando el pedido se cargó al stock, que es cuando hay con qué comparar.
+   */
+  function htmlComparativa(ped) {
+    const c = BG.compararPedido(ped);
+    const pill = { ok: '<span class="pill pill-good">' + icon('check') + 'Completo</span>',
+      menos: '<span class="pill pill-warn">' + icon('alert') + 'Llegó de menos</span>',
+      mas: '<span class="pill pill-warn">' + icon('alert') + 'Llegó de más</span>',
+      falta: '<span class="pill pill-bad">' + icon('ban') + 'No llegó</span>' };
+    const usd = (q) => (q ? C.fmtUSD(q) : '—');
+    const dif = C.cmp(c.usdReal, c.usdPedido);
+    return '<section class="card card-flush"><div class="card-head pad"><h2>Lo que pedí y lo que llegó</h2>'
+      + '<span class="small muted">' + c.llegaron + ' de ' + c.filas.length + ' completos' + (c.problemas ? ' · ' + c.problemas + (c.problemas === 1 ? ' diferencia' : ' diferencias') : '') + '</span></div>'
+      + '<div class="table-wrap table-bare"><table class="table table-compact"><thead><tr><th>Artículo</th><th class="num">Pedí</th><th class="num">Llegó</th>'
+      + '<th class="num">US$ c/u pedido</th><th class="num">US$ c/u real</th><th>Estado</th></tr></thead><tbody>'
+      + c.filas.map((f) => '<tr' + (f.estado === 'falta' ? ' class="is-late"' : '') + '><td><div class="t-title">' + esc(f.desc) + '</div>'
+        + (f.producto ? '<div class="t-sub">' + esc(f.producto.codigo) + ' · ' + esc(f.producto.descripcion) + '</div>' : '')
+        + '</td><td class="num">' + f.pedidas + '</td><td class="num">' + (f.producto ? f.llegaron : '—') + '</td>'
+        + '<td class="num">' + usd(f.costoPedido) + '</td><td class="num">' + usd(f.costoReal)
+        + (f.masCaro ? '<div class="t-sub t-devuelto">más caro</div>' : f.masBarato ? '<div class="t-sub t-favor">más barato</div>' : '')
+        + '</td><td>' + pill[f.estado] + '</td></tr>').join('')
+      + c.extras.map((x) => '<tr><td><div class="t-title">' + esc(x.descripcion) + '</div><div class="t-sub">' + esc(x.codigo) + '</div></td>'
+        + '<td class="num">—</td><td class="num">' + x.cantidad + '</td><td class="num">—</td><td class="num">' + (x.costoUSD ? C.fmtUSD(x.costoUSD) : '—') + '</td>'
+        + '<td><span class="pill pill-muted">' + icon('info') + 'No estaba en el pedido</span></td></tr>').join('')
+      + '</tbody><tfoot><tr><td colspan="3">En mercadería</td><td class="num">' + C.fmtUSD(c.usdPedido) + '</td><td class="num">' + C.fmtUSD(c.usdReal) + '</td>'
+      + '<td>' + (dif === 0 ? '<span class="pill pill-good">' + icon('check') + 'Igual a lo pedido</span>'
+        : '<span class="pill ' + (dif > 0 ? 'pill-warn' : 'pill-good') + '">' + (dif > 0 ? 'Costó más' : 'Costó menos') + '</span>') + '</td></tr></tfoot></table></div>'
+      + '<p class="hint pad-x-card">Se comparan por descripción. Si algo quedó sin emparejar, revisá el nombre con el que lo cargaste.</p></section>';
+  }
+
   BG.vistas.pedidoDetalle = (args) => {
     const p = BG.db.pedidos.find((x) => x.id === args[0]);
     if (!p) return { html: '<div class="page"><p class="empty">No encontramos ese pedido. <a href="#/pedidos">Ver pedidos</a></p></div>' };
@@ -345,6 +376,7 @@
           return '<tr><td><div class="t-title">' + esc(it.desc) + '</div><div class="t-sub">' + esc(it.cat) + (it.nota ? ' · ' + esc(it.nota) : '') + '</div></td><td class="num">' + n + '</td><td class="num">' + (q ? C.fmtUSD(q) : '—') + '</td>'
             + '<td class="num col-sm-hide">' + (it.peso ? esc(it.peso) + ' kg' : '—') + '</td><td class="num">' + (q ? C.fmtUSD(C.mul(q, C.Q(BigInt(n)))) : '—') + '</td></tr>'; }).join('')
         + '</tbody><tfoot><tr><td colspan="3">Total en mercadería</td><td class="col-sm-hide"></td><td class="num">' + C.fmtUSD(usd) + '</td></tr></tfoot></table></div></section>' : '')
+      + (p.items && productos.length ? htmlComparativa(p) : '')
       + (productos.length ? '<section class="card card-flush"><div class="card-head pad"><h2>Cargado al stock</h2><span class="small muted">' + productos.length + ' productos</span></div><ul class="list list-plain">'
         + productos.map((x) => '<li><a class="list-row" href="#/productos?ver=' + x.id + '"><span class="avatar">' + icon('tag', 'i-sm') + '</span><span class="row-main"><span class="row-title">' + esc(x.descripcion) + '</span>'
           + '<span class="row-sub">' + esc(x.codigo) + ' · ' + x.cantidad + ' u · quedan ' + BG.disponibles(x) + '</span></span><span class="row-end"><span class="amount">' + (x.precioVenta ? gs(x.precioVenta) : 'Sin precio') + '</span></span></a></li>').join('')
@@ -370,6 +402,44 @@
     };
   };
 
+  /**
+   * Pegar el carrito de SHEIN (o de donde sea) y que salgan las filas solas. Muestra primero lo que entendió,
+   * para corregir antes de agregarlo: nunca inventa un precio que no estaba en el texto.
+   */
+  async function pegarCarrito() {
+    let filas = [];
+    const r = await BG.modal({
+      titulo: 'Pegar el carrito', ancho: 'wide',
+      cuerpo: '<p>Copiá tu carrito o tu pedido (SHEIN, Temu, un mail de confirmación, lo que sea) y pegalo acá. '
+        + 'El sistema saca el artículo, la cantidad y el precio en dólares; lo que no entienda lo deja en blanco para completar.</p>'
+        + '<div class="field"><label for="pc-texto">Pegá acá</label><textarea id="pc-texto" class="textarea" rows="7" placeholder="Remera oversize negra $12.99 x2&#10;Jean wide leg azul&#10;US$ 26,50"></textarea></div>'
+        + '<div id="pc-vista"></div>',
+      acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Agregar al pedido', valor: 'ok', clase: 'btn-primary' }],
+      onMount: (dlg) => {
+        const ver = () => {
+          filas = BG.leerCarrito($('#pc-texto', dlg).value);
+          const host = $('#pc-vista', dlg);
+          if (!filas.length) { host.innerHTML = '<p class="hint">Todavía no hay nada para leer.</p>'; return; }
+          const sinPrecio = filas.filter((f) => !f.costo).length;
+          host.innerHTML = '<p class="field-label">Entendí ' + filas.length + (filas.length === 1 ? ' artículo' : ' artículos')
+            + (sinPrecio ? ' · ' + sinPrecio + ' sin precio (lo completás vos)' : '') + '</p>'
+            + '<div class="table-wrap"><table class="table table-compact"><thead><tr><th>Artículo</th><th class="num">Cant.</th><th class="num">US$ c/u</th></tr></thead><tbody>'
+            + filas.map((f) => '<tr><td>' + esc(f.desc) + '</td><td class="num">' + esc(f.cant) + '</td><td class="num">' + (f.costo ? esc(f.costo) : '<span class="pill pill-warn">falta</span>') + '</td></tr>').join('')
+            + '</tbody></table></div>';
+        };
+        $('#pc-texto', dlg).addEventListener('input', ver);
+        ver();
+        $('#pc-texto', dlg).focus();
+      },
+      validar: () => {
+        if (filas.length) return true;
+        BG.toast('Pegá el carrito para poder leerlo.', 'error');
+        return false;
+      },
+    });
+    return r === 'ok' ? filas : null;
+  }
+
   BG.vistas.pedidoForm = (args) => {
     const p = args[0] ? BG.db.pedidos.find((x) => x.id === args[0]) : null;
     const s = p ? { proveedor: p.proveedor, fechaPedido: p.fechaPedido, nota: p.nota || '', items: p.items.map((x) => Object.assign({}, x)) }
@@ -382,7 +452,8 @@
       + '<div class="field"><label for="pf-prov">Proveedor</label><input id="pf-prov" class="input" list="pf-provs" autocomplete="off" value="' + esc(s.proveedor) + '" placeholder="Ej.: Outlet Miami, EE. UU."><datalist id="pf-provs">' + proveedores.map((x) => '<option value="' + esc(x) + '">').join('') + '</datalist></div>'
       + '<div class="field"><label for="pf-fecha">Fecha del pedido</label><input id="pf-fecha" class="input input-date" type="date" value="' + s.fechaPedido + '" max="' + BG.hoy() + '"></div></div>'
       + '<div class="table-wrap"><table class="table table-compact table-edit table-tarjetas"><thead><tr><th>Artículo</th><th>Categoría</th><th class="num">Cant.</th><th class="num">Costo US$</th><th class="num">Peso kg</th><th>Nota</th><th><span class="sr-only">Quitar</span></th></tr></thead><tbody id="pf-filas"></tbody></table></div>'
-      + '<button type="button" class="btn-link" data-accion="agregar">' + icon('plus', 'i-sm') + 'Agregar artículo</button>'
+      + '<div class="row"><button type="button" class="btn-link" data-accion="agregar">' + icon('plus', 'i-sm') + 'Agregar artículo</button>'
+      + '<button type="button" class="btn-link" data-accion="carrito">' + icon('file', 'i-sm') + 'Pegar el carrito</button></div>'
       + '<div class="field"><label for="pf-nota">Nota</label><input id="pf-nota" class="input" maxlength="120" autocomplete="off" value="' + esc(s.nota) + '" placeholder="Ej.: llegan juntos en una caja"></div>'
       + '<p class="summary-line" id="pf-total"></p><p class="error-text" id="pf-err" role="alert" hidden></p>'
       + '<div class="form-actions"><a class="btn btn-quiet" href="' + (p ? '#/pedidos/' + p.id : '#/pedidos') + '">Cancelar</a><button type="button" class="btn btn-primary" data-accion="guardar">' + icon('check') + (p ? 'Guardar cambios' : 'Guardar pedido') + '</button></div></section></div>';
@@ -409,6 +480,16 @@
           const b = ev.target.closest('[data-accion]');
           if (!b) return;
           if (b.dataset.accion === 'agregar') { s.items.push({ desc: '', cat: 'Accesorio', cant: '1', costo: '', peso: '', nota: '' }); pintarFilas(); const inps = $$('#pf-filas tr:last-child input', root); if (inps[0]) inps[0].focus(); }
+          else if (b.dataset.accion === 'carrito') {
+            pegarCarrito().then((filas) => {
+              if (!filas || !filas.length) return;
+              // Las filas vacías que había se reemplazan; lo que ya estaba escrito se respeta.
+              s.items = s.items.filter((x) => x.desc.trim()).concat(filas);
+              pintarFilas();
+              pintarTotal();
+              BG.toast(filas.length + (filas.length === 1 ? ' artículo agregado' : ' artículos agregados') + ': revisá cantidades, pesos y categoría.');
+            });
+          }
           else if (b.dataset.accion === 'quitar') { s.items.splice(Number(b.dataset.i), 1); if (!s.items.length) s.items.push({ desc: '', cat: 'Prenda', cant: '1', costo: '', peso: '', nota: '' }); pintarFilas(); pintarTotal(); }
           else if (b.dataset.accion === 'guardar') {
             const err = $('#pf-err', root);
