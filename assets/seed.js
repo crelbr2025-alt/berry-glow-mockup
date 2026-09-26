@@ -277,7 +277,7 @@
     const gs = (n) => C.fmtGs(n);
 
     const db = {
-      version: 7,
+      version: 8,
       creado: hoy,
       config: {
         tienda: {
@@ -287,7 +287,7 @@
           direccion: 'Coronel Oviedo, Caaguazú',
           mensaje: '¡Gracias por elegirnos! Cualquier consulta, escribinos por WhatsApp.',
         },
-        marca: { principal: '#A3195B', acento: '#E2A94F', logo: null },
+        marca: { principal: '#A3195B', acento: '#E2A94F', logo: null, logoEscala: 1, fondoCabecera: true },
         cotizacion: { valor: '7500', fecha: F(1), ts: T(1, '08:45'), usuario: USUARIO },
         tarifa: { valor: '22.5', fecha: F(60), ts: T(60, '09:00'), usuario: USUARIO },
         historialCotizacion: [
@@ -306,7 +306,9 @@
         // Ventas a cuenta: límite general por clienta y atraso máximo de cuotas (Ariel lo cambia en Ajustes).
         credito: { activo: true, limite: 1000000, diasAtraso: 15 },
         // Clientas frecuentes: 1 punto cada ₲ 10.000 pagados; cada punto vale ₲ 300 (3 %); canje desde 50 puntos; 10 % en su cumpleaños.
-        fidelidad: { activo: true, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: F(90), cumple: { activo: true, porcentaje: 10 }, terminos: '' },
+        fidelidad: { activo: true, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: F(90), cumple: { activo: true, porcentaje: 10 }, terminos: '', enRecibo: true },
+        // Lo anulado sigue en el historial; esto es solo si aparece o no en las listas del día a día.
+        vista: { verAnulados: false },
         envios: {
           origen: { ciudad: 'Coronel Oviedo', departamento: 'Caaguazú' },
           empresas: [
@@ -362,7 +364,7 @@
           id: codigo, codigo: codigo, descripcion: descripcion, categoria: categoria, proveedor: ped.proveedor,
           cantidad: cantidad, costoUSD: costo, pesoKg: peso,
           envioModo: ped.modo, tarifa: ped.modo === 'kg' ? ped.tarifa : null, envioUnitUSD: C.qToString(envioUnit),
-          cotizacion: ped.cot, pedidoId: ped.id, fechaCarga: fecha, ts: ts, nota: opciones.nota || '',
+          cotizacion: ped.cot, pedidoId: ped.id, fechaCarga: fecha, ts: ts, nota: opciones.nota || '', usuario: USUARIO,
           costoTotalGs: null, envioGs: null, productoGs: null, margen: null, precioVenta: null,
         };
         if (costo) {

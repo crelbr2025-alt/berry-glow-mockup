@@ -455,16 +455,36 @@
 
   /* ── Clientas frecuentes: canje de puntos y configuración ────────────── */
 
-  /** Canjea todos los puntos disponibles: se acreditan como saldo a favor (y cuentan como gasto de beneficios en la ganancia neta). */
-  BG.canjearPuntos = (clienteId) => {
+  /**
+   * Cuántos puntos hacen falta para cubrir `monto` (redondeando para arriba, sin pasar de los que tiene y
+   * nunca por debajo del mínimo de canje). Sirve para canjear solo lo que cubre una compra.
+   */
+  BG.puntosParaMonto = (clienteId, monto) => {
+    const f = BG.configFidelidad();
+    const pts = BG.puntosDe(clienteId);
+    if (!pts || !pts.canjeable || !(f.valorPunto > 0)) return 0;
+    const justos = Math.ceil(Math.max(0, Math.round(monto)) / f.valorPunto);
+    return Math.min(pts.puntos, Math.max(f.minimo, justos));
+  };
+  /**
+   * Canjea puntos: se acreditan como saldo a favor (y cuentan como gasto de beneficios en la ganancia neta).
+   * Sin `puntos` canjea todos los disponibles; con `puntos` canjea esa cantidad (nunca menos que el mínimo del
+   * programa ni más de los que tiene). El valor sale de `valorPunto`: 1 punto = valorPunto guaraníes, exacto.
+   */
+  BG.canjearPuntos = (clienteId, puntos) => {
     const f = BG.configFidelidad();
     const pts = BG.puntosDe(clienteId);
     if (!pts || !pts.canjeable) throw new Error('Todavía no tiene los ' + f.minimo + ' puntos para canjear.');
+    const n = puntos == null ? pts.puntos : Math.round(Number(puntos));
+    if (!(n > 0)) throw new Error('Escribí cuántos puntos canjea.');
+    if (n < f.minimo) throw new Error('El canje más chico es de ' + f.minimo + ' puntos (' + gs(f.minimo * f.valorPunto) + ').');
+    if (n > pts.puntos) throw new Error('Tiene ' + pts.puntos + (pts.puntos === 1 ? ' punto' : ' puntos') + ': no se pueden canjear ' + n + '.');
     const cli = BG.cliente(clienteId);
-    const k = { id: BG.uid('cj'), clienteId: clienteId, fecha: BG.hoy(), ts: BG.ahora(), puntos: pts.puntos, monto: pts.valor, usuario: BG.usuario().nombre };
+    const k = { id: BG.uid('cj'), clienteId: clienteId, fecha: BG.hoy(), ts: BG.ahora(), puntos: n, monto: n * f.valorPunto, valorPunto: f.valorPunto, usuario: BG.usuario().nombre };
     (BG.db.canjes || (BG.db.canjes = [])).push(k);
     credito(clienteId, k.monto, 'Canje de ' + k.puntos + ' puntos', { canjeId: k.id });
-    BG.auditar('fidelidad', 'Canje de puntos', cli.nombre + ' · ' + k.puntos + ' puntos = ' + gs(k.monto) + ' de saldo a favor');
+    BG.auditar('fidelidad', 'Canje de puntos', cli.nombre + ' · ' + k.puntos + ' puntos = ' + gs(k.monto) + ' de saldo a favor'
+      + (n < pts.puntos ? ' · le quedan ' + (pts.puntos - n) + (pts.puntos - n === 1 ? ' punto' : ' puntos') : ''));
     BG.guardar();
     return k;
   };
@@ -482,7 +502,15 @@
     if (datos.cumple) f.cumple = Object.assign({}, BG.configFidelidad().cumple, datos.cumple);
     BG.db.config.fidelidad = f;
     BG.auditar('fidelidad', 'Programa de clientas frecuentes', f.activo ? '1 punto cada ' + gs(f.cadaGs) + ' · cada punto ' + gs(f.valorPunto) + ' · canje desde ' + f.minimo + ' puntos'
-      + (f.cumple.activo ? ' · cumpleaños ' + f.cumple.porcentaje + ' %' : ' · sin regalo de cumpleaños') : 'Desactivado');
+      + (f.cumple.activo ? ' · cumpleaños ' + f.cumple.porcentaje + ' %' : ' · sin regalo de cumpleaños')
+      + (f.enRecibo ? ' · los puntos se imprimen en el recibo' : ' · los puntos NO se imprimen en el recibo') : 'Desactivado');
+    BG.guardar();
+  };
+  /** Mostrar u ocultar de las listas lo anulado y lo cancelado (nada se borra: sigue en el historial y en la auditoría). */
+  BG.cambiarVerAnulados = (si) => {
+    soloDuenio('cambiar lo que se ve en las listas');
+    BG.db.config.vista = Object.assign({}, BG.db.config.vista, { verAnulados: !!si });
+    BG.auditar('parametros', 'Listas', si ? 'Se muestran las ventas, pagos, gastos y envíos anulados' : 'Se ocultan de las listas las ventas, pagos, gastos y envíos anulados (siguen en el historial)');
     BG.guardar();
   };
   BG.guardarCredito = (datos) => {
@@ -509,11 +537,11 @@
     BG.guardar();
     return g;
   };
-  BG.anularGasto = (id, motivo) => {
+  BG.anularGasto = (id, motivo, tipo) => {
     soloDuenio('anular gastos');
     const g = (BG.db.gastos || []).find((x) => x.id === id);
     if (!g || g.anulado) return;
-    g.anulado = { fecha: BG.hoy(), ts: BG.ahora(), motivo: limpiar(motivo), usuario: BG.usuario().nombre };
+    g.anulado = { fecha: BG.hoy(), ts: BG.ahora(), motivo: limpiar(motivo), tipo: tipo || null, usuario: BG.usuario().nombre };
     BG.auditar('gastos', 'Gasto anulado', BG.fmtFecha(g.fecha) + ' · ' + g.concepto + ' · ' + gs(g.monto) + ' · motivo: ' + g.anulado.motivo);
     BG.guardar();
   };
@@ -607,13 +635,23 @@
     BG.guardar();
   };
 
-  BG.anularVenta = (id, motivo) => {
+  /**
+   * Anula una venta. `tipo` es el motivo tipificado (ver BG.MOTIVOS_ANULACION.venta) y `motivo` el texto que
+   * queda en el historial. Lo que pasa siempre, sea cual sea el motivo: las unidades vuelven al stock
+   * (BG.vendidas no cuenta las ventas anuladas), la venta deja de sumar puntos (BG.puntosDeVenta da 0) y lo
+   * que la clienta había pagado queda como saldo a favor.
+   */
+  BG.anularVenta = (id, motivo, tipo) => {
     soloDuenio('anular ventas');
     const v = BG.venta(id);
     const cli = BG.cliente(v.clienteId);
     const pagado = BG.pagadoVenta(v);
-    v.anulada = { fecha: BG.hoy(), ts: BG.ahora(), motivo: motivo, usuario: BG.usuario().nombre };
-    BG.auditar('anulaciones', 'Venta anulada', 'Recibo ' + BG.fmtRecibo(v.recibo) + ' · ' + cli.nombre + ' · motivo: ' + motivo);
+    const puntos = BG.puntosDeVenta(v);
+    v.anulada = { fecha: BG.hoy(), ts: BG.ahora(), motivo: motivo, tipo: tipo || null, usuario: BG.usuario().nombre, puntosPerdidos: puntos };
+    const unidades = sum(v.items, (it) => BG.cantidadViva(it));
+    BG.auditar('anulaciones', 'Venta anulada', 'Recibo ' + BG.fmtRecibo(v.recibo) + ' · ' + cli.nombre + ' · motivo: ' + motivo
+      + (unidades ? ' · vuelven al stock ' + unidades + (unidades === 1 ? ' unidad' : ' unidades') : '')
+      + (puntos ? ' · pierde ' + puntos + (puntos === 1 ? ' punto' : ' puntos') : ''));
     if (pagado > 0) {
       credito(v.clienteId, pagado, 'Pagos de la venta anulada ' + BG.fmtRecibo(v.recibo), { ventaId: v.id });
       BG.auditar('anulaciones', 'Saldo a favor', cli.nombre + ' · ' + gs(pagado) + ' de la venta anulada');
@@ -649,14 +687,14 @@
     return null;
   };
 
-  BG.anularPago = (id, motivo) => {
+  BG.anularPago = (id, motivo, tipo) => {
     soloDuenio('anular pagos');
     const pg = BG.db.pagos.find((p) => p.id === id);
     const problema = BG.motivoNoAnulable(pg);
     if (problema) throw new Error(problema);
     const cli = BG.cliente(pg.clienteId);
     const r = favorARevertir(pg);
-    pg.anulado = { fecha: BG.hoy(), ts: BG.ahora(), motivo: motivo, usuario: BG.usuario().nombre };
+    pg.anulado = { fecha: BG.hoy(), ts: BG.ahora(), motivo: motivo, tipo: tipo || null, usuario: BG.usuario().nombre };
     const deSaldo = sum(pg.partes.filter((x) => x.forma === 'saldo'), (x) => x.monto);
     if (deSaldo > 0) credito(pg.clienteId, deSaldo, 'Devuelto al anular el recibo ' + BG.fmtRecibo(pg.recibo), { pagoId: pg.id });
     if (pg.excedente > 0) credito(pg.clienteId, -pg.excedente, 'Anulación del recibo ' + BG.fmtRecibo(pg.recibo), { pagoId: pg.id });
@@ -693,6 +731,7 @@
       cantidad: d.cantidad, costoUSD: C.qToString(d.costoUSD), pesoKg: C.qToString(d.pesoKg),
       envioModo: d.envioModo, tarifa: d.tarifa || null, envioUnitUSD: C.qToString(C.asQ(d.envioUnitUSD)),
       cotizacion: C.qToString(C.asQ(d.cotizacion)), pedidoId: d.pedidoId || null, fechaCarga: fecha, ts: ts, nota: '',
+      usuario: BG.usuario().nombre,
       costoTotalGs: Number(r.costoTotalGs), envioGs: Number(r.envioGs), productoGs: Number(r.productoGs),
       margen: margen, precioVenta: d.precioManual ? d.precioManual : Number(r.precios.find((x) => x.margen === margen).redondeado),
     };
@@ -715,6 +754,26 @@
     }
     BG.guardar();
     return creados;
+  };
+
+  /**
+   * Borra un artículo que se cargó por error. Solo se puede si nunca se movió (BG.puedeBorrarProducto):
+   * sin ventas, sin devoluciones y sin conteos, así ningún número del pasado cambia. Lo que se borró queda
+   * escrito en la auditoría con todos sus datos, y si venía de un pedido se lo saca de ese pedido.
+   */
+  BG.borrarProducto = (id, motivo) => {
+    const p = BG.producto(id);
+    const puede = BG.puedeBorrarProducto(p);
+    if (!puede.ok) throw new Error(puede.razon);
+    BG.db.productos = BG.db.productos.filter((x) => x.id !== id);
+    for (const ped of BG.db.pedidos || []) {
+      if (Array.isArray(ped.productos) && ped.productos.indexOf(id) >= 0) ped.productos = ped.productos.filter((x) => x !== id);
+    }
+    BG.auditar('productos', 'Artículo borrado', p.codigo + ' · ' + p.descripcion + ' · ' + p.categoria + ' · ' + p.cantidad + (p.cantidad === 1 ? ' unidad' : ' unidades')
+      + (p.precioVenta ? ' · precio ' + gs(p.precioVenta) : ' · sin precio') + ' · cargado el ' + BG.fmtFecha(p.fechaCarga) + (p.usuario ? ' por ' + p.usuario : '')
+      + (limpiar(motivo) ? ' · motivo: ' + limpiar(motivo) : ''));
+    BG.guardar();
+    return p;
   };
 
   BG.actualizarPrecio = (pid, margen, precio, nota) => {
@@ -789,7 +848,12 @@
   };
   BG.guardarMarca = (datos) => {
     Object.assign(BG.db.config.marca, datos);
-    BG.auditar('parametros', 'Identidad visual', 'Logo y colores del recibo');
+    const que = [];
+    if ('logo' in datos) que.push(datos.logo ? 'logo nuevo' : 'logo provisorio');
+    if ('principal' in datos || 'acento' in datos) que.push('colores');
+    if ('logoEscala' in datos) que.push('tamaño del logo ×' + datos.logoEscala);
+    if ('fondoCabecera' in datos) que.push(datos.fondoCabecera ? 'encabezado con color' : 'encabezado en blanco');
+    BG.auditar('parametros', 'Identidad visual', que.join(' · ') || 'Logo y colores del recibo');
     return BG.guardar();
   };
 
@@ -817,11 +881,15 @@
   /** Cada vez que alguien imprime, guarda en PDF o manda por WhatsApp un recibo queda registrado. */
   BG.registrarEmision = (d) => {
     const cli = BG.cliente(d.clienteId);
-    BG.db.emisiones.push({ id: BG.uid('em'), ts: BG.ahora(), usuario: BG.usuario().nombre, recibo: d.recibo, ventaId: d.ventaId || null, clienteId: d.clienteId, medio: d.medio });
-    BG.auditar('recibos', 'Recibo emitido', (d.recibo ? 'Recibo ' + BG.fmtRecibo(d.recibo) : 'Estado de cuenta') + ' · ' + (cli ? cli.nombre : '') + ' · por ' + d.medio);
+    BG.db.emisiones.push({ id: BG.uid('em'), ts: BG.ahora(), usuario: BG.usuario().nombre, recibo: d.recibo, ventaId: d.ventaId || null, clienteId: d.clienteId, medio: d.medio, tipo: d.tipo || null });
+    const que = d.recibo ? 'Recibo ' + BG.fmtRecibo(d.recibo) : d.tipo === 'puntos' ? 'Comprobante de puntos' : 'Estado de cuenta';
+    BG.auditar('recibos', d.tipo === 'puntos' ? 'Comprobante de puntos emitido' : 'Recibo emitido', que + ' · ' + (cli ? cli.nombre : '') + ' · por ' + d.medio);
     BG.guardar();
   };
-  BG.emisionesDe = (recibo, clienteId) => BG.db.emisiones.filter((e) => (recibo ? e.recibo === recibo : !e.recibo && e.clienteId === clienteId));
+  /** Emisiones de un comprobante: por número de recibo, o —si no tiene— las del cliente de ese mismo tipo. */
+  BG.emisionesDe = (recibo, clienteId, tipo) => BG.db.emisiones.filter((e) => (recibo
+    ? e.recibo === recibo
+    : !e.recibo && e.clienteId === clienteId && (e.tipo || null) === (tipo || null)));
 
   /* ── Usuarios y permisos ─────────────────────────────────────────────── */
 

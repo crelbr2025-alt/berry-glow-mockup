@@ -97,7 +97,9 @@
     const pintar = () => {
       const [desde, hasta] = rangoDe(e.periodo);
       const r = BG.resultado(desde, hasta);
-      const lista = (BG.db.gastos || []).filter((g) => g.fecha >= desde && g.fecha <= hasta).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.ts.localeCompare(a.ts));
+      const todos = (BG.db.gastos || []).filter((g) => g.fecha >= desde && g.fecha <= hasta).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.ts.localeCompare(a.ts));
+      const anulados = todos.filter((g) => g.anulado).length;
+      const lista = BG.sinAnulados(todos, (g) => !!g.anulado);
       const barras = Object.keys(r.porCategoria).map((k) => ({ t: k, v: r.porCategoria[k] }))
         .concat(r.fletes ? [{ t: 'Fletes (Envíos)', v: r.fletes }] : []).concat(r.comision ? [{ t: 'Comisión', v: r.comision }] : []).concat(r.beneficios ? [{ t: 'Puntos canjeados', v: r.beneficios }] : [])
         .sort((a, b) => b.v - a.v);
@@ -110,7 +112,8 @@
         + (barras.length ? '<ul class="hbars">' + barras.map((x) => '<li class="hbar"><span class="hbar-label">' + esc(x.t) + '</span><span class="hbar-track" aria-hidden="true"><span class="hbar-fill" style="width:' + Math.max(1.5, (x.v / max) * 100).toFixed(1) + '%"></span></span><span class="hbar-value">' + gs(x.v) + '</span></li>').join('') + '</ul>'
           : '<p class="empty">Sin gastos en el período.</p>')
         + '<p class="hint">El courier de la importación ya está dentro del costo de cada producto. Los fletes de Envíos que pagó la tienda, la comisión y los puntos canjeados se suman solos.</p></section></div>'
-        + '<section class="card card-flush"><div class="card-head pad"><h2>Gastos cargados</h2><span class="small muted">' + lista.filter((g) => !g.anulado).length + ' · ' + gs(r.cargados) + '</span></div>'
+        + '<section class="card card-flush"><div class="card-head pad"><h2>Gastos cargados</h2><span class="small muted">' + lista.filter((g) => !g.anulado).length + ' · ' + gs(r.cargados) + '</span>'
+        + BG.htmlVerAnulados(anulados, 'el gasto anulado', 'los ' + anulados + ' gastos anulados') + '</div>'
         + (lista.length ? '<ul class="list list-plain">' + lista.map((g) => '<li class="list-row"><span class="avatar">' + icon('gasto', 'i-sm') + '</span>'
           + '<span class="row-main"><span class="row-title' + (g.anulado ? ' strike' : '') + '">' + esc(g.concepto) + '</span><span class="row-sub">' + BG.fmtFecha(g.fecha) + ' · ' + esc(g.categoria) + ' · ' + esc(BG.FORMAS_GASTO[g.forma])
           + (g.anulado ? ' · anulado: ' + esc(g.anulado.motivo) : '') + '</span></span>'
@@ -124,6 +127,7 @@
       mount: (r) => {
         root = r;
         pintar();
+        BG.engancharAnulados(root, pintar);
         root.addEventListener('click', async (ev) => {
           const p = ev.target.closest('[data-periodo]');
           if (p) { e.periodo = p.dataset.periodo; $$('[data-periodo]', root).forEach((x) => x.setAttribute('aria-pressed', String(x === p))); pintar(); return; }
@@ -133,8 +137,12 @@
             if (a) {
               const g = BG.db.gastos.find((x) => x.id === a.dataset.anular);
               if (g.forma === 'caja' && BG.cajaCerrada(g.fecha) && !(await BG.pedirPin('La caja del ' + BG.fmtFecha(g.fecha) + ' ya está cerrada.'))) return;
-              const motivo = await pedirTexto('Anular el gasto', '<p><strong>' + esc(g.concepto) + '</strong> · ' + gs(g.monto) + ' del ' + BG.fmtFecha(g.fecha) + '. No se borra: queda tachado y en la auditoría.</p>', 'Motivo', 'Anular gasto', true);
-              if (motivo) { BG.anularGasto(g.id, motivo); BG.toast('Gasto anulado.'); pintar(); }
+              const m = await BG.pedirMotivoAnulacion('gasto', 'Anular el gasto',
+                '<p><strong>' + esc(g.concepto) + '</strong> · ' + gs(g.monto) + ' del ' + BG.fmtFecha(g.fecha) + '. ¿Por qué se anula?</p>', 'Anular gasto',
+                () => '<div class="callout callout-warn efecto">' + icon('info') + '<div><strong>Al anular:</strong><ul class="efecto-lista">'
+                  + '<li>El gasto deja de restar en la ganancia neta' + (g.forma === 'caja' ? ' y los ' + gs(g.monto) + ' vuelven al efectivo esperado en la caja de ese día' : '') + '.</li>'
+                  + '<li>Queda en el historial tachado, con fecha, motivo y usuario.</li></ul></div></div>');
+              if (m) { BG.anularGasto(g.id, m.texto, m.tipo); BG.toast('Gasto anulado.'); pintar(); }
             }
           } catch (err) { BG.toast(err.message, 'error'); }
         });

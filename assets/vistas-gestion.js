@@ -529,6 +529,13 @@
             + 'Al canjear, pasa a su saldo a favor y en la ganancia neta cuenta como gasto de beneficios.</span></p>'
         : '')
       + (f.activo
+        ? '<label class="check-inline"><input type="checkbox" id="fi-recibo"' + (f.enRecibo ? ' checked' : '') + '> Mostrar los puntos en los recibos</label>'
+          + '<p class="hint">' + (f.enRecibo
+            ? 'Cada recibo dice cuántos puntos sumó la compra, los acumulados y las condiciones. Si la compra todavía no está pagada, aclara que por eso no suma todavía.'
+            : 'Los recibos no dicen nada de puntos. Igual se siguen sumando y el comprobante de puntos se puede emitir aparte desde la ficha de la clienta.')
+          + ' En cada recibo hay un interruptor para cambiarlo solo para esa vez.</p>'
+        : '')
+      + (f.activo
         ? '<div class="field"><label for="fi-terminos">Condiciones del programa <span class="small muted">(se imprimen en el recibo y se muestran al canjear)</span></label>'
           + '<textarea id="fi-terminos" class="textarea" rows="4" maxlength="600">' + esc(f.terminos) + '</textarea>'
           + '<div class="row"><button type="button" class="btn btn-sm" data-accion="guardar-terminos">Guardar condiciones</button>'
@@ -576,6 +583,7 @@
 
   BG.vistas.ajustes = () => {
     const cfg = BG.db.config;
+    const marcaCfg = BG.configMarca();
     const hist = (lista, fmt) => '<ul class="hist">' + lista.slice().reverse().slice(0, 5).map((h) => '<li><span>' + fmt(h.valor) + '</span><span class="muted small">' + BG.fmtFecha(h.fecha) + ' · ' + esc(h.usuario) + '</span></li>').join('') + '</ul>';
     const t = cfg.tienda;
     const html = '<div class="page"><div class="page-head"><div><h1 class="page-title">Ajustes</h1><p class="page-sub">Parámetros del cálculo, datos del recibo, usuarios y respaldos. Cada cambio queda en la auditoría.</p></div></div>'
@@ -605,7 +613,19 @@
       + '<div class="row"><label class="btn" for="aj-file">' + icon('upload') + 'Subir logo (PNG, JPG o SVG)</label><input id="aj-file" class="sr-only" type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp">'
       + (cfg.marca.logo ? '<button type="button" class="btn btn-quiet" data-accion="quitar-logo">Volver al provisorio</button>' : '') + '</div>'
       + '<div class="row"><label class="color-field" for="aj-c1"><input id="aj-c1" type="color" value="' + esc(cfg.marca.principal) + '"> Color principal</label>'
-      + '<label class="color-field" for="aj-c2"><input id="aj-c2" type="color" value="' + esc(cfg.marca.acento) + '"> Color de acento</label></div></section>'
+      + '<label class="color-field" for="aj-c2"><input id="aj-c2" type="color" value="' + esc(cfg.marca.acento) + '"> Color de acento</label></div>'
+      + '<div class="field"><span class="field-label" id="aj-esc-l">Tamaño del logo</span><div class="seg" role="radiogroup" aria-labelledby="aj-esc-l">'
+      + [[0.8, 'Chico'], [1, 'Normal'], [1.4, 'Grande'], [1.8, 'Muy grande']].map((x) => '<label><input type="radio" name="aj-escala" value="' + x[0] + '"' + (BG.escalaLogo() === x[0] ? ' checked' : '') + '>' + x[1] + '</label>').join('')
+      + '</div><span class="hint">Se aplica al recibo y a la etiqueta del envío. Si tu logo se ve chico, subí el tamaño acá.</span></div>'
+      + '<label class="check-inline"><input type="checkbox" id="aj-fondo"' + (marcaCfg.fondoCabecera === false ? '' : ' checked') + '> Fondo de color en el encabezado</label>'
+      + '<p class="hint">' + (marcaCfg.fondoCabecera === false
+        ? 'Encabezado blanco (lo más barato de imprimir).'
+        : 'El recibo lleva una franja suave con tu color principal y la etiqueta del envío una franja fuerte con el logo en un recuadro blanco, para que se vea de quién es el paquete. Apagalo si imprimís en blanco y negro y no querés gastar tóner.') + '</p></section>'
+      + '<section class="card stack"><div class="card-head"><h2>' + icon('eye') + 'Cómo se ven las listas</h2></div>'
+      + '<label class="check-inline"><input type="checkbox" id="aj-anulados"' + (BG.verAnulados() ? ' checked' : '') + '> Mostrar en las listas lo anulado y lo cancelado</label>'
+      + '<p class="hint">' + (BG.verAnulados()
+        ? 'Las ventas, pagos, gastos y envíos anulados aparecen tachados en las listas.'
+        : 'Las listas muestran solo lo vivo. <strong>Nada se borra:</strong> lo anulado sigue en el historial de la clienta, en la pestaña «Anuladas» de Ventas, en «Cancelados» de Envíos y en la auditoría.') + '</p></section>'
       + '<section class="card stack"><div class="card-head"><h2>Usuarios y permisos</h2></div>'
       + BG.db.usuarios.map((u) => u.rol === 'admin'
         ? '<div class="callout">' + icon('shield') + '<div><strong>' + esc(u.nombre) + ' · dueño</strong> (usuario «' + esc(u.usuario) + '»). Ve y cambia todo: costos, dólar, precios, anulaciones, ajustes, resumen y la auditoría de lo que hace cada usuario.</div></div>'
@@ -696,6 +716,12 @@
             return;
           }
           if (t.name === 'fi-pct') { BG.guardarFidelidad({ cumple: { porcentaje: Number(t.value) } }); BG.toast('Regalo de cumpleaños: ' + t.value + ' %.'); return; }
+          if (t.id === 'fi-recibo') {
+            BG.guardarFidelidad({ enRecibo: t.checked });
+            BG.toast(t.checked ? 'Los recibos muestran los puntos.' : 'Los recibos no muestran los puntos.');
+            repintar('aj-fidelidad', htmlFidelidad);
+            return;
+          }
           if (t.dataset && t.dataset.com) {
             BG.guardarComision(t.dataset.usuario, { [t.dataset.com]: t.checked });
             BG.toast(t.dataset.com === 'activa' ? (t.checked ? 'Meta y comisión activadas.' : 'Comisión desactivada.') : (t.checked ? 'Ella ve su avance en Inicio.' : 'Su avance queda oculto para ella.'));
@@ -717,6 +743,9 @@
             BG.toast((t.checked ? 'Habilitado para ' : 'Quitado a ') + u.nombre + ': ' + BG.PERMISOS.find((p) => p[0] === t.dataset.permiso)[1].toLowerCase() + '.');
           }
           if (t.id === 'aj-c1' || t.id === 'aj-c2') { BG.guardarMarca(t.id === 'aj-c1' ? { principal: t.value } : { acento: t.value }); BG.toast('Color guardado: se ve en el recibo.'); }
+          if (t.name === 'aj-escala') { BG.guardarMarca({ logoEscala: Number(t.value) }); BG.toast('Tamaño del logo guardado.'); }
+          if (t.id === 'aj-fondo') { BG.guardarMarca({ fondoCabecera: t.checked }); BG.toast(t.checked ? 'Encabezado con color.' : 'Encabezado en blanco.'); BG.render(); return; }
+          if (t.id === 'aj-anulados') { BG.cambiarVerAnulados(t.checked); BG.toast(t.checked ? 'Se muestran los anulados.' : 'Los anulados quedan fuera de las listas.'); BG.render(); return; }
           if (t.id === 'aj-file' && t.files[0]) {
             const file = t.files[0];
             if (file.size > 600 * 1024) { BG.toast('El logo pesa más de 600 KB: exportalo más liviano (por ejemplo PNG de 600 px de ancho).', 'error'); return; }

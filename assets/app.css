@@ -746,6 +746,31 @@ dialog { color: var(--ink); }
 .hay-cat { margin-top: 10px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 .terminos summary { font-weight: 700; color: var(--berry); cursor: pointer; }
 .terminos p { margin-top: 6px; font-size: 13px; color: var(--ink-2); }
+
+/* Motivos de anulación (lista elegible) y lo que va a pasar al anular. */
+.motivos { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.motivo { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); cursor: pointer; }
+.motivo:hover { border-color: var(--berry); background: var(--berry-soft); }
+.motivo input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--berry); flex: 0 0 auto; }
+.motivo .row-title { font-size: 14.5px; font-weight: 700; display: block; }
+.motivo .row-sub { font-size: 12.5px; color: var(--muted); display: block; }
+.motivo:has(input:checked) { border-color: var(--berry); background: var(--berry-soft); }
+.efecto { margin-top: 10px; }
+.efecto-lista { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+
+/* Borrar un artículo cargado por error. */
+.col-del { width: 44px; text-align: center; }
+.btn-del { color: var(--bad); }
+.btn-del:hover { background: var(--bad-soft); }
+.list-del { display: flex; align-items: center; gap: 4px; }
+.list-del .list-btn { flex: 1 1 auto; min-width: 0; }
+.list-del .btn-del { flex: 0 0 auto; margin-right: 8px; }
+
+/* Tarjeta de puntos de la clienta. */
+.card-puntos .puntos-cifra { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; justify-content: space-between; }
+.card-puntos .hero-figure { color: var(--berry); }
+.card-puntos .hero-figure small { font-family: var(--font-ui); font-size: 15px; font-weight: 700; color: var(--ink-2); }
+.card-puntos .balance-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .bullets { display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--ink-2); }
 .bullets li { padding-left: 14px; position: relative; }
 .bullets li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 5px; height: 5px; border-radius: 50%; background: var(--glow); }
@@ -968,18 +993,26 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
   font-family: var(--font-ui); overflow: hidden;
 }
 .label p { margin: 0; }
-.lb-head { display: flex; justify-content: space-between; align-items: center; gap: 3mm; border-bottom: 0.6mm solid #111111; padding-bottom: 2mm; }
-.lb-brand .logo { width: 40mm; color: #111111; }
-.lb-brand .logo-img { max-height: 12mm; }
-.lb-num { text-align: right; line-height: 1.2; }
-.lb-num strong { display: block; font-size: 13pt; }
-.lb-num span { font-size: 9pt; font-weight: 700; }
+/* Franja de la marca: el logo en un recuadro blanco (sirve con cualquier logo) y «te lo envía» bien visible. */
+.lb-head { display: flex; justify-content: space-between; align-items: center; gap: 3mm; margin: -5mm -5mm 0; padding: 3mm 4mm; border-bottom: 0.8mm solid #111111; }
+.label.cab-color .lb-head { background: var(--lb-brand, #A3195B); color: #FFFFFF; border-bottom-color: var(--lb-accent, #E2A94F); }
+.lb-brand { flex: 0 1 auto; min-width: 0; }
+.label.cab-color .lb-brand { background: #FFFFFF; border-radius: 1.5mm; padding: 1.5mm 2mm; }
+.lb-brand .logo { width: calc(38mm * var(--logo-escala, 1)); max-width: 52mm; color: #111111; }
+.lb-brand .logo-img { max-height: calc(14mm * var(--logo-escala, 1)); max-width: 52mm; width: auto; }
+.lb-de { text-align: right; line-height: 1.15; flex: 0 0 auto; }
+.lb-de-k { font-size: 6.5pt; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.85; }
+.lb-de-n { font-size: 12pt; font-weight: 800; }
+.lb-de-w { font-size: 9pt; font-weight: 700; display: flex; align-items: center; gap: 1mm; justify-content: flex-end; }
+.lb-de-w .i { width: 3.5mm; height: 3.5mm; }
+.lb-num2 { display: flex; justify-content: space-between; font-size: 9pt; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; border-bottom: 0.3mm dashed #111111; padding-bottom: 1.5mm; }
 .lb-k { font-size: 7pt; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: #444444; }
 .lb-name { font-size: 15pt; font-weight: 800; line-height: 1.1; text-transform: uppercase; overflow-wrap: anywhere; }
 .lb-line { font-size: 10pt; }
-.lb-dest { border: 0.6mm solid #111111; padding: 2mm 3mm; }
-.lb-city { font-size: 22pt; font-weight: 800; line-height: 1.05; text-transform: uppercase; letter-spacing: -0.01em; overflow-wrap: anywhere; }
-.lb-mode { font-size: 9.5pt; margin-top: 1mm !important; line-height: 1.3; }
+.lb-dest { border: 0.6mm solid #111111; padding: 2.5mm 3mm; }
+.lb-city { font-size: 22pt; font-weight: 800; line-height: 1.05; text-transform: uppercase; letter-spacing: -0.01em; overflow-wrap: anywhere; margin-top: 1.5mm !important; }
+.lb-depto { font-weight: 700; }
+.lb-mode { font-size: 9.5pt; margin-top: 1.5mm !important; line-height: 1.3; border-top: 0.3mm solid #CCCCCC; padding-top: 1.5mm; }
 .lb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2mm 4mm; font-size: 9.5pt; }
 .lb-guia { border-bottom: 0.4mm solid #111111; min-height: 5mm; font-weight: 800; }
 .lb-pay { font-size: 9.5pt; font-weight: 800; text-transform: uppercase; }
@@ -1019,9 +1052,15 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
   color-scheme: light;
 }
 .receipt * { border-color: var(--r-line); }
-.r-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; padding-bottom: 16px; border-bottom: 2px solid var(--r-accent); }
-.r-logo { width: 200px; max-width: 55%; color: var(--r-ink); }
-.r-logo img { max-height: 70px; width: auto; }
+.r-head { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding-bottom: 16px; border-bottom: 2px solid var(--r-accent); }
+/* Encabezado con un fondo suave del color de la marca: resalta el logo sin gritar (se apaga en Ajustes). */
+.receipt.cab-color .r-head {
+  background: var(--r-soft);
+  background: color-mix(in srgb, var(--r-brand) 9%, #FFFFFF);
+  margin: -34px -38px 0; padding: 22px 38px 18px; border-bottom: 2px solid var(--r-accent);
+}
+.r-logo { width: calc(200px * var(--logo-escala, 1)); max-width: 62%; color: var(--r-ink); }
+.r-logo img { max-height: calc(70px * var(--logo-escala, 1)); width: auto; max-width: 100%; }
 .r-doc { text-align: right; }
 .r-doc h1 { font-family: var(--font-brand); font-weight: 600; font-size: 26px; color: var(--r-brand); letter-spacing: 0.02em; }
 .r-doc p { color: var(--r-muted); font-size: 12.5px; }
@@ -1061,13 +1100,18 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 .receipt.is-largo .r-section { margin-bottom: 12px; }
 .receipt.is-largo .r-client { padding: 8px 12px; margin-bottom: 12px; }
 .receipt.is-largo .r-saldo strong { font-size: 22px; }
+/* Comprobante de puntos y letra chica de los puntos en el recibo. */
+.r-chica { font-size: 11px; color: var(--r-muted); line-height: 1.4; margin-top: 4px; }
+.r-puntos-gran { font-family: var(--font-brand); font-size: 44px; font-weight: 600; color: var(--r-brand); line-height: 1.05; margin: 6px 0 10px; }
+.r-puntos-gran small { font-family: var(--font-ui); font-size: 15px; font-weight: 700; color: var(--r-ink); }
 .r-foot { text-align: center; padding-top: 14px; border-top: 1px solid var(--r-line); display: flex; flex-direction: column; gap: 4px; }
 .r-thanks { font-family: var(--font-brand); font-style: italic; font-size: 18px; color: var(--r-brand); }
 .r-legal { font-size: 11px; color: var(--r-muted); }
 
 .receipt.is-ticket { max-width: 302px; padding: 16px 14px; font-size: 12px; border-radius: 2px; }
 .receipt.is-ticket .r-head { flex-direction: column; align-items: center; text-align: center; gap: 8px; }
-.receipt.is-ticket .r-logo { width: 170px; max-width: 100%; }
+.receipt.is-ticket .r-logo { width: calc(170px * var(--logo-escala, 1)); max-width: 100%; }
+.receipt.is-ticket.cab-color .r-head { margin: -16px -14px 0; padding: 14px 14px 12px; }
 .receipt.is-ticket .r-doc { text-align: center; }
 .receipt.is-ticket .r-doc h1 { font-size: 20px; }
 .receipt.is-ticket .r-contact { justify-content: center; text-align: center; }
@@ -1076,7 +1120,8 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 .receipt.is-ticket .r-saldo strong { font-size: 20px; }
 @media (max-width: 560px) {
   .receipt:not(.is-ticket) { padding: 22px 18px; }
-  .receipt:not(.is-ticket) .r-head { flex-direction: column; }
+  .receipt:not(.is-ticket) .r-head { flex-direction: column; align-items: flex-start; }
+  .receipt:not(.is-ticket).cab-color .r-head { margin: -22px -18px 0; padding: 18px 18px 14px; }
   .receipt:not(.is-ticket) .r-doc { text-align: left; }
   .receipt:not(.is-ticket) .r-client { grid-template-columns: minmax(0, 1fr); }
 }
@@ -1096,6 +1141,8 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
   body.route-print .receipt-stage { padding: 0; background: none; border-radius: 0; }
   body.route-print .receipt { box-shadow: none; max-width: none; border-radius: 0; padding: 0; }
   body.route-print .receipt.is-ticket { max-width: none; }
+  /* Impreso el recibo no tiene margen propio: la franja de color va pegada al borde útil de la hoja. */
+  body.route-print .receipt.cab-color .r-head { margin: 0; padding: 12px 14px; }
   .receipt, .receipt * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   /* Muchos artículos = varias hojas: que nada se parta al medio y que el encabezado se repita. */
   .receipt .r-table thead { display: table-header-group; }

@@ -24,6 +24,20 @@
       if (!v) return null;
       cli = BG.cliente(v.clienteId);
       ventas = [v];
+    } else if (tipo === 'p') {
+      // Comprobante de puntos: no lleva compras ni saldos, solo los puntos y las condiciones.
+      cli = BG.cliente(id);
+      const p = cli ? BG.resumenPuntos(cli.id) : null;
+      if (!cli || !p) return null;
+      const t0 = BG.db.config.tienda;
+      return {
+        tienda: { nombre: t0.nombre, whatsapp: t0.whatsapp, instagram: t0.instagram, direccion: t0.direccion, mensaje: t0.mensaje },
+        titulo: 'Comprobante de puntos', numero: null, emision: BG.hoy(), soloPuntos: true,
+        cliente: { nombre: cli.nombre, documento: cli.ci ? (cli.ci.includes('-') ? 'RUC ' : 'CI ') + cli.ci : 'Sin CI/RUC' },
+        compras: [], saldoCuenta: BG.saldoCliente(cli.id), aFavor: BG.creditoCliente(cli.id),
+        puntos: p, puntosAlPagar: 0, puntosGanados: 0, terminosPuntos: p.terminos,
+        detallePuntos: p, clienteRef: cli,
+      };
     } else {
       cli = BG.cliente(id);
       if (!cli) return null;
@@ -76,8 +90,46 @@
     };
   }
 
-  function htmlRecibo(d, formato) {
-    const m = BG.db.config.marca;
+  /**
+   * Bloque de puntos del recibo. Sale solo si el dueño lo dejó activado (Ajustes → Clientas frecuentes) y si
+   * en esta emisión no lo apagó con el interruptor de arriba. Cuando la compra todavía no está pagada, la
+   * letra chica dice que por eso todavía no suma.
+   */
+  function bloquePuntos(d) {
+    const tieneAlgo = d.puntosGanados || d.puntosAlPagar || (d.puntos && d.puntos.puntos > 0);
+    if (!tieneAlgo) return '';
+    return (d.puntosGanados ? '<p class="r-account r-puntos"><span>' + (d.compras.length === 1 ? 'Esta compra te sumó' : 'Estas compras te sumaron') + '</span><strong>' + d.puntosGanados + (d.puntosGanados === 1 ? ' punto' : ' puntos') + '</strong></p>' : '')
+      + (d.puntos && d.puntos.puntos > 0 ? '<p class="r-account"><span>Tus puntos acumulados: ' + d.puntos.puntos + (d.puntos.canjeable ? ' · ya los podés usar' : '') + '</span><strong>' + gs(d.puntos.valor) + '</strong></p>' : '')
+      + (d.puntosAlPagar ? '<p class="r-account"><span>Al terminar de pagar esta compra sumás</span><strong>' + d.puntosAlPagar + ' puntos</strong></p>'
+        + '<p class="r-chica">Esta compra todavía no suma puntos: se acreditan cuando quede pagada del todo.</p>' : '')
+      + (d.terminosPuntos ? '<p class="r-terminos"><strong>Programa de clientas frecuentes:</strong> ' + esc(d.terminosPuntos) + '</p>' : '');
+  }
+
+  /** Comprobante de puntos: cuántos tiene, de dónde salieron, qué canjeó y las condiciones. */
+  function htmlSoloPuntos(d) {
+    const p = d.detallePuntos;
+    return '<section class="r-section"><h2>Tus puntos<span>al ' + BG.fmtFecha(d.emision) + '</span></h2>'
+      + '<p class="r-puntos-gran">' + p.puntos + '<small>' + (p.puntos === 1 ? ' punto' : ' puntos') + '</small></p>'
+      + '<p class="r-account"><span>Equivalen a un descuento de</span><strong>' + gs(p.valor) + '</strong></p>'
+      + '<p class="r-account"><span>' + (p.canjeable ? 'Ya los podés usar como descuento en tu próxima compra'
+        : 'Te faltan ' + p.falta + (p.falta === 1 ? ' punto para poder usarlos' : ' puntos para poder usarlos')) + '</span><strong>se usan desde ' + p.minimo + '</strong></p>'
+      + (p.pendientes ? '<p class="r-account"><span>Vas a sumar, al terminar de pagar tus compras en cuotas</span><strong>' + p.pendientes + ' puntos</strong></p>' : '')
+      + '</section>'
+      + (p.ganadas.length ? '<section class="r-section"><h2 class="r-sub">De dónde salieron</h2><table class="r-table"><thead><tr><th>Compra</th><th class="num">Importe</th><th class="num">Puntos</th></tr></thead><tbody>'
+        + p.ganadas.map((x) => '<tr><td>' + BG.fmtFecha(x.fecha) + ' · ' + BG.fmtRecibo(x.recibo) + '</td><td class="num">' + gs(x.total) + '</td><td class="num">' + x.puntos + '</td></tr>').join('')
+        + '</tbody><tfoot><tr><td colspan="2">Puntos ganados</td><td class="num">' + p.ganados + '</td></tr></tfoot></table></section>' : '')
+      + (p.canjes.length ? '<section class="r-section"><h2 class="r-sub">Puntos que ya usaste</h2><table class="r-table"><tbody>'
+        + p.canjes.map((k) => '<tr><td>' + BG.fmtFecha(k.fecha) + ' · canje de ' + k.puntos + (k.puntos === 1 ? ' punto' : ' puntos') + '</td><td class="num">' + gs(k.monto) + '</td></tr>').join('')
+        + '</tbody><tfoot><tr><td>Total usado</td><td class="num">' + p.canjeados + (p.canjeados === 1 ? ' punto' : ' puntos') + '</td></tr></tfoot></table></section>' : '')
+      + '<div class="r-saldo' + (p.canjeable ? ' is-paid' : '') + '"><span>Tu descuento disponible</span><strong>' + gs(p.valor) + '</strong></div>'
+      + (d.aFavor > 0 ? '<p class="r-account"><span>Además tenés a favor para tu próxima compra</span><strong>' + gs(d.aFavor) + '</strong></p>' : '')
+      + '<p class="r-terminos"><strong>Condiciones del programa:</strong> ' + esc(p.terminos) + '</p>'
+      + '<p class="r-chica">1 punto cada ' + gs(p.cadaGs) + ' de compra pagada · cada punto vale ' + gs(p.valorPunto) + ' de descuento. '
+      + 'Este comprobante vale por los puntos que tenías al ' + BG.fmtFecha(d.emision) + '.</p>';
+  }
+
+  function htmlRecibo(d, formato, verPuntos) {
+    const m = BG.configMarca();
     const t = d.tienda;
     const unaCompra = d.compras.length === 1;
     const deUnaCompra = unaCompra && d.titulo !== 'Estado de cuenta';
@@ -108,23 +160,22 @@
         + (q.vencida ? 'venció el ' : 'vence el ') + BG.fmtFecha(q.vence) + '</td><td class="num">' + gs(q.falta) + '</td></tr>').join('') + '</tbody></table>' : '')
       + (unaCompra ? '' : '<p class="r-account"><span>Saldo de esta compra</span><strong>' + gs(c.saldo) + '</strong></p>')
       + '</section>';
-    const filas = d.compras.reduce((a, c) => a + c.items.length + c.pagos.length + c.cuotas.length + c.devoluciones.length + 3, 0);
+    const filas = d.compras.reduce((a, c) => a + c.items.length + c.pagos.length + c.cuotas.length + c.devoluciones.length + 3, 0)
+      + (d.soloPuntos ? d.detallePuntos.ganadas.length + d.detallePuntos.canjes.length + 4 : 0);
     const largo = filas > 16;
-    return '<article class="receipt' + (formato === 'ticket' ? ' is-ticket' : '') + (largo ? ' is-largo' : '') + '" id="recibo" style="--r-brand:' + esc(m.principal) + ';--r-accent:' + esc(m.acento) + ';--mark-berry:' + esc(m.principal) + ';--mark-glow:' + esc(m.acento) + '">'
+    return '<article class="receipt' + (formato === 'ticket' ? ' is-ticket' : '') + (largo ? ' is-largo' : '') + (m.fondoCabecera === false ? '' : ' cab-color') + '" id="recibo"'
+      + ' style="--r-brand:' + esc(m.principal) + ';--r-accent:' + esc(m.acento) + ';--mark-berry:' + esc(m.principal) + ';--mark-glow:' + esc(m.acento) + ';--logo-escala:' + BG.escalaLogo() + '">'
       + '<header class="r-head"><div class="r-logo">' + BG.logo(true) + '</div>'
       + '<div class="r-doc"><h1>' + esc(d.titulo) + '</h1>' + (d.numero ? '<p class="r-num">' + BG.fmtRecibo(d.numero) + '</p>' : '') + '<p>Emitido el ' + BG.fmtFecha(d.emision) + '</p></div></header>'
       + '<p class="r-contact">' + [t.whatsapp && 'WhatsApp ' + esc(t.whatsapp), t.instagram && 'Instagram ' + esc(t.instagram), t.direccion && esc(t.direccion)].filter(Boolean).map((x) => '<span>' + x + '</span>').join('') + '</p>'
       + '<div class="r-client"><div><span>Cliente</span><strong>' + esc(d.cliente.nombre) + '</strong></div><div><span>Documento</span><strong>' + esc(d.cliente.documento) + '</strong></div></div>'
-      + (d.compras.length ? d.compras.map(compra).join('') : '<p class="r-section">No hay compras con saldo pendiente.</p>')
-      + '<div class="r-saldo' + (saldoPrincipal > 0 ? '' : ' is-paid') + '"><span>' + etiquetaSaldo + '</span><strong>' + gs(saldoPrincipal) + '</strong></div>'
-      + (deUnaCompra && d.saldoCuenta !== saldoPrincipal ? '<p class="r-account"><span>Saldo total de tu cuenta (todas las compras)</span><strong>' + gs(d.saldoCuenta) + '</strong></p>' : '')
-      + (d.aFavor > 0 ? '<div class="r-favor"><span>Saldo a tu favor para la próxima compra</span><strong>' + gs(d.aFavor) + '</strong></div>' : '')
-      + (d.puntosGanados ? '<p class="r-account r-puntos"><span>' + (d.compras.length === 1 ? 'Esta compra te sumó' : 'Estas compras te sumaron') + '</span><strong>' + d.puntosGanados + (d.puntosGanados === 1 ? ' punto' : ' puntos') + '</strong></p>' : '')
-      + (d.puntos && d.puntos.puntos > 0 ? '<p class="r-account"><span>Tus puntos acumulados: ' + d.puntos.puntos + (d.puntos.canjeable ? ' · ya los podés usar' : '') + '</span><strong>' + gs(d.puntos.valor) + '</strong></p>' : '')
-      + (d.puntosAlPagar ? '<p class="r-account"><span>Al terminar de pagar esta compra sumás</span><strong>' + d.puntosAlPagar + ' puntos</strong></p>' : '')
-      + ((d.puntosGanados || d.puntosAlPagar || (d.puntos && d.puntos.puntos > 0)) && d.terminosPuntos
-        ? '<p class="r-terminos"><strong>Programa de clientas frecuentes:</strong> ' + esc(d.terminosPuntos) + '</p>' : '')
-      + '<footer class="r-foot"><p class="r-thanks">' + esc(t.mensaje || '¡Gracias por tu compra!') + '</p><p class="r-legal">' + esc(t.nombre) + ' · Comprobante interno de pago, no válido como factura.</p></footer>'
+      + (d.soloPuntos ? htmlSoloPuntos(d)
+        : (d.compras.length ? d.compras.map(compra).join('') : '<p class="r-section">No hay compras con saldo pendiente.</p>')
+          + '<div class="r-saldo' + (saldoPrincipal > 0 ? '' : ' is-paid') + '"><span>' + etiquetaSaldo + '</span><strong>' + gs(saldoPrincipal) + '</strong></div>'
+          + (deUnaCompra && d.saldoCuenta !== saldoPrincipal ? '<p class="r-account"><span>Saldo total de tu cuenta (todas las compras)</span><strong>' + gs(d.saldoCuenta) + '</strong></p>' : '')
+          + (d.aFavor > 0 ? '<div class="r-favor"><span>Saldo a tu favor para la próxima compra</span><strong>' + gs(d.aFavor) + '</strong></div>' : '')
+          + (verPuntos ? bloquePuntos(d) : ''))
+      + '<footer class="r-foot"><p class="r-thanks">' + esc(t.mensaje || '¡Gracias por tu compra!') + '</p><p class="r-legal">' + esc(t.nombre) + ' · ' + (d.soloPuntos ? 'Comprobante informativo de puntos' : 'Comprobante interno de pago') + ', no válido como factura.</p></footer>'
       + '</article>';
   }
 
@@ -153,7 +204,9 @@
     const cli = d.clienteRef;
     const ventasOrig = tipo === 'v' ? [BG.venta(args[1])] : BG.ventasDeCliente(cli.id);
     const prox = d.compras.length === 1 && d.compras[0].cuotas.length ? d.compras[0].cuotas[0] : null;
-    const textoWa = BG.textosWa.recibo(cli, d, prox);
+    const textoWa = d.soloPuntos ? BG.textosWa.puntos(cli, d.detallePuntos) : BG.textosWa.recibo(cli, d, prox);
+    // Los puntos en el recibo: viene lo que eligió el dueño en Ajustes, y acá se puede cambiar solo para esta emisión.
+    let verPuntos = BG.puntosEnRecibo();
     const volver = tipo === 'v' ? '#/ventas/' + args[1] : '#/clientes/' + cli.id;
     const html = '<div class="page">'
       + '<div class="receipt-toolbar no-print"><a class="back-link" href="' + volver + '">' + icon('left', 'i-sm') + 'Volver</a>'
@@ -163,8 +216,11 @@
       + '<button type="button" class="btn" data-accion="imprimir">' + icon('print') + 'Imprimir</button>'
       + '<button type="button" class="btn" data-accion="pdf">' + icon('download') + 'Guardar PDF</button>'
       + '<a class="btn btn-primary" data-accion="whatsapp" href="' + BG.waLink(cli, textoWa) + '" target="_blank" rel="noopener">' + icon('chat') + 'WhatsApp</a></div></div>'
+      + (BG.configFidelidad().activo && !d.soloPuntos
+        ? '<label class="check-inline no-print"><input type="checkbox" id="r-puntos-ver"' + (verPuntos ? ' checked' : '') + '> Mostrar los puntos en este comprobante'
+          + '<span class="hint"> · lo que viene marcado se elige en <a href="#/ajustes">Ajustes → Clientas frecuentes</a></span></label>' : '')
       + '<div class="no-print row" id="privacidad"></div>'
-      + '<div class="receipt-stage">' + htmlRecibo(d, formato) + '</div>'
+      + '<div class="receipt-stage">' + htmlRecibo(d, formato, verPuntos) + '</div>'
       + '<p class="hint no-print">El PDF se genera con «Imprimir → Guardar como PDF». En el sistema final el PDF se crea directo y se adjunta en WhatsApp.</p>'
       + '</div>';
     const aplicarFormato = (f) => {
@@ -178,7 +234,7 @@
         aplicarFormato(formato);
         const revisar = () => {
           const h = BG.revisarPrivacidad($('#recibo', root), ventasOrig);
-          const em = BG.emisionesDe(d.numero, cli.id);
+          const em = BG.emisionesDe(d.numero, cli.id, d.soloPuntos ? 'puntos' : null);
           const ult = em[em.length - 1];
           $('#privacidad', root).innerHTML = (h.length
             ? '<p class="privacy privacy-bad">' + icon('alert') + 'Atención: el recibo muestra ' + esc(h.join(', ')) + '.</p>'
@@ -187,8 +243,14 @@
               : 'Todavía no se emitió: al imprimir o mandar por WhatsApp queda registrado quién lo hizo.') + '</p>';
         };
         revisar();
-        const emitir = (medio) => { BG.registrarEmision({ recibo: d.numero, ventaId: tipo === 'v' ? args[1] : null, clienteId: cli.id, medio: medio }); revisar(); };
+        const emitir = (medio) => { BG.registrarEmision({ recibo: d.numero, ventaId: tipo === 'v' ? args[1] : null, clienteId: cli.id, medio: medio, tipo: d.soloPuntos ? 'puntos' : null }); revisar(); };
         root.addEventListener('change', (e) => {
+          if (e.target.id === 'r-puntos-ver') {
+            verPuntos = e.target.checked;
+            $('.receipt-stage', root).innerHTML = htmlRecibo(d, formato, verPuntos);
+            revisar();
+            return;
+          }
           if (e.target.name !== 'formato') return;
           formato = e.target.value;
           try { localStorage.setItem(KEY_FORMATO, formato); } catch (err) { /* sin almacenamiento */ }

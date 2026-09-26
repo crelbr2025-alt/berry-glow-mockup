@@ -113,6 +113,29 @@
       ]);
     },
 
+    /**
+     * Respuesta a «¿cuántos puntos tengo?»: lo que tiene, cuánto vale, qué le falta y las condiciones.
+     * Es el mismo número que sale en el comprobante de puntos (BG.resumenPuntos).
+     */
+    puntos: (cli, resumen) => {
+      const p = resumen || BG.resumenPuntos(cli.id);
+      if (!p) return '';
+      return unir([
+        saludo() + ', ' + nombreCorto(cli) + '! Te escribimos de ' + tienda() + ' 💗',
+        '',
+        'Estos son tus puntos al ' + BG.fmtFecha(BG.hoy()) + ':',
+        '🌟 Tenés ' + p.puntos + (p.puntos === 1 ? ' punto' : ' puntos') + ' = ' + gs(p.valor) + ' para usar como descuento.',
+        p.canjeable ? '✔️ Ya los podés usar en tu próxima compra: avisanos y te los descontamos.'
+          : 'Te faltan ' + p.falta + (p.falta === 1 ? ' punto' : ' puntos') + ' para poder usarlos (se usan desde ' + p.minimo + ').',
+        p.pendientes ? '⏳ Vas a sumar ' + p.pendientes + (p.pendientes === 1 ? ' punto más' : ' puntos más') + ' cuando termines de pagar lo que tenés en cuotas.' : null,
+        p.canjeados ? 'Ya usaste ' + p.canjeados + (p.canjeados === 1 ? ' punto' : ' puntos') + ' en compras anteriores.' : null,
+        '',
+        'Cómo funciona: ' + p.terminos,
+        '',
+        'Si querés, te pasamos el comprobante con el detalle. ¡Gracias por elegirnos! ✨',
+      ]);
+    },
+
     /** Saludo de cumpleaños (con el regalo si el programa lo tiene activo). */
     cumple: (cli) => {
       const f = BG.configFidelidad();

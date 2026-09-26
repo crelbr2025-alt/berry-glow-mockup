@@ -29,17 +29,74 @@
     return r === 'ok' ? motivo : null;
   }
 
+  /**
+   * Motivo de anulación elegido de la lista (BG.MOTIVOS_ANULACION): cada motivo dice qué va a pasar, y
+   * «Otro» pide el detalle. Devuelve { tipo, nota, texto } o null si se canceló.
+   * `consecuencias(tipo)` devuelve el HTML de lo que cambia con ese motivo (stock, puntos, plata).
+   */
+  BG.pedirMotivoAnulacion = async (que, titulo, cuerpo, boton, consecuencias) => {
+    const lista = BG.motivosAnulacion(que);
+    if (!lista.length) { const t = await pedirMotivo(titulo, cuerpo, boton); return t ? { tipo: null, nota: t, texto: t } : null; }
+    let elegido = null;
+    const opciones = '<div class="motivos" role="radiogroup" aria-label="Motivo">'
+      + lista.map((m) => '<label class="motivo"><input type="radio" name="an-motivo" value="' + esc(m.id) + '">'
+        + '<span class="grow"><span class="row-title">' + esc(m.texto) + '</span><span class="row-sub">' + esc(m.detalle) + '</span></span></label>').join('')
+      + '</div>'
+      + '<div class="field" id="an-nota-campo" hidden><label for="an-nota">Contá qué pasó <span class="req">*</span></label>'
+        + '<textarea id="an-nota" class="textarea" rows="2" maxlength="200"></textarea></div>'
+      + '<div id="an-efecto" aria-live="polite"></div>'
+      + '<span class="error-text" id="an-err" hidden></span>';
+    const r = await BG.modal({
+      titulo: titulo,
+      cuerpo: cuerpo + opciones,
+      acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: boton, valor: 'ok', clase: 'btn-danger-solid' }],
+      onMount: (dlg) => {
+        const pintar = () => {
+          const sel = $('input[name="an-motivo"]:checked', dlg);
+          const m = sel ? BG.motivoAnulacion(que, sel.value) : null;
+          $('#an-nota-campo', dlg).hidden = !(m && m.pide === 'nota');
+          $('#an-efecto', dlg).innerHTML = m && consecuencias ? consecuencias(m.id) : '';
+        };
+        dlg.addEventListener('change', (ev) => { if (ev.target.name === 'an-motivo') pintar(); });
+        pintar();
+      },
+      validar: (v, dlg) => {
+        const er = $('#an-err', dlg);
+        const sel = $('input[name="an-motivo"]:checked', dlg);
+        if (!sel) { er.textContent = 'Elegí el motivo.'; er.hidden = false; return false; }
+        const m = BG.motivoAnulacion(que, sel.value);
+        const nota = $('#an-nota', dlg).value.trim();
+        if (m.pide === 'nota' && nota.length < 5) { er.textContent = 'Contá qué pasó (queda en el historial).'; er.hidden = false; return false; }
+        elegido = { tipo: m.id, nota: nota, texto: BG.textoAnulacion(que, m.id, nota) };
+        return true;
+      },
+    });
+    return r === 'ok' ? elegido : null;
+  };
+
   BG.anularVentaUI = async (v) => {
     if (BG.cajaCerrada(v.fecha) && !(await BG.pedirPin('La venta es del ' + BG.fmtFecha(v.fecha) + ' y la caja de ese día ya está cerrada.'))) return false;
     const pagado = BG.pagadoVenta(v);
-    const motivo = await pedirMotivo('Anular la venta ' + BG.fmtRecibo(v.recibo),
-      '<p>La venta no se borra: queda en el historial marcada como anulada, con fecha, motivo y usuario. El stock vuelve a estar disponible.</p>'
-      + '<p class="hint">Si la clienta devuelve uno o varios artículos, usá «Devolución o cambio»: anular es para ventas cargadas por error.</p>'
-      + (pagado ? '<div class="callout callout-warn">' + icon('info') + '<div>Esta venta tiene pagos por <strong>' + gs(pagado) + '</strong>. Al anularla, ese monto queda como <strong>saldo a favor</strong> del cliente.</div></div>' : ''),
-      'Anular venta');
-    if (!motivo) return false;
-    BG.anularVenta(v.id, motivo);
-    BG.toast('Venta ' + BG.fmtRecibo(v.recibo) + ' anulada.' + (pagado ? ' ' + gs(pagado) + ' quedan a favor del cliente.' : ''));
+    const puntos = BG.puntosDeVenta(v);
+    const unidades = sum(v.items, (it) => BG.cantidadViva(it));
+    const parcial = (v.items || []).length > 1;
+    // Lo que va a pasar. Es igual con cualquier motivo (el sistema no tiene dos aritméticas), pero se lo
+    // muestra escrito para que nadie anule pensando que hace otra cosa.
+    const efecto = (tipo) => '<div class="callout callout-warn efecto">' + icon('info') + '<div><strong>Al anular con este motivo:</strong><ul class="efecto-lista">'
+      + (unidades ? '<li>Vuelven al stock <strong>' + unidades + (unidades === 1 ? ' unidad</strong>' : ' unidades</strong>') + ' de esta compra.</li>' : '')
+      + (puntos ? '<li>Pierde los <strong>' + puntos + (puntos === 1 ? ' punto' : ' puntos') + '</strong> de esta compra.</li>'
+        : '<li>No tenía puntos para perder en esta compra.</li>')
+      + (pagado ? '<li>Lo que ya pagó (<strong>' + gs(pagado) + '</strong>) queda como <strong>saldo a favor</strong>; si se le devuelve en plata, se hace desde su ficha con «Devolver en plata».</li>'
+        : '<li>No tenía nada pagado: no se mueve plata.</li>')
+      + '<li>La venta queda en el historial como anulada, con fecha, motivo y usuario.</li>'
+      + (tipo === 'devolucion' && parcial ? '<li class="t-devuelto">Si devolvió <strong>solo algunos</strong> artículos, no anules: usá «Devolución o cambio» para que la compra siga viva con lo que se quedó.</li>' : '')
+      + '</ul></div></div>';
+    const m = await BG.pedirMotivoAnulacion('venta', 'Anular la venta ' + BG.fmtRecibo(v.recibo),
+      '<p>¿Por qué se anula? Lo que elijas queda en el historial y en la auditoría.</p>', 'Anular venta', efecto);
+    if (!m) return false;
+    BG.anularVenta(v.id, m.texto, m.tipo);
+    BG.toast('Venta ' + BG.fmtRecibo(v.recibo) + ' anulada.' + (unidades ? ' ' + unidades + (unidades === 1 ? ' unidad vuelve' : ' unidades vuelven') + ' al stock.' : '')
+      + (pagado ? ' ' + gs(pagado) + ' quedan a favor del cliente.' : ''));
     return true;
   };
 
@@ -47,11 +104,17 @@
     const problema = BG.motivoNoAnulable(pg);
     if (problema) { BG.toast(problema, 'error'); return false; }
     if (BG.cajaCerrada(pg.fecha) && !(await BG.pedirPin('El pago es del ' + BG.fmtFecha(pg.fecha) + ' y la caja de ese día ya está cerrada.'))) return false;
-    const motivo = await pedirMotivo('Anular el pago ' + BG.fmtRecibo(pg.recibo),
-      '<p>Pago de <strong>' + gs(pg.total + pg.excedente) + '</strong> del ' + BG.fmtFecha(pg.fecha) + '. El saldo de la venta vuelve a subir; el pago queda en el historial como anulado.</p>',
-      'Anular pago');
-    if (!motivo) return false;
-    BG.anularPago(pg.id, motivo);
+    const v = pg.ventaId ? BG.venta(pg.ventaId) : null;
+    const puntos = v ? BG.puntosDeVenta(v) : 0;
+    const efecto = () => '<div class="callout callout-warn efecto">' + icon('info') + '<div><strong>Al anular este pago:</strong><ul class="efecto-lista">'
+      + '<li>El saldo vuelve a subir <strong>' + gs(pg.total) + '</strong>' + (pg.excedente ? ' y se le quitan los ' + gs(pg.excedente) + ' que habían quedado a favor' : '') + '.</li>'
+      + (puntos && v && BG.saldoVenta(v) <= 0 ? '<li>La compra deja de estar saldada, así que los <strong>' + puntos + (puntos === 1 ? ' punto' : ' puntos') + '</strong> vuelven a quedar pendientes hasta que la termine de pagar.</li>' : '')
+      + '<li>El pago queda en el historial como anulado, con fecha, motivo y usuario.</li>'
+      + '</ul></div></div>';
+    const m = await BG.pedirMotivoAnulacion('pago', 'Anular el pago ' + BG.fmtRecibo(pg.recibo),
+      '<p>Pago de <strong>' + gs(pg.total + pg.excedente) + '</strong> del ' + BG.fmtFecha(pg.fecha) + '. ¿Por qué se anula?</p>', 'Anular pago', efecto);
+    if (!m) return false;
+    BG.anularPago(pg.id, m.texto, m.tipo);
     BG.toast('Pago anulado. El saldo se actualizó.');
     return true;
   };
@@ -360,15 +423,20 @@
       if (e.estado === 'devol') lista = lista.filter((v) => (v.devoluciones || []).length);
       if (e.estado === 'anulada') lista = lista.filter((v) => v.anulada);
       lista.sort((a, b) => b.ts.localeCompare(a.ts));
+      // Las anuladas siguen estando (y la pestaña «Anuladas» las muestra siempre); acá se pueden sacar de la lista.
+      const anuladas = lista.filter((v) => v.anulada).length;
+      if (e.estado !== 'anulada') lista = BG.sinAnulados(lista, (v) => !!v.anulada);
       const vivas = lista.filter((v) => !v.anulada);
-      $('#ventas-resumen', root).textContent = lista.length + (lista.length === 1 ? ' venta' : ' ventas') + ' · vendido ' + gs(sum(vivas, (v) => v.total))
-        + ' · cobrado ' + gs(sum(vivas, BG.pagadoVenta)) + ' · saldo ' + gs(sum(vivas, BG.saldoVenta));
+      $('#ventas-resumen', root).innerHTML = esc(lista.length + (lista.length === 1 ? ' venta' : ' ventas') + ' · vendido ' + gs(sum(vivas, (v) => v.total))
+        + ' · cobrado ' + gs(sum(vivas, BG.pagadoVenta)) + ' · saldo ' + gs(sum(vivas, BG.saldoVenta)))
+        + (e.estado === 'anulada' ? '' : ' ' + BG.htmlVerAnulados(anuladas, 'la venta anulada', 'las ' + anuladas + ' ventas anuladas'));
       $('#lista-ventas', root).innerHTML = lista.length ? lista.map((v) => filaVentaConCliente(v, q)).join('') : BG.db.ventas.length ? '<li class="empty">No hay ventas con esos filtros.</li>' : '<li class="empty">Todavía no registraste ninguna venta.</li>';
     };
     return {
       html: html,
       mount: (root) => {
         pintar(root);
+        BG.engancharAnulados(root, () => pintar(root));
         $('#q-ventas', root).addEventListener('input', (ev) => { e.q = ev.target.value; pintar(root); });
         $$('[data-periodo], [data-estado]', root).forEach((b) => b.addEventListener('click', () => {
           const grupo = b.dataset.periodo ? 'periodo' : 'estado';

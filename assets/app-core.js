@@ -56,7 +56,7 @@
   const KEY_MIOS_INFO = 'berryglow.mockup.mios.info';
   const KEY_MODO = 'berryglow.mockup.modo';
   const KEY_COPIA = 'berryglow.mockup.copia';
-  const VERSION_DB = 7;
+  const VERSION_DB = 8;
   BG.VERSION_DB = VERSION_DB;
   BG.leer = (k) => { try { const t = localStorage.getItem(k); return t ? JSON.parse(t) : null; } catch (e) { return null; } };
   BG.escribir = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } };
@@ -73,9 +73,10 @@
   const alDia = (d) => {
     if (!d || typeof d !== 'object' || !Array.isArray(d.clientes)) return null;
     if (d.version === VERSION_DB) return d;
-    // v5, v6 → v7: los campos nuevos (condiciones de los puntos, regla de puntos de cada venta) son opcionales
-    // y el sistema funciona igual sin ellos, así que la base vieja se acepta tal cual.
-    if (d.version === 5 || d.version === 6) { d.version = VERSION_DB; return d; }
+    // v5, v6, v7 → v8: los campos nuevos (condiciones de los puntos, regla de puntos de cada venta, motivo
+    // tipificado de la anulación, tamaño del logo, puntos en el recibo) son opcionales y se leen con un valor
+    // por defecto, así que la base vieja se acepta tal cual.
+    if (d.version === 5 || d.version === 6 || d.version === 7) { d.version = VERSION_DB; return d; }
     return null;
   };
   /** Vuelve a los datos de ejemplo del día de hoy. No toca los datos de la tienda. */
@@ -303,6 +304,12 @@
     .map((c) => ({ c: c, saldo: BG.saldoCliente(c.id), desde: BG.deudaMasAntigua(c.id) }))
     .filter((d) => d.saldo > 0)
     .sort((a, b) => b.saldo - a.saldo);
+  /** Todos los clientes, primero los que más deben y después los que están al día, por nombre. */
+  BG.clientesPorDeuda = () => BG.db.clientes.slice().sort((a, b) => {
+    const sa = BG.saldoCliente(a.id);
+    const sb = BG.saldoCliente(b.id);
+    return sb - sa || a.nombre.localeCompare(b.nombre);
+  });
 
   /** Cuadre: saldo sumado cliente por cliente contra el libro (vendido − cobrado + lo que una devolución pasó a saldo a favor). */
   BG.cuadre = () => {
@@ -442,6 +449,32 @@
   BG.vendidasDesde = (pid, desde) => sum(BG.db.ventas.filter((v) => !v.anulada && v.fecha >= desde),
     (v) => sum(v.items.filter((it) => it.productoId === pid), BG.cantidadViva));
 
+  /**
+   * ¿Se puede borrar este artículo porque se cargó por error? Solo si nunca se movió: sin ventas (ni anuladas),
+   * sin devoluciones y sin conteos de inventario. Si algo lo tocó, no se borra — se corrige con un conteo o
+   * anulando la venta, para que ningún número del pasado cambie.
+   * Devuelve { ok, razon, quien }: `quien` explica quién puede hacerlo.
+   */
+  BG.puedeBorrarProducto = (p) => {
+    if (!p) return { ok: false, razon: 'No encontramos ese artículo.' };
+    const enVentas = BG.db.ventas.filter((v) => v.items.some((it) => it.productoId === p.id));
+    if (enVentas.length) {
+      const viva = enVentas.some((v) => !v.anulada);
+      return { ok: false, razon: viva
+        ? 'Ya se vendió (está en ' + enVentas.length + (enVentas.length === 1 ? ' venta' : ' ventas') + '): para sacarlo del stock usá un conteo de inventario.'
+        : 'Está en una venta anulada: queda en el historial, así que el artículo no se borra.' };
+    }
+    if ((BG.db.ajustesStock || []).some((a) => a.productoId === p.id)) {
+      return { ok: false, razon: 'Ya entró en un conteo de inventario: se corrige con otro conteo, no borrando.' };
+    }
+    // La vendedora puede borrar lo que cargó ella (los de antes, sin usuario anotado, solo el dueño).
+    const mio = !!p.usuario && p.usuario === BG.usuario().nombre;
+    if (!BG.esDuena() && !(BG.puede('cargarProductos') && mio)) {
+      return { ok: false, razon: 'Lo puede borrar ' + BG.nombreDuena() + ' (o quien lo cargó, si tiene el permiso para cargar artículos).' };
+    }
+    return { ok: true, razon: '', quien: mio ? 'propio' : 'duena' };
+  };
+
   /* ── Meta y comisión de la vendedora ───────────────────────────────── */
 
   /**
@@ -486,6 +519,30 @@
   /* ── Límite de crédito (lo configura el dueño; en el mostrador solo se ve el aviso) ── */
 
   BG.configCredito = () => Object.assign({ activo: false, limite: 0, diasAtraso: 15 }, BG.db.config.credito);
+
+  /* ── Lo anulado y lo cancelado: sigue estando, pero se puede sacar de las listas ──
+   * Nada se borra (queda en la auditoría y en el historial). Esto es solo lo que se ve en las listas del día a día.
+   */
+  BG.verAnulados = () => !!(BG.db.config.vista && BG.db.config.vista.verAnulados);
+  /** Filtro para una lista: saca lo anulado o cancelado si el dueño eligió no verlo. */
+  BG.sinAnulados = (lista, esAnulado) => (BG.verAnulados() ? lista : lista.filter((x) => !esAnulado(x)));
+  /**
+   * Botón para mostrar u ocultar lo anulado en una lista (`n` = cuántos hay). Solo lo ve el dueño;
+   * la vendedora nunca ve lo anulado en las listas. Cada pantalla lo engancha con BG.engancharAnulados.
+   */
+  BG.htmlVerAnulados = (n, uno, varios) => {
+    if (!BG.esDuena() || !n) return '';
+    const que = n === 1 ? (uno || 'el anulado') : (varios || 'los ' + n + ' anulados');
+    return '<button type="button" class="btn-link small" data-accion="ver-anulados">' + icon('eye', 'i-sm')
+      + (BG.verAnulados() ? 'Ocultar ' : 'Ver ') + que + '</button>';
+  };
+  /** Engancha el botón de arriba: cambia la preferencia y vuelve a pintar. */
+  BG.engancharAnulados = (root, repintar) => {
+    root.addEventListener('click', (ev) => {
+      if (!ev.target.closest('[data-accion="ver-anulados"]')) return;
+      try { BG.cambiarVerAnulados(!BG.verAnulados()); (repintar || BG.render)(); } catch (e) { BG.toast(e.message, 'error'); }
+    });
+  };
   /** Límite de la clienta: el suyo si Ariel le puso uno (0 = solo contado), si no el general. */
   BG.limiteDe = (c) => (c && c.limite != null ? c.limite : BG.configCredito().limite);
   /**
@@ -525,11 +582,14 @@
     + 'Los puntos no son dinero, no se cambian por efectivo y se usan como descuento en una próxima compra. '
     + 'La tienda puede cambiar o terminar el programa avisando por sus redes.';
   BG.configFidelidad = () => {
-    const f = Object.assign({ activo: false, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: '0000-00-00' }, BG.db.config.fidelidad);
+    const f = Object.assign({ activo: false, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: '0000-00-00', enRecibo: true }, BG.db.config.fidelidad);
     f.cumple = Object.assign({ activo: false, porcentaje: 10 }, f.cumple);
     if (!f.terminos || !String(f.terminos).trim()) f.terminos = BG.TERMINOS_PUNTOS;
+    if (f.enRecibo === undefined) f.enRecibo = true;
     return f;
   };
+  /** ¿Se imprimen los puntos en los recibos? (el dueño lo prende y apaga en Ajustes; en cada recibo se puede cambiar solo para ese). */
+  BG.puntosEnRecibo = () => { const f = BG.configFidelidad(); return !!(f.activo && f.enRecibo); };
   /** Parte de los pagos vivos de una venta que se hizo con saldo a favor que venía de puntos canjeados. */
   BG.canjeEnVenta = (v) => sum(BG.pagosDeVenta(v.id), (p) => sum(p.partes, (x) => x.deCanje || 0));
   /** Lo pagado con puntos que sigue aplicado a la venta (si una devolución pasó plata a favor, vuelve primero lo de puntos). */
@@ -571,6 +631,29 @@
     // Con la regla que tenía la venta cuando se hizo (las viejas, sin regla guardada, usan la de hoy).
     const cada = v.fidelidad && v.fidelidad.cadaGs > 0 ? v.fidelidad.cadaGs : f.cadaGs;
     return Math.floor(Math.max(0, v.total - BG.canjeAplicado(v)) / cada);
+  };
+  BG.canjesDe = (cid) => (BG.db.canjes || []).filter((k) => k.clienteId === cid).slice().sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+  /**
+   * Todo lo que hace falta para el comprobante de puntos de una clienta: lo que ganó compra por compra,
+   * lo que canjeó, lo que le queda, cuánto vale y qué le falta para el próximo canje.
+   * Los números salen de las mismas funciones que usa el resto del sistema (una sola fórmula).
+   */
+  BG.resumenPuntos = (cid) => {
+    const f = BG.configFidelidad();
+    const p = BG.puntosDe(cid);
+    if (!p) return null;
+    const ganadas = BG.ventasDeCliente(cid)
+      .filter((v) => !v.anulada && BG.saldoVenta(v) <= 0 && BG.puntosDeVenta(v) > 0)
+      .sort((a, b) => String(b.ts).localeCompare(String(a.ts)))
+      .map((v) => ({ recibo: v.recibo, fecha: v.fecha, total: v.total, puntos: BG.puntosDeVenta(v) }));
+    return Object.assign({}, p, {
+      minimo: f.minimo, valorPunto: f.valorPunto, cadaGs: f.cadaGs, terminos: f.terminos,
+      ganadas: ganadas, canjes: BG.canjesDe(cid),
+      /** Puntos que le faltan para llegar al mínimo de canje (0 si ya puede). */
+      falta: Math.max(0, f.minimo - p.puntos),
+      /** Lo que ya canjeó y todavía no gastó: se usa en compras, no se devuelve en plata. */
+      enFavor: BG.canjeDisponible(cid),
+    });
   };
   /** Próximo cumpleaños: días que faltan (negativo si fue hace poco) y si está en la semana del regalo (7 días antes o después). */
   BG.cumpleDe = (c) => {
@@ -664,6 +747,49 @@
   BG.MOTIVOS_PRECIO = ['Promoción', 'Cliente frecuente', 'Cumpleaños', 'Detalle en la prenda', 'Liquidación', 'Otro'];
   /** Precio que la vendedora cobra por encima del de lista: no es promoción ni descuento. */
   BG.MOTIVO_ACORDADO = 'Precio acordado';
+
+  /* ── Motivos de anulación ────────────────────────────────────────────────
+   * El motivo no es solo un texto para la auditoría: dice qué tiene que pasar con el stock, con los puntos
+   * y con la plata, y el sistema se lo muestra escrito antes de anular. `pide: 'nota'` obliga a contar más.
+   */
+  BG.MOTIVOS_ANULACION = {
+    venta: [
+      { id: 'error', texto: 'Se cargó por error', detalle: 'Nunca existió esa venta (me equivoqué al cargarla).' },
+      { id: 'duplicada', texto: 'Está cargada dos veces', detalle: 'La misma compra quedó cargada más de una vez.' },
+      { id: 'devolucion', texto: 'La clienta devolvió todo', detalle: 'Trajo de vuelta todos los artículos de esta compra.' },
+      { id: 'arrepentida', texto: 'Se arrepintió o no la retiró', detalle: 'Quedó reservada y al final no se la llevó.' },
+      { id: 'otro', texto: 'Otro motivo', detalle: 'Contalo abajo para que quede claro en el historial.', pide: 'nota' },
+    ],
+    pago: [
+      { id: 'error', texto: 'Se cargó por error', detalle: 'Ese pago no entró (me equivoqué al cargarlo).' },
+      { id: 'duplicado', texto: 'Está cargado dos veces', detalle: 'El mismo pago quedó cargado más de una vez.' },
+      { id: 'rechazo', texto: 'La transferencia no entró / cheque rechazado', detalle: 'Se cargó, pero la plata nunca llegó.' },
+      { id: 'monto', texto: 'El monto o la forma estaban mal', detalle: 'Se anula y se carga de nuevo como corresponde.' },
+      { id: 'otro', texto: 'Otro motivo', detalle: 'Contalo abajo para que quede claro en el historial.', pide: 'nota' },
+    ],
+    gasto: [
+      { id: 'error', texto: 'Se cargó por error', detalle: 'Ese gasto no existió.' },
+      { id: 'duplicado', texto: 'Está cargado dos veces', detalle: 'El mismo gasto quedó cargado más de una vez.' },
+      { id: 'monto', texto: 'El monto o la categoría estaban mal', detalle: 'Se anula y se carga de nuevo como corresponde.' },
+      { id: 'otro', texto: 'Otro motivo', detalle: 'Contalo abajo.', pide: 'nota' },
+    ],
+    envio: [
+      { id: 'error', texto: 'Se cargó por error', detalle: 'Ese envío no se iba a hacer.' },
+      { id: 'retira', texto: 'Al final lo retira en la tienda', detalle: 'No viaja: lo busca ella.' },
+      { id: 'devolucion', texto: 'La clienta canceló la compra', detalle: 'No hay nada para mandar.' },
+      { id: 'otro', texto: 'Otro motivo', detalle: 'Contalo abajo.', pide: 'nota' },
+    ],
+  };
+  /** Los motivos de una anulación, o [] si ese tipo no tiene lista. */
+  BG.motivosAnulacion = (que) => BG.MOTIVOS_ANULACION[que] || [];
+  BG.motivoAnulacion = (que, id) => BG.motivosAnulacion(que).find((m) => m.id === id) || null;
+  /** Texto final que queda guardado y en la auditoría: el motivo elegido y, si hay, el detalle escrito. */
+  BG.textoAnulacion = (que, id, nota) => {
+    const m = BG.motivoAnulacion(que, id);
+    const n = (nota || '').trim();
+    if (!m) return n;
+    return m.id === 'otro' ? (n || m.texto) : m.texto + (n ? ' · ' + n : '');
+  };
   BG.margenMinimo = () => { const p = BG.db.config.precios; return p && p.margenMinimo != null ? p.margenMinimo : 30; };
   /**
    * Ganancia y margen de vender a `precio` lo que costó `costo` (sirve por unidad o para toda la venta).
@@ -900,8 +1026,12 @@
     + '<path d="M32.5 4.5l1.1 3 3 1.1-3 1.1-1.1 3-1.1-3-3-1.1 3-1.1Z" fill="var(--mark-glow, #E2A94F)"/>';
   BG.marca = () => '<svg class="mark" viewBox="0 0 40 40" aria-hidden="true">' + MARCA_BAYA + '</svg>';
   /** Logotipo provisorio (hasta tener el definitivo). Si se subió un logo en Ajustes, se usa ese. */
+  /** Identidad visual con los valores por defecto puestos (los archivos viejos no tienen los campos nuevos). */
+  BG.configMarca = () => Object.assign({ principal: '#A3195B', acento: '#E2A94F', logo: null, logoEscala: 1, fondoCabecera: true }, BG.db.config.marca);
+  /** Cuánto se agranda el logo subido: 1 = normal. Se aplica como `--logo-escala` en el recibo y la etiqueta. */
+  BG.escalaLogo = () => { const n = Number(BG.configMarca().logoEscala); return n >= 0.6 && n <= 2.5 ? n : 1; };
   BG.logo = (usarSubido) => {
-    const subido = BG.db.config.marca.logo;
+    const subido = BG.configMarca().logo;
     if (usarSubido && subido) return '<img class="logo-img" src="' + esc(subido) + '" alt="' + esc(BG.db.config.tienda.nombre) + '">';
     return '<svg class="logo" viewBox="0 0 250 52" role="img" aria-label="berry.Glow_py">'
       + '<g transform="translate(0 4)">' + MARCA_BAYA + '</g>'
@@ -1144,7 +1274,7 @@
     [/^\/ajustes$/, 'ajustes', true],
     [/^\/ajustes\/excel$/, 'migracion', true],
     [/^\/auditoria$/, 'auditoria', true],
-    [/^\/recibo\/(v|c)\/([\w-]+)$/, 'recibo', 'emitirRecibos'],
+    [/^\/recibo\/(v|c|p)\/([\w-]+)$/, 'recibo', 'emitirRecibos'],
   ];
   const permitido = (req) => !req || (req === true ? BG.esDuena() : BG.puede(req));
   BG.rutaPermitida = (path) => { const x = RUTAS.find((r) => r[0].test(path)); return !x || permitido(x[2]); };

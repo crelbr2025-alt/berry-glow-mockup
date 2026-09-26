@@ -491,13 +491,111 @@
       + '</div></section>';
   }
 
+  /**
+   * Tarjeta de puntos de la clienta: la ven los dos perfiles, porque es lo que se le contesta cuando pregunta
+   * «¿cuántos puntos tengo?». Tiene el comprobante para imprimir o mandar, el mensaje de WhatsApp y el canje.
+   */
+  function cardPuntos(c) {
+    const p = BG.resumenPuntos(c.id);
+    if (!p) return '';
+    if (!p.ganados && !p.pendientes && !p.canjeados) return '';
+    const wa = BG.textosWa.puntos(c, p);
+    return '<section class="card stack card-puntos" aria-labelledby="t-pts">'
+      + '<div class="card-head"><h2 id="t-pts">' + icon('star') + 'Sus puntos</h2>'
+      + '<span class="small muted">1 punto cada ' + gs(p.cadaGs) + ' · cada punto ' + gs(p.valorPunto) + '</span></div>'
+      + '<div class="puntos-cifra"><div><p class="hero-figure">' + p.puntos + '<small>' + (p.puntos === 1 ? ' punto' : ' puntos') + '</small></p>'
+      + '<p class="balance-sub">' + (p.canjeable ? 'Valen <strong>' + gs(p.valor) + '</strong> y ya los puede usar como descuento.'
+        : 'Valen ' + gs(p.valor) + '. Le faltan <strong>' + p.falta + (p.falta === 1 ? ' punto' : ' puntos') + '</strong> para poder usarlos (se canjea desde ' + p.minimo + ').') + '</p>'
+      + (p.pendientes ? '<p class="small muted">+' + p.pendientes + (p.pendientes === 1 ? ' punto' : ' puntos') + ' cuando termine de pagar lo que tiene en cuotas.</p>' : '')
+      + (p.canjeados ? '<p class="small muted">Ya canjeó ' + p.canjeados + (p.canjeados === 1 ? ' punto' : ' puntos') + (p.enFavor > 0 ? ' · le queda ' + gs(p.enFavor) + ' de canje sin usar' : '') + '.</p>' : '')
+      + '</div>'
+      + '<div class="balance-actions">'
+      + (BG.puede('emitirRecibos') ? '<a class="btn' + (p.canjeable ? '' : ' btn-primary') + '" href="#/recibo/p/' + c.id + '">' + icon('receipt') + 'Comprobante de puntos</a>' : '')
+      + '<a class="btn" href="' + BG.waLink(c, wa) + '" target="_blank" rel="noopener">' + icon('chat') + 'Mandarle sus puntos</a>'
+      + (p.canjeable ? '<button type="button" class="btn btn-primary" data-accion="canjear-puntos">' + icon('star') + 'Canjear</button>' : '')
+      + '</div></div>'
+      + '<details class="terminos"><summary>Condiciones del programa</summary><p>' + esc(p.terminos) + '</p></details>'
+      + '</section>';
+  }
+
+  /**
+   * Canje de puntos, con la aritmética a la vista: cuántos puntos, cuánto valen y qué le queda.
+   * `monto` (opcional) es el total de la compra en curso: sirve para ofrecer canjear solo lo que la cubre,
+   * así no le queda saldo a favor flotando. Devuelve el canje hecho, o null.
+   */
+  BG.canjeUI = async (clienteId, monto) => {
+    const p = BG.resumenPuntos(clienteId);
+    if (!p) { BG.toast('El programa de puntos está apagado.', 'error'); return null; }
+    if (!p.canjeable) { BG.toast('Todavía no llega al mínimo: tiene ' + p.puntos + ' de ' + p.minimo + ' puntos.', 'error'); return null; }
+    const justos = monto > 0 ? BG.puntosParaMonto(clienteId, monto) : 0;
+    const parcial = justos > 0 && justos < p.puntos;
+    const linea = (n) => n + (n === 1 ? ' punto' : ' puntos') + ' = ' + gs(n * p.valorPunto);
+    let elegidos = p.puntos;
+    const r = await BG.modal({
+      titulo: 'Canjear puntos',
+      cuerpo: '<p>' + esc(BG.cliente(clienteId).nombre) + ' tiene <strong>' + p.puntos + (p.puntos === 1 ? ' punto' : ' puntos') + '</strong> = <strong>' + gs(p.valor) + '</strong>'
+        + ' (cada punto vale ' + gs(p.valorPunto) + ').</p>'
+        + '<div class="motivos" role="radiogroup" aria-label="Cuántos puntos canjea">'
+        + (parcial ? '<label class="motivo"><input type="radio" name="cj-cuanto" value="justos" checked>'
+          + '<span class="grow"><span class="row-title">Solo lo que cubre esta compra</span><span class="row-sub">' + linea(justos) + ' · le quedan ' + (p.puntos - justos) + ' para la próxima</span></span></label>' : '')
+        + '<label class="motivo"><input type="radio" name="cj-cuanto" value="todos"' + (parcial ? '' : ' checked') + '>'
+        + '<span class="grow"><span class="row-title">Todos sus puntos</span><span class="row-sub">' + linea(p.puntos) + '</span></span></label>'
+        + '<label class="motivo"><input type="radio" name="cj-cuanto" value="otro">'
+        + '<span class="grow"><span class="row-title">Otra cantidad</span><span class="row-sub">desde ' + p.minimo + ' puntos (' + gs(p.minimo * p.valorPunto) + ')</span></span></label>'
+        + '</div>'
+        + '<div class="field" id="cj-campo" hidden><label for="cj-n">Cuántos puntos</label>'
+        + '<input id="cj-n" class="input" inputmode="numeric" autocomplete="off" value="' + p.minimo + '" max="' + p.puntos + '">'
+        + '<span class="hint" id="cj-vale"></span></div>'
+        + '<p class="hint">El canje pasa a su <strong>saldo a favor</strong>: se descuenta en la compra. No se devuelve en plata.</p>'
+        + '<details class="terminos"><summary>Condiciones del programa (leéselas a la clienta si pregunta)</summary><p>' + esc(p.terminos) + '</p></details>'
+        + '<span class="error-text" id="cj-err" hidden></span>',
+      acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Canjear', valor: 'ok', clase: 'btn-primary' }],
+      onMount: (dlg) => {
+        const vale = () => {
+          const n = Math.round(Number(String($('#cj-n', dlg).value).replace(/\D/g, '')) || 0);
+          $('#cj-vale', dlg).textContent = n > 0 ? linea(n) : 'Escribí cuántos puntos (desde ' + p.minimo + ').';
+        };
+        const ver = () => {
+          const sel = $('input[name="cj-cuanto"]:checked', dlg);
+          $('#cj-campo', dlg).hidden = !sel || sel.value !== 'otro';
+          if (sel && sel.value === 'otro') { vale(); $('#cj-n', dlg).focus(); }
+        };
+        dlg.addEventListener('change', (ev) => { if (ev.target.name === 'cj-cuanto') ver(); });
+        dlg.addEventListener('input', (ev) => { if (ev.target.id === 'cj-n') vale(); });
+        ver();
+      },
+      validar: (v, dlg) => {
+        const sel = $('input[name="cj-cuanto"]:checked', dlg);
+        const er = $('#cj-err', dlg);
+        if (!sel) { er.textContent = 'Elegí cuántos puntos canjea.'; er.hidden = false; return false; }
+        if (sel.value === 'todos') elegidos = p.puntos;
+        else if (sel.value === 'justos') elegidos = justos;
+        else {
+          elegidos = Math.round(Number(String($('#cj-n', dlg).value).replace(/\D/g, '')) || 0);
+          if (elegidos < p.minimo) { er.textContent = 'El canje más chico es de ' + p.minimo + ' puntos.'; er.hidden = false; return false; }
+          if (elegidos > p.puntos) { er.textContent = 'Solo tiene ' + p.puntos + (p.puntos === 1 ? ' punto' : ' puntos') + '.'; er.hidden = false; return false; }
+        }
+        return true;
+      },
+    });
+    if (r !== 'ok') return null;
+    try {
+      const k = BG.canjearPuntos(clienteId, elegidos);
+      BG.toast('Canjeó ' + k.puntos + (k.puntos === 1 ? ' punto' : ' puntos') + ': ' + gs(k.monto) + ' a su saldo a favor.');
+      return k;
+    } catch (err) { BG.toast(err.message, 'error'); return null; }
+  };
+
   BG.vistas.cliente = (args) => {
     const c = BG.cliente(args[0]);
     if (!c) return { html: '<div class="page"><p class="empty">No encontramos ese cliente. <a href="#/clientes">Volver a clientes</a></p></div>' };
     const saldo = BG.saldoCliente(c.id);
     const aFavor = BG.creditoCliente(c.id);
     const pend = BG.pendientesDe(c.id);
-    const ventas = BG.ventasDeCliente(c.id).slice().sort((a, b) => b.ts.localeCompare(a.ts));
+    const todasSus = BG.ventasDeCliente(c.id).slice().sort((a, b) => b.ts.localeCompare(a.ts));
+    // Las anuladas no se borran: siguen en «Movimientos» y en la auditoría; acá se pueden sacar de la lista.
+    const anuladasSuyas = todasSus.filter((v) => v.anulada).length;
+    const ventas = BG.sinAnulados(todasSus, (v) => !!v.anulada);
     const libro = libroCliente(c.id);
     const creditos = BG.db.creditos.filter((x) => x.clienteId === c.id).sort((a, b) => a.ts.localeCompare(b.ts));
     const envios = BG.db.envios.filter((x) => x.clienteId === c.id).sort((a, b) => b.creado.localeCompare(a.creado));
@@ -533,6 +631,7 @@
       + '<a class="btn" href="' + BG.waLink(c, textoWa) + '" target="_blank" rel="noopener">' + icon('chat') + 'WhatsApp</a>'
       + '</div></section>'
       + (c.notas ? '<div class="callout">' + icon('info') + '<div>' + esc(c.notas) + '</div></div>' : '')
+      + cardPuntos(c)
       + (BG.esDuena() ? cardCreditoBeneficios(c) : '')
       + (cuotas.length ? '<section class="card card-flush" aria-labelledby="t-cc"><div class="card-head pad"><h2 id="t-cc">Cuotas acordadas</h2><a class="small" href="#/cuotas">Todas las cuotas</a></div>'
         + '<ul class="list list-plain">' + cuotas.map((x) => '<li class="list-row"><span class="avatar">' + icon('calendar', 'i-sm') + '</span>'
@@ -542,7 +641,7 @@
           + (x.cuota.estado !== 'futura' ? '<a class="btn btn-sm" href="' + BG.waLink(c, BG.textoRecordatorio(c, x.venta, x.cuota)) + '" target="_blank" rel="noopener">' + icon('chat', 'i-sm') + 'Recordar</a>' : '') + '</span></li>').join('')
         + '</ul></section>' : '')
       + '<div><div class="tabs" role="tablist">'
-      + '<button type="button" class="tab-btn" role="tab" aria-selected="true" data-tab="compras">Compras (' + ventas.length + ')</button>'
+      + '<button type="button" class="tab-btn" role="tab" aria-selected="true" data-tab="compras">Compras (' + ventas.length + (anuladasSuyas && !BG.verAnulados() ? ' + ' + anuladasSuyas + ' anuladas' : '') + ')</button>'
       + '<button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="movs">Movimientos</button>'
       + (envios.length ? '<button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="envios">Envíos (' + envios.length + ')</button>' : '')
       + (creditos.length ? '<button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="favor">Saldo a favor' + (aFavor > 0 ? ' · ' + gs(aFavor) : '') + '</button>' : '')
@@ -551,7 +650,9 @@
         + '<span class="avatar">' + icon('truck', 'i-sm') + '</span><span class="row-main"><span class="row-title">' + esc(x.numero) + ' → ' + esc(x.destinatario.ciudad) + '</span>'
         + '<span class="row-sub">' + esc(x.empresa) + (x.guia ? ' · guía ' + esc(x.guia) : '') + ' · ' + BG.fmtFecha(x.creado.slice(0, 10)) + '</span></span>'
         + '<span class="row-end">' + BG.pillEnvio(x) + '</span></a></li>').join('') + '</ul></div>' : '')
-      + '<div data-panel="compras">' + (ventas.length ? '<ul class="list list-top">' + ventas.map(filaVenta).join('') + '</ul>' : '<p class="empty">Todavía no compró nada.</p>') + '</div>'
+      + '<div data-panel="compras">' + BG.htmlVerAnulados(anuladasSuyas, 'la compra anulada', 'las ' + anuladasSuyas + ' compras anuladas')
+      + (ventas.length ? '<ul class="list list-top">' + ventas.map(filaVenta).join('') + '</ul>'
+        : '<p class="empty">' + (anuladasSuyas ? 'Sus compras están todas anuladas.' : 'Todavía no compró nada.') + '</p>') + '</div>'
       + '<div data-panel="movs" hidden><div class="table-wrap list-top"><table class="table"><thead><tr><th>Fecha</th><th>Concepto</th><th class="num">Compra</th><th class="num">Pago</th><th class="num">Saldo</th></tr></thead><tbody>'
       + libro.map((m) => '<tr><td class="nowrap">' + BG.fmtFecha(m.fecha) + '</td><td><span class="' + (m.anulado ? 'strike' : '') + '">' + esc(m.concepto) + '</span>'
         + (m.anulado ? '<div class="t-sub">' + esc(m.anulado) + '</div>' : '') + '</td><td class="num">' + (m.cargo ? gs(m.cargo) : '') + '</td><td class="num">' + (m.abono ? gs(m.abono) : '') + '</td><td class="num"><strong>' + gs(m.saldo) + '</strong></td></tr>').join('')
@@ -568,10 +669,14 @@
           $$('[data-tab]', root).forEach((x) => x.setAttribute('aria-selected', String(x === b)));
           $$('[data-panel]', root).forEach((p) => { p.hidden = p.dataset.panel !== b.dataset.tab; });
         }));
+        BG.engancharAnulados(root);
         root.addEventListener('click', async (ev) => {
-          const b = ev.target.closest('[data-accion="devolver-favor"]');
+          const b = ev.target.closest('[data-accion]');
           if (!b) return;
-          try { if (await BG.devolverFavorUI(c)) BG.render(); } catch (err) { BG.toast(err.message, 'error'); }
+          try {
+            if (b.dataset.accion === 'devolver-favor' && (await BG.devolverFavorUI(c))) BG.render();
+            else if (b.dataset.accion === 'canjear-puntos' && (await BG.canjeUI(c.id))) BG.render();
+          } catch (err) { BG.toast(err.message, 'error'); }
         });
       },
     };

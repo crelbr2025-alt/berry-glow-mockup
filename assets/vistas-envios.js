@@ -49,13 +49,17 @@
       + '<div class="toolbar"><div class="search-box grow"><label class="sr-only" for="q-envios">Buscar envío</label>' + icon('search')
       + '<input id="q-envios" class="search-input" type="search" autocomplete="off" placeholder="Cliente, ciudad o guía"></div>'
       + '<div class="chips" role="group" aria-label="Estado">' + chip('activos', 'En curso', activos) + chip('preparando', 'Preparando', n('preparando'))
-      + chip('listo', 'Listos', n('listo')) + chip('despachado', 'En camino', n('despachado')) + chip('entregado', 'Entregados', n('entregado')) + chip('todos', 'Todos', BG.db.envios.length) + '</div></div>'
+      + chip('listo', 'Listos', n('listo')) + chip('despachado', 'En camino', n('despachado')) + chip('entregado', 'Entregados', n('entregado')) + chip('todos', 'Todos', BG.db.envios.length)
+      + (n('cancelado') ? chip('cancelado', 'Cancelados', n('cancelado')) : '') + '</div>'
+      + BG.htmlVerAnulados(n('cancelado'), 'el envío cancelado', 'los ' + n('cancelado') + ' envíos cancelados') + '</div>'
       + '<ul class="list" id="lista-envios"></ul></div>';
     const pintar = (root) => {
       const q = BG.norm(e.q.trim());
       let lista = BG.db.envios.slice().sort((a, b) => b.creado.localeCompare(a.creado));
       if (e.estado === 'activos') lista = lista.filter((x) => ['preparando', 'listo', 'despachado'].indexOf(x.estado) >= 0);
       else if (e.estado !== 'todos') lista = lista.filter((x) => x.estado === e.estado);
+      // Los cancelados no se borran: se ven con su propio filtro, y en «Todos» solo si el dueño los dejó a la vista.
+      if (e.estado === 'todos') lista = BG.sinAnulados(lista, (x) => x.estado === 'cancelado');
       if (q) lista = lista.filter((x) => BG.norm([x.numero, x.destinatario.nombre, x.destinatario.ciudad, x.empresa, x.guia].join(' ')).includes(q));
       $('#lista-envios', root).innerHTML = lista.length ? lista.map((x) => '<li><a class="list-row" href="#/envios/' + x.id + '">'
         + '<span class="avatar">' + icon(ICONO[x.estado], 'i-sm') + '</span>'
@@ -68,6 +72,7 @@
       html: html,
       mount: (root) => {
         pintar(root);
+        BG.engancharAnulados(root);
         $('#q-envios', root).addEventListener('input', (ev) => { e.q = ev.target.value; pintar(root); });
         $$('[data-estado]', root).forEach((b) => b.addEventListener('click', () => {
           e.estado = b.dataset.estado;
@@ -312,16 +317,14 @@
             } else if (a === 'entregado') { BG.cambiarEstadoEnvio(e.id, 'entregado'); BG.toast(e.numero + ' entregado.'); BG.render(); }
             else if (a === 'avisar') { BG.auditar('envios', 'Aviso al cliente', e.numero + ' · ' + d.nombre + ' · guía ' + e.guia); BG.guardar(); }
             else if (a === 'cancelar') {
-              let motivo = '';
-              const r = await BG.modal({
-                titulo: 'Cancelar el envío ' + e.numero,
-                cuerpo: '<p>El envío no se borra: queda cancelado en el historial con el motivo.</p><div class="field"><label for="m-cancel">Motivo <span class="req">*</span></label><input id="m-cancel" class="input" autocomplete="off"><span class="error-text" id="m-err" hidden></span></div>',
-                acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Cancelar envío', valor: 'ok', clase: 'btn-danger-solid', submit: true }],
-                validar: (x, dlg) => { motivo = $('#m-cancel', dlg).value.trim(); if (motivo.length >= 4) return true; const er = $('#m-err', dlg); er.textContent = 'Escribí el motivo.'; er.hidden = false; return false; },
-                onMount: (dlg) => $('#m-cancel', dlg).focus(),
-              });
-              if (r !== 'ok') return;
-              BG.cambiarEstadoEnvio(e.id, 'cancelado', { nota: 'Motivo: ' + motivo });
+              const m = await BG.pedirMotivoAnulacion('envio', 'Cancelar el envío ' + e.numero,
+                '<p>¿Por qué se cancela? Queda en el historial con el motivo.</p>', 'Cancelar envío',
+                () => '<div class="callout callout-warn efecto">' + icon('info') + '<div><strong>Al cancelar:</strong><ul class="efecto-lista">'
+                  + '<li>El envío sale de la lista de en curso (se lo sigue viendo en «Cancelados»).</li>'
+                  + (e.flete && e.flete.paga === 'tienda' && e.flete.monto ? '<li>El flete de ' + gs(e.flete.monto) + ' deja de contar como gasto.</li>' : '')
+                  + '<li>La venta y su plata no se tocan: si la compra también se anula, eso se hace en la venta.</li></ul></div></div>');
+              if (!m) return;
+              BG.cambiarEstadoEnvio(e.id, 'cancelado', { nota: 'Motivo: ' + m.texto });
               BG.toast(e.numero + ' cancelado.');
               BG.render();
             }
@@ -336,15 +339,26 @@
   /* ── Etiqueta para pegar ─────────────────────────────────────────────── */
 
   const KEY_FORMATO = 'berryglow.mockup.formatoEtiqueta';
+  /**
+   * Etiqueta 10 × 15 para pegar en el paquete. Arriba, una franja con el color de la marca y el logo dentro de
+   * un recuadro blanco (así queda bien con cualquier logo, hasta uno con fondo blanco) y «TE LO ENVÍA» con el
+   * nombre de la tienda: de lejos se ve de quién es el paquete. Abajo, lo que necesita el courier, en bloques
+   * separados y con la ciudad bien grande. Los colores se pueden apagar en Ajustes para imprimir en blanco y negro.
+   */
   function htmlEtiqueta(e, n, total) {
     const d = e.destinatario;
     const t = BG.db.config.tienda;
     const o = BG.db.config.envios.origen;
-    return '<article class="label">'
-      + '<header class="lb-head"><div class="lb-brand">' + BG.logo(true) + '</div><div class="lb-num"><strong>' + esc(e.numero) + '</strong><span>Bulto ' + n + ' de ' + total + '</span></div></header>'
-      + '<section class="lb-block"><p class="lb-k">Destinatario</p><p class="lb-name">' + esc(d.nombre) + '</p>'
-      + '<p class="lb-line">CI ' + esc(d.ci || '—') + ' · Tel. ' + esc(d.telefono || '—') + '</p></section>'
-      + '<section class="lb-block lb-dest"><p class="lb-k">Ciudad de destino</p><p class="lb-city">' + esc(d.ciudad) + '</p><p class="lb-line">Departamento ' + esc(d.departamento) + '</p>'
+    const m = BG.configMarca();
+    return '<article class="label' + (m.fondoCabecera === false ? '' : ' cab-color') + '"'
+      + ' style="--lb-brand:' + esc(m.principal) + ';--lb-accent:' + esc(m.acento) + ';--mark-berry:' + esc(m.principal) + ';--mark-glow:' + esc(m.acento) + ';--logo-escala:' + BG.escalaLogo() + '">'
+      + '<header class="lb-head"><div class="lb-brand">' + BG.logo(true) + '</div>'
+      + '<div class="lb-de"><p class="lb-de-k">Te lo envía</p><p class="lb-de-n">' + esc(t.nombre) + '</p>'
+      + '<p class="lb-de-w">' + icon('chat', 'i-sm') + esc(t.whatsapp) + '</p></div></header>'
+      + '<p class="lb-num2"><span>' + esc(e.numero) + '</span><span>Bulto ' + n + ' de ' + total + '</span></p>'
+      + '<section class="lb-block lb-dest"><p class="lb-k">Para</p><p class="lb-name">' + esc(d.nombre) + '</p>'
+      + '<p class="lb-line">CI ' + esc(d.ci || '—') + ' · Tel. ' + esc(d.telefono || '—') + '</p>'
+      + '<p class="lb-city">' + esc(d.ciudad) + '</p><p class="lb-line lb-depto">' + esc(d.departamento) + '</p>'
       + '<p class="lb-mode">' + (d.modalidad === 'agencia' ? '<strong>Retira en ' + esc(d.agencia || 'agencia') + '</strong> · presentar CI'
         : '<strong>Entrega a domicilio:</strong> ' + esc(d.direccion) + (d.referencia ? ' · Ref.: ' + esc(d.referencia) : '')) + '</p></section>'
       + '<section class="lb-grid"><div><p class="lb-k">Empresa</p><p>' + esc(e.empresa) + '</p></div><div><p class="lb-k">Guía N°</p><p class="lb-guia">' + (e.guia ? esc(e.guia) : '&nbsp;') + '</p></div>'

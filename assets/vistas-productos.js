@@ -178,9 +178,21 @@
       + (BG.ajusteStock(p.id) ? '<dt>Ajuste por conteo</dt><dd>' + (BG.ajusteStock(p.id) > 0 ? '+' : '') + BG.ajusteStock(p.id) + '</dd>' : '') + '<dt>Disponibles</dt><dd>' + disp + '</dd>'
       + '<dt>Última venta</dt><dd>' + (ultima ? BG.fmtFecha(ultima) + ' (' + BG.haceDias(ultima) + ')' : 'nunca se vendió') + '</dd></dl>'
       + (quieto ? '<p class="callout callout-warn">' + icon('pause') + '<span>Lleva <strong>' + BG.diasSinVender(p) + ' días</strong> sin venderse: candidato a liquidación o promoción.</span></p>' : '');
-    const cabecera = '<p class="muted small">' + esc(p.codigo) + ' · ' + esc(p.categoria) + (duena ? ' · ' + esc(p.proveedor) : '') + ' · cargado el ' + BG.fmtFecha(p.fechaCarga) + '</p>';
+    const cabecera = '<p class="muted small">' + esc(p.codigo) + ' · ' + esc(p.categoria) + (duena ? ' · ' + esc(p.proveedor) : '') + ' · cargado el ' + BG.fmtFecha(p.fechaCarga)
+      + (p.usuario ? ' por ' + esc(p.usuario) : '') + '</p>';
+    // Se cargó por error: se puede borrar solo si nunca se movió (sin ventas ni conteos). Queda en la auditoría.
+    const borrable = BG.puedeBorrarProducto(p);
+    const accionBorrar = borrable.ok ? [{ texto: 'Borrar', valor: 'borrar', clase: 'btn-danger' }] : [];
+    const avisoBorrar = borrable.ok
+      ? '<p class="hint">Se cargó por error? Con <strong>Borrar</strong> desaparece de la lista (queda anotado en la auditoría). Se puede porque todavía no se vendió ni entró en un conteo.</p>'
+      : '<p class="hint">No se puede borrar: ' + esc(borrable.razon) + '</p>';
     if (!duena) {
-      await BG.modal({ titulo: p.descripcion, cuerpo: cabecera + '<p class="hero-figure">' + (p.precioVenta ? gs(p.precioVenta) : 'Sin precio') + '</p>' + stock, acciones: [{ texto: 'Cerrar', valor: 'cancelar' }] });
+      const rv = await BG.modal({
+        titulo: p.descripcion, cuerpo: cabecera + '<p class="hero-figure">' + (p.precioVenta ? gs(p.precioVenta) : 'Sin precio') + '</p>' + stock
+          + (BG.puede('cargarProductos') ? avisoBorrar : ''),
+        acciones: [{ texto: 'Cerrar', valor: 'cancelar', clase: 'btn-quiet' }].concat(BG.puede('cargarProductos') ? accionBorrar : []),
+      });
+      if (rv === 'borrar') await borrarProductoUI(p);
       return;
     }
     const det = BG.detalleProducto(p);
@@ -197,15 +209,17 @@
         + '<div class="field"><label for="pp-costo">Costo unitario (US$)</label><div class="money"><span class="money-sym" aria-hidden="true">US$</span><input id="pp-costo" class="input input-usd" inputmode="decimal" data-dec="2" autocomplete="off" placeholder="0,00"></div>'
         + '<span class="hint">Se calcula con el dólar y el envío del día de carga (' + C.fmtCot(p.cotizacion) + ').</span><span class="error-text" id="pp-e" hidden></span></div>';
     }
-    cuerpo += '<section class="stack"><h3 class="section-title">Stock</h3>' + stock + '</section>';
+    cuerpo += '<section class="stack"><h3 class="section-title">Stock</h3>' + stock + avisoBorrar + '</section>';
     let nuevo = null;
     const r = await BG.modal({
       titulo: p.descripcion, ancho: 'wide', cuerpo: cuerpo,
-      acciones: [{ texto: 'Cerrar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: det ? 'Guardar precio' : 'Calcular y guardar', valor: 'ok', clase: 'btn-primary' }],
+      acciones: [{ texto: 'Cerrar', valor: 'cancelar', clase: 'btn-quiet' }].concat(accionBorrar)
+        .concat([{ texto: det ? 'Guardar precio' : 'Calcular y guardar', valor: 'ok', clase: 'btn-primary' }]),
       onMount: (dlg) => {
         dlg.addEventListener('focusin', (e) => { if (e.target.dataset && e.target.dataset.otroDe) { const rd = $('input[name="pp"][value="otro"]', dlg); if (rd) rd.checked = true; } });
       },
       validar: (v, dlg) => {
+        if (v === 'borrar') return true;   // borrar no necesita precio: justamente se usa cuando se cargó mal
         if (!det) {
           const q = C.parseNum($('#pp-costo', dlg).value, 'decimal');
           if (!q || C.isZero(q)) { const er = $('#pp-e', dlg); er.textContent = 'Escribí el costo en dólares.'; er.hidden = false; return false; }
@@ -224,6 +238,7 @@
         return true;
       },
     });
+    if (r === 'borrar') { await borrarProductoUI(p); return; }
     if (r !== 'ok' || !nuevo) return;
     if (nuevo.costo) {
       const res = C.calcularProducto({ costoUSD: nuevo.costo, envioUnitUSD: p.envioUnitUSD, cotizacion: p.cotizacion, redondeo: BG.db.config.redondeo });
@@ -240,6 +255,36 @@
     }
     BG.render();
   };
+
+  /**
+   * Confirmación para borrar un artículo cargado por error: dice qué se va a borrar y pide el motivo (opcional).
+   * Solo aparece cuando el artículo nunca se movió, así no hay forma de cambiar un número del pasado.
+   */
+  async function borrarProductoUI(p) {
+    const puede = BG.puedeBorrarProducto(p);
+    if (!puede.ok) { BG.toast(puede.razon, 'error'); return false; }
+    let motivo = '';
+    const r = await BG.modal({
+      titulo: 'Borrar «' + p.descripcion + '»',
+      cuerpo: '<p>Se va a borrar el artículo <strong>' + esc(p.codigo) + ' · ' + esc(p.descripcion) + '</strong> (' + p.cantidad + (p.cantidad === 1 ? ' unidad' : ' unidades')
+        + (p.precioVenta ? ' a ' + gs(p.precioVenta) : ', sin precio') + ').</p>'
+        + '<div class="callout callout-warn">' + icon('info') + '<div>Es para lo que se cargó <strong>por error</strong>. Nunca se vendió ni entró en un conteo, así que no cambia ninguna venta, ningún cobro ni la caja. '
+        + 'Queda anotado en la auditoría con todos sus datos. Si el artículo existe pero se perdió o se dañó, no lo borres: hacé un <a href="#/productos/conteo">conteo de inventario</a>.</div></div>'
+        + '<div class="field"><label for="bp-motivo">Motivo <span class="small muted">(opcional)</span></label>'
+        + '<input id="bp-motivo" class="input" maxlength="120" autocomplete="off" placeholder="Ej.: lo cargué dos veces"></div>',
+      acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Borrar artículo', valor: 'ok', clase: 'btn-danger-solid' }],
+      validar: (v, dlg) => { motivo = $('#bp-motivo', dlg).value.trim(); return true; },
+      onMount: (dlg) => $('#bp-motivo', dlg).focus(),
+    });
+    if (r !== 'ok') return false;
+    try {
+      BG.borrarProducto(p.id, motivo);
+      BG.toast('«' + p.descripcion + '» borrado.');
+      BG.render();
+      return true;
+    } catch (err) { BG.toast(err.message, 'error'); return false; }
+  }
+  BG.borrarProductoUI = borrarProductoUI;
 
   /* ── Lista de productos ──────────────────────────────────────────────── */
 
@@ -271,18 +316,26 @@
       const quieto = (p) => (BG.disponibles(p) > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO ? '<span class="pill pill-warn pill-quieto">' + icon('pause') + BG.diasSinVender(p) + ' días sin venderse</span>' : '');
       const stockTxt = (p) => { const d = BG.disponibles(p); return d > 0 ? d + ' / ' + p.cantidad : '<span class="pill pill-muted">Agotado</span>'; };
       const precioTxt = (p) => (p.precioVenta ? gs(p.precioVenta) : '<span class="pill pill-warn">' + icon('alert') + 'Sin precio</span>');
+      // Ícono para borrar lo que se cargó por error (solo en los que nunca se movieron; queda en la auditoría).
+      const puedeCargar = duena || BG.puede('cargarProductos');
+      const borrable = (p) => puedeCargar && BG.puedeBorrarProducto(p).ok;
+      const btnBorrar = (p) => (borrable(p)
+        ? '<button type="button" class="btn-icon btn-del" data-borrar="' + esc(p.id) + '" title="Borrar «' + esc(p.descripcion) + '»: se cargó por error" aria-label="Borrar ' + esc(p.descripcion) + '">' + icon('trash', 'i-sm') + '</button>'
+        : '');
       const tabla = '<div class="table-wrap hide-narrow"><table class="table"><thead><tr><th>Producto</th><th>Categoría</th><th class="num">Stock</th>'
-        + (duena ? '<th class="num">Costo US$</th><th class="num">Costo ₲ (congelado)</th>' : '') + '<th class="num">Precio</th>' + (duena ? '<th class="num">Gana c/u</th><th>Cargado</th>' : '') + '</tr></thead><tbody>'
+        + (duena ? '<th class="num">Costo US$</th><th class="num">Costo ₲ (congelado)</th>' : '') + '<th class="num">Precio</th>' + (duena ? '<th class="num">Gana c/u</th><th>Cargado</th>' : '')
+        + (puedeCargar ? '<th class="col-del"><span class="sr-only">Borrar</span></th>' : '') + '</tr></thead><tbody>'
         + lista.map((p) => '<tr class="is-link" data-ver="' + p.id + '" tabindex="0"><td><div class="t-title">' + (e.q ? BG.resaltar(p.descripcion, e.q) : esc(p.descripcion)) + '</div>'
           + '<div class="t-sub">' + esc(p.codigo) + (duena ? ' · ' + esc(p.proveedor) : '') + '</div>' + quieto(p) + '</td><td>' + esc(p.categoria) + '</td><td class="num">' + stockTxt(p) + '</td>'
           + (duena ? '<td class="num">' + (p.costoUSD ? C.fmtUSD(p.costoUSD) : '—') + '</td><td class="num">' + (p.costoTotalGs ? gs(p.costoTotalGs) : '—') + '</td>' : '')
           + '<td class="num"><strong>' + precioTxt(p) + '</strong>' + (duena && p.precioVenta ? '<div class="t-sub">' + (p.margen ? p.margen + ' %' : 'a mano') + '</div>' : '') + '</td>'
           + (duena ? '<td class="num">' + (p.precioVenta && p.costoTotalGs ? gs(p.precioVenta - p.costoTotalGs) : '—') + '</td><td class="nowrap"><div>' + BG.fmtFecha(p.fechaCarga) + '</div><div class="t-sub">dólar ' + C.fmtCot(p.cotizacion) + '</div></td>' : '')
+          + (puedeCargar ? '<td class="col-del">' + btnBorrar(p) + '</td>' : '')
           + '</tr>').join('') + '</tbody></table></div>';
-      const tarjetas = '<ul class="list show-narrow">' + lista.map((p) => '<li><button type="button" class="list-row list-btn" data-ver="' + p.id + '"><span class="avatar">' + icon('tag', 'i-sm') + '</span>'
+      const tarjetas = '<ul class="list show-narrow">' + lista.map((p) => '<li' + (borrable(p) ? ' class="list-del"' : '') + '><button type="button" class="list-row list-btn" data-ver="' + p.id + '"><span class="avatar">' + icon('tag', 'i-sm') + '</span>'
         + '<span class="row-main"><span class="row-title">' + esc(p.descripcion) + '</span><span class="row-sub">' + esc(p.categoria) + ' · ' + (BG.disponibles(p) > 0 ? 'quedan ' + BG.disponibles(p) : 'agotado')
         + (duena && p.costoTotalGs ? ' · costo ' + gs(p.costoTotalGs) : '') + '</span>' + quieto(p) + '</span><span class="row-end"><span class="amount">' + (p.precioVenta ? gs(p.precioVenta) : 'Sin precio') + '</span>'
-        + (duena && p.precioVenta && p.costoTotalGs ? '<span class="small muted">gana ' + gs(p.precioVenta - p.costoTotalGs) + '</span>' : '') + '</span></button></li>').join('') + '</ul>';
+        + (duena && p.precioVenta && p.costoTotalGs ? '<span class="small muted">gana ' + gs(p.precioVenta - p.costoTotalGs) + '</span>' : '') + '</span></button>' + btnBorrar(p) + '</li>').join('') + '</ul>';
       $('#p-lista', root).innerHTML = lista.length ? tabla + tarjetas : BG.db.productos.length ? '<p class="empty">Ningún producto coincide.</p>' : '<p class="empty">Todavía no cargaste productos. <a href="#/productos/nuevo">Cargar el primero</a></p>';
     };
     return {
@@ -296,7 +349,12 @@
           $$('[data-' + grupo + ']', root).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
           pintar(root);
         }));
-        root.addEventListener('click', (ev) => { const f = ev.target.closest('[data-ver]'); if (f) BG.verProducto(f.dataset.ver); });
+        root.addEventListener('click', async (ev) => {
+          const del = ev.target.closest('[data-borrar]');
+          if (del) { ev.stopPropagation(); await borrarProductoUI(BG.producto(del.dataset.borrar)); return; }
+          const f = ev.target.closest('[data-ver]');
+          if (f) BG.verProducto(f.dataset.ver);
+        });
         root.addEventListener('keydown', (ev) => { const f = ev.target.closest('tr[data-ver]'); if (f && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); BG.verProducto(f.dataset.ver); } });
         if (duena) BG.enlazarParametros(root, () => BG.render());
         if (params.get('ver')) BG.verProducto(params.get('ver'));

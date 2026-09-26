@@ -75,11 +75,48 @@
       + '<ul class="cb-list" id="q-cli-lista" role="listbox" hidden></ul></div>'
       + '<a class="btn-link" href="#/clientes/nuevo?volver=' + volver + '">' + icon('plus', 'i-sm') + 'Cliente nuevo</a>';
     BG.combobox($('#q-cli', host), $('#q-cli-lista', host), {
-      buscar: (q) => BG.buscarClientes(q, 8).map((c) => ({ c: c })),
+      // Al tocar el buscador ya se ven los clientes (no hay que acordarse de ningún nombre).
+      mostrarVacio: true,
+      buscar: (q) => (q.trim() ? BG.buscarClientes(q, 8) : BG.clientesPorDeuda().slice(0, 8)).map((c) => ({ c: c })),
       pintar: (it, q) => BG.filaCliente(it.c, q),
       elegir: (it) => alElegir(it.c.id),
       vacio: (q) => 'No existe «' + esc(q) + '». <a class="cb-new" href="#/clientes/nuevo?volver=' + volver + '&nombre=' + encodeURIComponent(q) + '">Crearlo</a>',
     });
+  }
+
+  /**
+   * Lista desplegable con TODOS los clientes y un detalle corto de su cuenta (debe / al día / a favor / puntos).
+   * Es para no tener que acordarse de memoria: primero los que deben, después el resto por nombre.
+   */
+  function panelClientes(host, volver) {
+    const todos = BG.clientesPorDeuda();
+    if (!todos.length) return;
+    const deudores = todos.filter((c) => BG.saldoCliente(c.id) > 0);
+    const alDia = todos.filter((c) => BG.saldoCliente(c.id) <= 0);
+    const fila = (c) => {
+      const saldo = BG.saldoCliente(c.id);
+      const favor = BG.creditoCliente(c.id);
+      const pts = BG.puntosDe(c.id);
+      const cuotas = BG.cuotasPendientes().filter((x) => x.cliente.id === c.id);
+      const atras = cuotas.filter((x) => x.cuota.estado === 'vencida').length;
+      const detalle = [
+        saldo > 0 ? 'debe ' + gs(saldo) : 'al día',
+        atras ? atras + (atras === 1 ? ' cuota atrasada' : ' cuotas atrasadas') : (cuotas.length ? 'próxima cuota el ' + BG.fmtFechaCorta(cuotas[0].cuota.vence) : ''),
+        favor > 0 ? gs(favor) + ' a favor' : '',
+        pts && pts.puntos ? pts.puntos + ' puntos' + (pts.canjeable ? ' (ya canjea)' : '') : '',
+      ].filter(Boolean).join(' · ');
+      return '<button type="button" class="hay-item" data-accion="elegir-cliente" data-id="' + esc(c.id) + '">'
+        + '<span class="avatar">' + esc(BG.iniciales(c.nombre)) + '</span>'
+        + '<span class="grow"><span class="row-title">' + esc(c.nombre) + '</span><span class="row-sub">' + esc(detalle) + '</span></span>'
+        + (saldo > 0 ? '<span class="amount">' + gs(saldo) + '</span>' : '') + '</button>';
+    };
+    host.insertAdjacentHTML('beforeend', '<div class="hay"><p class="hay-tit">' + icon('user', 'i-sm') + 'Tus clientes</p>'
+      + (deudores.length ? '<p class="hay-cat">Con saldo pendiente (' + deudores.length + ')</p><div class="hay-lista">' + deudores.slice(0, 6).map(fila).join('') + '</div>' : '')
+      + '<details class="hay-todo"><summary>Ver todos los clientes (' + todos.length + ')</summary>'
+      + (deudores.length > 6 ? '<p class="hay-cat">Con saldo pendiente</p><div class="hay-lista">' + deudores.slice(6).map(fila).join('') + '</div>' : '')
+      + (alDia.length ? '<p class="hay-cat">Al día</p><div class="hay-lista">' + alDia.slice().sort((a, b) => a.nombre.localeCompare(b.nombre)).map(fila).join('') + '</div>' : '')
+      + '</details>'
+      + '<a class="small" href="#/clientes">Ver la lista completa de clientes</a></div>');
   }
   function clienteElegido(cid) {
     const c = BG.cliente(cid);
@@ -168,7 +205,10 @@
     const pintarCliente = () => {
       const host = $('#s-cliente', root);
       if (b.clienteId) host.innerHTML = clienteElegido(b.clienteId);
-      else buscadorCliente(host, (id) => { b.clienteId = id; quitarRegalo(); pintarCliente(); pintarDescuento(); pintarTotales(); }, 'venta');
+      else {
+        buscadorCliente(host, (id) => { b.clienteId = id; quitarRegalo(); pintarCliente(); pintarDescuento(); pintarTotales(); }, 'venta');
+        panelClientes(host, 'venta');
+      }
       pintarAvisos();
     };
     // Avisos cortos de la clienta: solo aparecen cuando sirven para esta venta (lo demás lo ve Ariel en su perfil).
@@ -504,6 +544,7 @@
           const a = btn.dataset.accion;
           const i = Number(btn.dataset.i);
           if (a === 'cambiar-cliente') { b.clienteId = null; quitarRegalo(); pintarCliente(); pintarDescuento(); pintarTotales(); $('#q-cli', root).focus(); }
+          else if (a === 'elegir-cliente') { b.clienteId = btn.dataset.id; quitarRegalo(); pintarCliente(); pintarDescuento(); pintarTotales(); }
           else if (a === 'regalo') {
             const rg = BG.regaloCumple(b.clienteId);
             if (!rg) return;
@@ -514,22 +555,11 @@
             pintarTotales();
           } else if (a === 'quitar-regalo') { quitarRegalo(); pintarAvisos(); pintarDescuento(); pintarTotales(); }
           else if (a === 'canjear') {
-            const pts = BG.puntosDe(b.clienteId);
-            BG.modal({
-              titulo: 'Canjear puntos',
-              cuerpo: '<p>' + pts.puntos + ' puntos = <strong>' + gs(pts.valor) + '</strong>. Se suman a su saldo a favor y se descuentan de esta compra.</p>'
-                + '<p class="hint">Si al final no registrás esta venta, los puntos ya canjeados le quedan como saldo a favor para la próxima compra.</p>'
-                + '<details class="terminos"><summary>Condiciones del programa (leéselas a la clienta si pregunta)</summary><p>' + esc(BG.configFidelidad().terminos) + '</p></details>',
-              acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Canjear', valor: 'ok', clase: 'btn-primary' }],
-            }).then((ok) => {
-              if (ok !== 'ok') return;
-              try {
-                const k = BG.canjearPuntos(b.clienteId);
-                b.usarCredito = true;
-                pintarCliente();
-                pintarTotales();
-                BG.toast('Canjeó ' + k.puntos + ' puntos: ' + gs(k.monto) + ' para esta compra.');
-              } catch (er) { BG.toast(er.message, 'error'); }
+            BG.canjeUI(b.clienteId, calc().total).then((k) => {
+              if (!k) return;
+              b.usarCredito = true;
+              pintarCliente();
+              pintarTotales();
             });
           }
           else if (a === 'quitar-item') { b.items.splice(i, 1); pintarItems(); pintarTotales(); pintarHay(); }
@@ -621,11 +651,7 @@
       const host = $('#c-cliente', root);
       if (e.clienteId) { host.innerHTML = clienteElegido(e.clienteId); return; }
       buscadorCliente(host, (id) => { e.clienteId = id; e.destino = null; elegirDestinoInicial(); pintarTodo(); }, 'cobro');
-      const top = BG.listaDeudores().slice(0, 5);
-      if (top.length) {
-        host.insertAdjacentHTML('beforeend', '<p class="field-label">O elegí entre los que más deben</p><ul class="list">'
-          + top.map((d) => '<li><button type="button" class="list-row list-btn" data-accion="elegir-cliente" data-id="' + d.c.id + '">' + BG.filaCliente(d.c) + '</button></li>').join('') + '</ul>');
-      }
+      panelClientes(host, 'cobro');
     };
     const pintarDestino = () => {
       const host = $('#c-destino', root);
