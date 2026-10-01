@@ -664,7 +664,7 @@
       host.innerHTML = '<div class="dests" role="radiogroup" aria-label="Aplicar el cobro a">'
         + pend.map((v) => {
           const ep = BG.estadoPlan(v);
-          return op(v.id, 'Compra ' + BG.fmtRecibo(v.recibo) + ' · ' + BG.fmtFecha(v.fecha), esc(v.items.filter((it) => BG.cantidadViva(it) > 0).map((it) => it.descripcion).join(', ')) + ' · ' + BG.haceDias(v.fecha),
+          return op(v.id, (BG.esAnterior(v) ? 'Antes del sistema ' : 'Compra ') + BG.fmtRecibo(v.recibo) + ' · ' + BG.fmtFecha(v.fecha), esc(v.items.filter((it) => BG.cantidadViva(it) > 0).map((it) => it.descripcion).join(', ')) + ' · ' + BG.haceDias(v.fecha),
             BG.saldoVenta(v), ep && ep.proxima ? '<span class="row-sub">Cuota ' + ep.proxima.n + ' de ' + ep.proxima.de + ': ' + gs(ep.proxima.falta) + ' ' + BG.pillCuota(ep.proxima) + '</span>' : '');
         }).join('')
         + (pend.length > 1 ? op('todas', 'Todas las compras pendientes', 'Se aplica de la más antigua a la más nueva', BG.saldoCliente(e.clienteId)) : '')

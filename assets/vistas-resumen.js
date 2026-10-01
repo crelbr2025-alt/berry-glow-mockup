@@ -143,8 +143,8 @@
     const pintar = () => {
       const [desde, hasta] = rango(e.periodo);
       const enR = (f) => f >= desde && f <= hasta;
-      const ventas = BG.db.ventas.filter((v) => !v.anulada && enR(v.fecha));
-      const pagos = BG.db.pagos.filter((p) => !p.anulado && enR(p.fecha));
+      const ventas = BG.db.ventas.filter((v) => BG.ventaDelSistema(v) && enR(v.fecha));
+      const pagos = BG.db.pagos.filter((p) => BG.pagoDelSistema(p) && enR(p.fecha));
       const dinero = (p) => sum(p.partes.filter((x) => x.forma !== 'saldo'), (x) => x.monto);
       const f = BG.totalesPorForma(pagos);
       const vendido = sum(ventas, (v) => v.total);

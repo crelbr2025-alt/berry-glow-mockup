@@ -35,7 +35,7 @@
     configurada: !!(CFG.url && CFG.clave),
     disponible: false,   // la biblioteca cargó
     activa: false,       // hay sesión y estamos trabajando con los datos de la nube
-    estado: 'apagada',   // apagada | conectando | sin-cuenta | al-dia | guardando | sin-conexion | conflicto
+    estado: 'apagada',   // apagada | conectando | sin-cuenta | al-dia | guardando | sin-conexion | conflicto | version-nueva
     version: 0,
     actualizado: '',
     por: '',
@@ -67,7 +67,22 @@
     guardando: 'Guardando…',
     'sin-conexion': 'Sin internet: se guarda en este aparato y se sube solo',
     conflicto: 'Hubo un cambio desde otro aparato',
+    'version-nueva': 'Hay una versión nueva: recargá la página para seguir guardando',
   })[N.estado] || '';
+
+  /**
+   * El documento de la nube lo guardó un aparato con una versión más nueva del sistema y este no lo sabe leer.
+   * Se frena todo ANTES de tocar el número de versión: así este aparato no puede subir encima sus datos viejos
+   * (pasaba: se anotaba la versión nueva, fallaba la lectura y el próximo guardado pisaba lo del otro aparato).
+   */
+  function frenarPorVersion() {
+    N.bloqueada = true;
+    pendiente = false;
+    estado('version-nueva');
+    BG.toast('Desde otro aparato se guardó con una versión más nueva del sistema. Recargá la página antes de seguir: así no se pisa nada.', 'error');
+    if (BG.controlarVersion) BG.controlarVersion();
+    BG.render();   // muestra el aviso con «Recargar» en lugar de la pantalla en la que estaba
+  }
 
   const OPCIONES = { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } };
   async function cliente() {
@@ -189,6 +204,7 @@
     } catch (e) {
       // Sin internet: se trabaja con la última copia de este aparato y se reintenta al guardar.
       const cache = BG.leer(KEY_CACHE);
+      if (cache && cache.datos && !BG.datosSirven(cache.datos)) { N.activa = true; frenarPorVersion(); BG.render(); return; }
       if (cache && cache.datos) { N.version = cache.version || 0; BG.usarDatosDeLaNube(cache.datos); }
       N.activa = true;
       estado('sin-conexion');
@@ -206,6 +222,7 @@
       await empujarAhora(true);
       if (subeLoDeAca) BG.toast('Subimos a la nube lo que tenías cargado en este aparato: ' + mios.clientes.length + ' clientas y ' + mios.ventas.length + ' ventas.');
     } else {
+      if (!BG.datosSirven(fila.datos)) { N.activa = true; frenarPorVersion(); BG.render(); return; }
       N.version = fila.version;
       N.actualizado = fila.actualizado;
       N.por = fila.por;
@@ -233,6 +250,8 @@
   /** Se llama en cada BG.guardar(): junta los cambios de la ráfaga y los sube una sola vez. */
   N.cambio = () => {
     if (!N.activa) return true;
+    // Con la nube frenada por versión no se sube nada: lo hecho queda en este aparato hasta recargar.
+    if (N.bloqueada) { BG.escribir(KEY_DESCARTADO, { ts: BG.ahora(), datos: BG.db }); estado('version-nueva'); return false; }
     pendiente = true;
     const ok = BG.escribir(KEY_CACHE, { version: N.version, datos: BG.db });
     if (!empujando) setTimeout(() => { empujar(); }, 120);
@@ -242,7 +261,7 @@
   async function empujar() { if (!empujando && pendiente) await empujarAhora(false); }
 
   async function empujarAhora(forzar) {
-    if (empujando || !N.activa) return;
+    if (empujando || !N.activa || N.bloqueada) return;
     if (!pendiente && !forzar) return;
     empujando = true;
     pendiente = false;
@@ -280,6 +299,8 @@
     let fila;
     try { fila = await leerFila(); } catch (e) { estado('sin-conexion'); return; }
     if (!fila.datos || !Array.isArray(fila.datos.clientes)) return;
+    // Primero se mira si este sistema sabe leerlo; recién después se anota la versión (ver frenarPorVersion).
+    if (!BG.datosSirven(fila.datos)) { frenarPorVersion(); return; }
     N.version = fila.version;
     N.actualizado = fila.actualizado;
     N.por = fila.por;

@@ -150,8 +150,8 @@
       const enRango = (f) => f >= desde && f <= hasta;
       const cuerpo = $('#rep-cuerpo', root);
       if (e.tab === 'ventas') {
-        const ventas = BG.db.ventas.filter((v) => !v.anulada && enRango(v.fecha));
-        const pagos = BG.db.pagos.filter((p) => !p.anulado && enRango(p.fecha));
+        const ventas = BG.db.ventas.filter((v) => BG.ventaDelSistema(v) && enRango(v.fecha));
+        const pagos = BG.db.pagos.filter((p) => BG.pagoDelSistema(p) && enRango(p.fecha));
         const f = BG.totalesPorForma(pagos);
         const vendido = sum(ventas, (v) => v.total);
         const cobrado = f.efectivo + f.transferencia + f.qr + f.tarjeta;
@@ -211,7 +211,8 @@
         // Rotación: lo vendido en el período, a qué velocidad y cuándo se agota.
         const desde = BG.sumarDias(h, -(e.rot - 1));
         const porProd = new Map();
-        BG.db.ventas.filter((v) => !v.anulada && v.fecha >= desde).forEach((v) => v.items.forEach((it) => {
+        // Las compras de antes del sistema no son del stock (sus artículos no tienen producto): no entran.
+        BG.db.ventas.filter((v) => BG.ventaDelSistema(v) && v.fecha >= desde).forEach((v) => v.items.forEach((it) => {
           const n = BG.cantidadViva(it);
           if (!n) return;
           const x = porProd.get(it.productoId) || { u: 0, ingreso: 0, ganancia: 0 };
@@ -309,7 +310,7 @@
             : '<p class="empty">Todas compraron en los últimos 60 días.</p>')
           + '</section>';
       } else {
-        const ventas = BG.db.ventas.filter((v) => !v.anulada && enRango(v.fecha)).sort((a, b) => b.ts.localeCompare(a.ts));
+        const ventas = BG.db.ventas.filter((v) => BG.ventaDelSistema(v) && enRango(v.fecha)).sort((a, b) => b.ts.localeCompare(a.ts));
         const neto = sum(ventas, (v) => v.total);
         const costo = sum(ventas, (v) => v.total - BG.gananciaVenta(v));
         const gan = neto - costo;
@@ -352,11 +353,12 @@
   BG.vistas.caja = (args, params) => {
     const h = BG.hoy();
     const f = params.get('fecha') && params.get('fecha') <= h ? params.get('fecha') : h;
-    const pagos = BG.db.pagos.filter((p) => p.fecha === f && !p.anulado);
+    // Lo pagado antes del sistema (de una compra anterior) no entró en la caja de ningún día.
+    const pagos = BG.db.pagos.filter((p) => p.fecha === f && BG.pagoDelSistema(p));
     const t = BG.totalesPorForma(pagos);
     const n = (forma) => pagos.filter((p) => p.partes.some((x) => x.forma === forma)).length;
     const cobrado = t.efectivo + t.transferencia + t.qr + t.tarjeta;
-    const ventas = BG.db.ventas.filter((v) => v.fecha === f && !v.anulada);
+    const ventas = BG.db.ventas.filter((v) => v.fecha === f && BG.ventaDelSistema(v));
     const cerrada = BG.cajaCerrada(f);
     const cierre = BG.db.cierres.find((c) => c.fecha === f);
     const movs = BG.movimientosDelDia(f);
@@ -872,7 +874,7 @@
 
   BG.vistas.auditoria = (args, params) => {
     const tipos = [['todo', 'Todo'], ['ventas', 'Ventas'], ['precios', 'Precios especiales'], ['cobros', 'Cobros'], ['cuotas', 'Cuotas'], ['devoluciones', 'Devoluciones'], ['recibos', 'Recibos'], ['envios', 'Envíos'],
-      ['anulaciones', 'Anulaciones'], ['productos', 'Productos'], ['gastos', 'Gastos'], ['fidelidad', 'Clientas frecuentes'], ['parametros', 'Parámetros'], ['caja', 'Caja'], ['clientes', 'Clientes'], ['seguridad', 'Permisos y PIN']];
+      ['anulaciones', 'Anulaciones'], ['productos', 'Productos'], ['gastos', 'Gastos'], ['ahorro', 'Cuenta de ahorro'], ['fidelidad', 'Clientas frecuentes'], ['parametros', 'Parámetros'], ['caja', 'Caja'], ['clientes', 'Clientes'], ['seguridad', 'Permisos y PIN']];
     const pedido = params && params.get('tipo');
     const e = { tipo: tipos.some((x) => x[0] === pedido) ? pedido : 'todo', usuario: 'todos', q: '', max: 120 };
     const html = '<div class="page"><div class="page-head"><div><h1 class="page-title">Auditoría</h1><p class="page-sub">Cada venta, precio especial, cobro, recibo emitido, envío, anulación y cambio de parámetros queda con fecha, hora y usuario. No se puede editar.</p></div></div>'

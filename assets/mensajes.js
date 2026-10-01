@@ -97,14 +97,20 @@
 
     /** Recibo o estado de cuenta que se manda desde la pantalla del comprobante. */
     recibo: (cli, d, prox) => {
-      const unaCompra = d.compras.length === 1 && d.titulo !== 'Estado de cuenta';
+      const unaCompra = d.compras.length === 1 && d.titulo !== 'Estado de cuenta' && !d.anteriores;
       const c = unaCompra ? d.compras[0] : null;
+      const total = d.compras.reduce((a, x) => a + x.total, 0);
+      const pagado = d.compras.reduce((a, x) => a + x.pagado, 0);
+      const saldo = d.anteriores ? d.saldoDocumento : d.saldoCuenta;
       return unir([
         saludo() + ', ' + nombreCorto(cli) + '! Te escribimos de ' + tienda() + ' 💗',
         '',
-        c ? 'Te paso el comprobante de tu compra ' + BG.fmtRecibo(c.numero) + ':' : 'Te paso el resumen de tu cuenta:',
-        c ? 'Total: ' + gs(c.total) + (c.pagado > 0 ? ' · Pagaste: ' + gs(c.pagado) : '') : null,
-        d.saldoCuenta > 0 ? 'Saldo pendiente: ' + gs(d.saldoCuenta) + '.' : '✔️ ¡Tu cuenta está al día!',
+        c ? 'Te paso el comprobante de tu compra ' + BG.fmtRecibo(c.numero) + ':'
+          : d.anteriores ? 'Te paso el detalle de lo que llevaste antes de que tuviéramos el sistema:'
+            : d.historial ? 'Te paso el estado de tu cuenta, con todas tus compras y pagos:' : 'Te paso el resumen de tu cuenta:',
+        c ? 'Total: ' + gs(c.total) + (c.pagado > 0 ? ' · Pagaste: ' + gs(c.pagado) : '')
+          : d.historial && d.compras.length ? 'Compras: ' + gs(total) + ' · Pagaste: ' + gs(pagado) : null,
+        saldo > 0 ? (d.anteriores ? 'Te queda de eso: ' : 'Saldo pendiente: ') + gs(saldo) + '.' : d.anteriores ? '✔️ Eso ya está pagado.' : '✔️ ¡Tu cuenta está al día!',
         prox ? 'Próxima cuota: ' + gs(prox.falta) + ' el ' + BG.fmtFecha(prox.vence) + '.' : null,
         lineaFavor(d.aFavor),
         lineaPuntos(cli.id),

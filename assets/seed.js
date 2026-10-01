@@ -341,7 +341,7 @@
         { id: 'u2', nombre: JAZMIN, usuario: 'jazmin', rol: 'vendedor', permisos: Object.assign({}, PERMISOS_VENDEDORA), comision: Object.assign({}, COMISION_VENDEDORA) },
       ],
       clientes: [], productos: [], pedidos: [], ventas: [], pagos: [], creditos: [], cierres: [], auditoria: [],
-      emisiones: [], envios: [], egresos: [], gastos: [], canjes: [], conteos: [], ajustesStock: [],
+      emisiones: [], envios: [], egresos: [], gastos: [], canjes: [], conteos: [], ajustesStock: [], ahorro: [],
     };
 
     db.config.historialTarifa.forEach((h) => log(h.ts, 'parametros', 'Tarifa del courier', C.fmtUSD(h.valor) + ' por kg'));
@@ -759,7 +759,7 @@
   function vacio(hoy) {
     const db = crear(hoy);
     ['clientes', 'productos', 'pedidos', 'ventas', 'pagos', 'creditos', 'cierres', 'auditoria', 'emisiones',
-      'envios', 'egresos', 'gastos', 'canjes', 'conteos', 'ajustesStock'].forEach((k) => { db[k] = []; });
+      'envios', 'egresos', 'gastos', 'canjes', 'conteos', 'ajustesStock', 'ahorro'].forEach((k) => { db[k] = []; });
     const cfg = db.config;
     cfg.proximoRecibo = 1;
     cfg.cajaCerradaHasta = null;

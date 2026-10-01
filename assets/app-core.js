@@ -56,6 +56,10 @@
   const KEY_MIOS_INFO = 'berryglow.mockup.mios.info';
   const KEY_MODO = 'berryglow.mockup.modo';
   const KEY_COPIA = 'berryglow.mockup.copia';
+  // La versión sube solo cuando un dato que ya existe cambia de forma. Agregar campos o listas opcionales
+  // (compras anteriores, artículos agregados, puntos sumados a mano, la cuenta de ahorro) no la sube a
+  // propósito: un aparato con el sistema anterior abierto sigue leyendo y guardando el documento entero,
+  // sin perder lo nuevo. Ver docs/HANDOFF.md §22.
   const VERSION_DB = 8;
   BG.VERSION_DB = VERSION_DB;
   BG.leer = (k) => { try { const t = localStorage.getItem(k); return t ? JSON.parse(t) : null; } catch (e) { return null; } };
@@ -72,12 +76,14 @@
   /** Una base guardada de una versión anterior se acepta si la forma de los datos no cambió. */
   const alDia = (d) => {
     if (!d || typeof d !== 'object' || !Array.isArray(d.clientes)) return null;
-    if (d.version === VERSION_DB) return d;
     // v5, v6, v7 → v8: los campos nuevos (condiciones de los puntos, regla de puntos de cada venta, motivo
     // tipificado de la anulación, tamaño del logo, puntos en el recibo) son opcionales y se leen con un valor
     // por defecto, así que la base vieja se acepta tal cual.
-    if (d.version === 5 || d.version === 6 || d.version === 7) { d.version = VERSION_DB; return d; }
-    return null;
+    if (d.version === 5 || d.version === 6 || d.version === 7) d.version = VERSION_DB;
+    if (d.version !== VERSION_DB) return null;
+    // Opcionales que se agregaron sin cambiar la versión (ver arriba): la libreta de la cuenta de ahorro.
+    if (!Array.isArray(d.ahorro)) d.ahorro = [];
+    return d;
   };
   /** Vuelve a los datos de ejemplo del día de hoy. No toca los datos de la tienda. */
   BG.reiniciarDatos = () => {
@@ -135,6 +141,11 @@
   /* ── Puentes con la nube (nube.js) ───────────────────────────────────── */
   /** Los datos de la tienda guardados en este aparato (o null). La nube no los toca. */
   BG.datosDeEsteAparato = () => alDia(BG.leer(KEY_DB_MIOS));
+  /**
+   * ¿Este sistema sabe leer ese documento? Si viene de una versión más nueva (otro aparato ya se actualizó),
+   * la respuesta es no: la nube tiene que frenar antes de tocar nada, para no guardar encima datos viejos.
+   */
+  BG.datosSirven = (db) => !!alDia(db);
   /** Instala el documento que vino de la nube (no escribe sobre la base propia del aparato). */
   BG.usarDatosDeLaNube = (db) => {
     const d = alDia(db);
@@ -266,6 +277,19 @@
   BG.deudaMasAntigua = (cid) => { const p = BG.pendientesDe(cid); return p.length ? p[0].fecha : null; };
   /** Unidades que la clienta se quedó de un artículo (las devueltas vuelven al stock). */
   BG.cantidadViva = (it) => it.cantidad - (it.devueltas || 0);
+  /**
+   * Compra de antes del sistema, cargada a mano para que quede en su cuenta (la «libreta de lo que llevó antes»).
+   * Es una venta como cualquier otra para la plata (lo que debe de ahí lo debe de verdad, y los dos cuadres la
+   * cuentan), pero no movió stock, no tiene costo y no es de este período: no entra en la caja, los reportes,
+   * la ganancia ni la comisión. Sus artículos no son productos del stock (productoId: null).
+   */
+  BG.esAnterior = (v) => !!(v && v.anterior);
+  /** Una venta que cuenta en los números del sistema (caja, reportes, ganancia, comisión): viva y no anterior. */
+  BG.ventaDelSistema = (v) => !v.anulada && !v.anterior;
+  /** Un cobro que entró con el sistema funcionando (lo que ya estaba pagado de una compra anterior, no). */
+  BG.pagoDelSistema = (p) => !p.anulado && !p.anterior;
+  /** Lo que debe de compras anteriores al sistema (ya está incluido en BG.saldoCliente: esto es para mostrarlo aparte). */
+  BG.saldoAnterior = (cid) => sum(BG.ventasDeCliente(cid).filter(BG.esAnterior), (v) => BG.saldoVenta(v));
   BG.vendidas = (pid) => sum(BG.db.ventas.filter((v) => !v.anulada), (v) => sum(v.items.filter((it) => it.productoId === pid), BG.cantidadViva));
   /** Diferencias de los conteos de inventario (faltantes negativos, sobrantes positivos). */
   BG.ajusteStock = (pid) => sum((BG.db.ajustesStock || []).filter((a) => a.productoId === pid), (a) => a.diferencia);
@@ -351,6 +375,50 @@
     const reconstruido = sum(Array.from(esperado.values()));
     return { registro: registro, reconstruido: reconstruido, negativos: negativos, diferencias: diferencias, ok: !negativos.length && !diferencias.length && registro === reconstruido };
   };
+  /**
+   * Libro de la cuenta de una clienta (lo usan la ficha y el estado de cuenta: una sola cuenta en el sistema).
+   * La compra con su total original; después cada ajuste de precio, artículo agregado, devolución o cambio en su
+   * fecha; los pagos; y lo que una devolución pasó a saldo a favor (sale de esta cuenta y entra en la de saldo a
+   * favor). La última línea siempre da el saldo actual: es BG.saldoCliente.
+   */
+  BG.libroCliente = (cid) => {
+    const mov = [];
+    for (const v of BG.ventasDeCliente(cid)) {
+      const num = BG.fmtRecibo(v.recibo);
+      const cambios = (v.ajustes || []).map((a) => ({ ts: a.ts, fecha: a.fecha, delta: a.totalDespues - a.totalAntes, concepto: 'Precio ajustado en la compra ' + num + ' · ' + a.descripcion }))
+        .concat((v.agregados || []).map((a) => ({
+          ts: a.ts, fecha: a.fecha, delta: a.totalDespues - a.totalAntes,
+          concepto: 'Agregado a la compra ' + num + ' · ' + a.items.map((i) => v.items[i].cantidad + ' × ' + v.items[i].descripcion).join(', '),
+        })))
+        .concat((v.devoluciones || []).filter((d) => d.totalDespues !== d.totalAntes).map((d) => ({
+          ts: d.ts, fecha: d.fecha, delta: d.totalDespues - d.totalAntes,
+          concepto: (d.tipo === 'cambio' ? 'Cambio' : 'Devolución') + ' en la compra ' + num + ' · ' + d.cantidad + ' × ' + d.descripcion + (d.productoNuevo ? ' por ' + d.productoNuevo : ''),
+        })));
+      const totalOriginal = v.total - sum(cambios, (x) => x.delta);
+      const agregadas = new Set();
+      (v.agregados || []).forEach((a) => a.items.forEach((i) => agregadas.add(i)));
+      const originales = v.items.filter((it, i) => !it.cambioDe && !agregadas.has(i));
+      mov.push({ ts: v.ts, fecha: v.fecha, ventaId: v.id, anterior: !!v.anterior,
+        concepto: (v.anterior ? 'Compra anterior al sistema ' : 'Compra ') + num + ' · ' + originales.map((it) => it.descripcion).join(', '),
+        cargo: v.anulada ? 0 : totalOriginal, anulado: v.anulada ? 'Anulada: ' + v.anulada.motivo : '' });
+      if (v.anulada) continue;
+      cambios.forEach((x) => mov.push({ ts: x.ts, fecha: x.fecha, ventaId: v.id, concepto: x.concepto, cargo: x.delta > 0 ? x.delta : 0, abono: x.delta < 0 ? -x.delta : 0 }));
+      (v.devoluciones || []).filter((d) => d.aFavor).forEach((d) => mov.push({ ts: d.ts + ':01', fecha: d.fecha, ventaId: v.id, concepto: 'Lo pagado de más pasó a saldo a favor' + (d.reintegro ? ' (se le devolvió' + (d.reintegro < d.aFavor ? ' ' + gs(d.reintegro) : '') + ' en ' + BG.FORMAS[d.forma].toLowerCase() + ')' : ''), cargo: d.aFavor }));
+    }
+    for (const p of BG.db.pagos.filter((x) => x.clienteId === cid && x.ventaId)) {
+      const v = BG.venta(p.ventaId);
+      const conPuntos = sum(p.partes, (x) => x.deCanje || 0);
+      mov.push({ ts: p.ts, fecha: p.fecha, ventaId: v.id, pagoId: p.id,
+        concepto: (p.anterior ? 'Pagado antes del sistema · compra ' + BG.fmtRecibo(v.recibo)
+          : 'Pago ' + BG.fmtRecibo(p.recibo) + ' · ' + p.partes.map((x) => BG.FORMAS[x.forma]).join(' + ') + (conPuntos ? ' (' + gs(conPuntos) + ' con puntos)' : '')),
+        abono: p.anulado || v.anulada ? 0 : p.total, anulado: p.anulado ? 'Anulado: ' + p.anulado.motivo : (v.anulada ? 'Pasó a saldo a favor' : '') });
+      if (p.anulado && p.anulado.aFavorRevertido && !v.anulada) mov.push({ ts: p.anulado.ts + ':01', fecha: p.anulado.fecha, ventaId: v.id, concepto: 'Sin ese pago, la devolución ya no deja saldo a favor', abono: p.anulado.aFavorRevertido });
+    }
+    mov.sort((a, b) => a.ts.localeCompare(b.ts));
+    let saldo = 0;
+    return mov.map((m) => { saldo += (m.cargo || 0) - (m.abono || 0); return Object.assign(m, { saldo: saldo }); });
+  };
+
   /** Clientes con saldo a favor (la tienda les debe), de mayor a menor. */
   BG.listaAFavor = () => BG.db.clientes
     .map((c) => ({ c: c, favor: BG.creditoCliente(c.id), debe: BG.saldoCliente(c.id) }))
@@ -504,7 +572,7 @@
   BG.comisionDe = (u, desde, hasta) => {
     const cfg = u.comision || {};
     const en = (f) => f >= desde && f <= hasta;
-    const suyas = new Map(BG.db.ventas.filter((v) => v.usuario === u.nombre && !v.anulada).map((v) => [v.id, v]));
+    const suyas = new Map(BG.db.ventas.filter((v) => v.usuario === u.nombre && BG.ventaDelSistema(v)).map((v) => [v.id, v]));
     const porVenta = new Map();
     const mover = (v, monto) => {
       if (!porVenta.has(v.id)) porVenta.set(v.id, { v: v, cobrado: 0 });
@@ -643,13 +711,60 @@
     const puntos = Math.max(0, ganados - canjeados);
     return { puntos: puntos, valor: puntos * f.valorPunto, canjeable: puntos >= f.minimo, ganados: ganados, canjeados: canjeados, pendientes: pendientes, porGanar: porGanar };
   };
-  /** Puntos que suma una venta cuando se termine de pagar (0 si el programa está apagado o no llega a 1 punto). */
-  BG.puntosDeVenta = (v) => {
+  /**
+   * ¿Esta compra suma puntos? Las de antes de que empezara el programa (`fidelidad.desde`) y las compras
+   * anteriores al sistema no suman solas: el dueño puede elegir que sumen, compra por compra (`v.puntosAparte`).
+   */
+  BG.ventaSumaPuntos = (v) => !!v.puntosAparte || (!v.anterior && v.fecha >= BG.configFidelidad().desde);
+  /**
+   * Puntos que suma una venta cuando se termine de pagar (0 si el programa está apagado o no llega a 1 punto).
+   * `aunqueNoCuente`: los que daría si contara (para ofrecerle al dueño sumar los de una compra vieja). Es la
+   * misma fórmula: no hay otra en el sistema (regla 6).
+   */
+  BG.puntosDeVenta = (v, aunqueNoCuente) => {
     const f = BG.configFidelidad();
-    if (!f.activo || v.anulada || v.fecha < f.desde) return 0;
-    // Con la regla que tenía la venta cuando se hizo (las viejas, sin regla guardada, usan la de hoy).
+    if (!f.activo || v.anulada) return 0;
+    if (!aunqueNoCuente && !BG.ventaSumaPuntos(v)) return 0;
+    // Con la regla que tenía la venta cuando se hizo (o cuando el dueño eligió que sume); las viejas, sin regla
+    // guardada, usan la de hoy.
     const cada = v.fidelidad && v.fidelidad.cadaGs > 0 ? v.fidelidad.cadaGs : f.cadaGs;
     return Math.floor(Math.max(0, v.total - BG.canjeAplicado(v)) / cada);
+  };
+  /** Compras vivas de la clienta que hoy no suman puntos y darían al menos uno si el dueño elige que sumen. */
+  BG.comprasSinPuntos = (cid) => {
+    if (!BG.configFidelidad().activo) return [];
+    return BG.ventasDeCliente(cid)
+      .filter((v) => !v.anulada && !BG.ventaSumaPuntos(v))
+      .map((v) => ({ v: v, puntos: BG.puntosDeVenta(v, true), pagada: BG.saldoVenta(v) <= 0 }))
+      .filter((x) => x.puntos > 0)
+      .sort((a, b) => String(a.v.ts).localeCompare(String(b.v.ts)));
+  };
+  /**
+   * En qué se usó cada canje de puntos: lo canjeado pasa a saldo a favor y se usa al pagar una compra (la parte
+   * `deCanje` de los pagos). Se reparte en orden: el canje más viejo cubre la primera compra pagada con puntos.
+   * Devuelve los canjes con { usado, sinUsar, usos: [{ ventaId, recibo, fecha, monto }] }. Es solo una lectura de
+   * lo que ya está guardado: no mueve plata.
+   */
+  BG.usoDePuntos = (cid) => {
+    const lista = BG.canjesDe(cid).map((k) => ({ k: k, usado: 0, usos: [] }));
+    const usos = BG.ventasDeCliente(cid).filter((v) => !v.anulada).map((v) => {
+      const conPuntos = BG.pagosDeVenta(v.id).filter((p) => p.partes.some((x) => x.deCanje)).sort((a, b) => a.ts.localeCompare(b.ts));
+      return { v: v, monto: BG.canjeAplicado(v), ts: conPuntos.length ? conPuntos[0].ts : v.ts };
+    }).filter((u) => u.monto > 0).sort((a, b) => a.ts.localeCompare(b.ts));
+    let i = 0;
+    for (const u of usos) {
+      let falta = u.monto;
+      while (falta > 0 && i < lista.length) {
+        const c = lista[i];
+        const libre = c.k.monto - c.usado;
+        if (libre <= 0) { i++; continue; }
+        const toma = Math.min(libre, falta);
+        c.usado += toma;
+        falta -= toma;
+        c.usos.push({ ventaId: u.v.id, recibo: u.v.recibo, fecha: u.v.fecha, monto: toma });
+      }
+    }
+    return lista.map((c) => Object.assign({}, c.k, { usado: c.usado, sinUsar: c.k.monto - c.usado, usos: c.usos }));
   };
   BG.canjesDe = (cid) => (BG.db.canjes || []).filter((k) => k.clienteId === cid).slice().sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
   /**
@@ -701,7 +816,7 @@
     if (!f.activo || !f.cumple.activo || !k || !k.enSemana || BG.regaloCumpleUsado(cid)) return null;
     return { porcentaje: f.cumple.porcentaje, cumple: k };
   };
-  BG.comprasRecientes = (cid, dias) => BG.db.ventas.filter((v) => v.clienteId === cid && !v.anulada && v.fecha >= sumarDias(hoy(), -(dias || 90)));
+  BG.comprasRecientes = (cid, dias) => BG.db.ventas.filter((v) => v.clienteId === cid && BG.ventaDelSistema(v) && v.fecha >= sumarDias(hoy(), -(dias || 90)));
   /** Frecuente: 2 compras o más en los últimos 90 días. */
   BG.esFrecuente = (cid) => BG.comprasRecientes(cid, 90).length >= 2;
 
@@ -716,7 +831,8 @@
    */
   BG.resultado = (desde, hasta) => {
     const en = (f) => f >= desde && f <= hasta;
-    const ventas = BG.db.ventas.filter((v) => !v.anulada && en(v.fecha));
+    // Las compras anteriores al sistema no son ventas de este período (ni tienen costo cargado): no entran.
+    const ventas = BG.db.ventas.filter((v) => BG.ventaDelSistema(v) && en(v.fecha));
     const ventasNetas = sum(ventas, (v) => v.total);
     const costo = sum(ventas, BG.costoVenta);
     const gastos = BG.gastosVivos().filter((g) => en(g.fecha));
@@ -733,9 +849,25 @@
     };
   };
 
+  /* ── Cuenta de ahorro para las compras (solo dueño) ───────────────────
+   * Una libreta: lo que había al empezar, cada depósito y cada retiro, y lo que sale al pagar un pedido al
+   * proveedor. No es plata de la caja ni de las clientas: no entra en los cuadres ni en la ganancia (lo que se
+   * paga de un pedido ya está en el costo de cada artículo). Nada se borra: un movimiento mal cargado se anula.
+   */
+  BG.TIPOS_AHORRO = { inicial: 'Lo que había al empezar', deposito: 'Depósito', retiro: 'Retiro', pedido: 'Pago de un pedido' };
+  BG.saldoAhorro = () => sum((BG.db.ahorro || []).filter((m) => !m.anulado), (m) => m.monto);
+  /** Movimientos en orden de fecha, cada uno con el saldo que quedó después (los anulados no mueven el saldo). */
+  BG.libroAhorro = () => {
+    let saldo = 0;
+    return (BG.db.ahorro || []).slice().sort((a, b) => (a.fecha + a.ts).localeCompare(b.fecha + b.ts))
+      .map((m) => { if (!m.anulado) saldo += m.monto; return Object.assign({}, m, { saldo: saldo }); });
+  };
+  /** Lo que se pagó de un pedido desde la cuenta de ahorro (movimientos vivos). */
+  BG.pagosDePedido = (pid) => (BG.db.ahorro || []).filter((m) => m.pedidoId === pid && !m.anulado);
+
   /* ── Pedidos al proveedor ──────────────────────────────────────────── */
 
-  BG.ESTADOS_PEDIDO = { pedido: 'Pedido', en_camino: 'En camino', recibido: 'Llegó', cancelado: 'Cancelado' };
+  BG.ESTADOS_PEDIDO ={ pedido: 'Pedido', en_camino: 'En camino', recibido: 'Llegó', cancelado: 'Cancelado' };
   BG.estadoPedido = (p) => p.estado || 'recibido';
   BG.pillPedido = (p) => {
     const e = BG.estadoPedido(p);
@@ -864,6 +996,12 @@
       { id: 'error', texto: 'Se cargó por error', detalle: 'Ese gasto no existió.' },
       { id: 'duplicado', texto: 'Está cargado dos veces', detalle: 'El mismo gasto quedó cargado más de una vez.' },
       { id: 'monto', texto: 'El monto o la categoría estaban mal', detalle: 'Se anula y se carga de nuevo como corresponde.' },
+      { id: 'otro', texto: 'Otro motivo', detalle: 'Contalo abajo.', pide: 'nota' },
+    ],
+    ahorro: [
+      { id: 'error', texto: 'Se cargó por error', detalle: 'Ese movimiento no existió.' },
+      { id: 'duplicado', texto: 'Está cargado dos veces', detalle: 'El mismo movimiento quedó cargado más de una vez.' },
+      { id: 'monto', texto: 'El monto o la fecha estaban mal', detalle: 'Se anula y se carga de nuevo como corresponde.' },
       { id: 'otro', texto: 'Otro motivo', detalle: 'Contalo abajo.', pide: 'nota' },
     ],
     envio: [
@@ -1357,6 +1495,7 @@
     [/^\/pedidos\/([\w-]+)\/editar$/, 'pedidoForm', true],
     [/^\/pedidos\/([\w-]+)$/, 'pedidoDetalle', true],
     [/^\/gastos$/, 'gastos', true],
+    [/^\/ahorro$/, 'ahorro', true],
     [/^\/envios$/, 'envios', 'prepararEnvios'],
     [/^\/envios\/nuevo$/, 'envioForm', 'prepararEnvios'],
     [/^\/envios\/([\w-]+)\/editar$/, 'envioForm', 'prepararEnvios'],
@@ -1368,7 +1507,7 @@
     [/^\/ajustes$/, 'ajustes', true],
     [/^\/ajustes\/excel$/, 'migracion', true],
     [/^\/auditoria$/, 'auditoria', true],
-    [/^\/recibo\/(v|c|p)\/([\w-]+)$/, 'recibo', 'emitirRecibos'],
+    [/^\/recibo\/(v|c|p|a)\/([\w-]+)$/, 'recibo', 'emitirRecibos'],
   ];
   const permitido = (req) => !req || (req === true ? BG.esDuena() : BG.puede(req));
   BG.rutaPermitida = (path) => { const x = RUTAS.find((r) => r[0].test(path)); return !x || permitido(x[2]); };
@@ -1394,6 +1533,7 @@
       ['-'],
       BG.puede('verPrecios') && ['productos', d ? 'Productos' : 'Lista de precios', 'box'],
       d && ['pedidos', 'Pedidos', 'box2'],
+      d && ['ahorro', 'Cuenta de ahorro', 'wallet'],
       d && ['gastos', 'Gastos', 'gasto'],
       d && ['resumen', 'Resumen', 'pie'],
       d && ['reportes', 'Reportes', 'chart'],
@@ -1406,7 +1546,7 @@
   /** Franja de arriba cuando los datos están en la nube: quién entró y si lo último ya quedó guardado. */
   function htmlNube(esDuenia) {
     const n = BG.nube;
-    const ic = { 'al-dia': 'check', guardando: 'refresh', 'sin-conexion': 'alert', conflicto: 'alert', conectando: 'refresh' }[n.estado] || 'shield';
+    const ic = { 'al-dia': 'check', guardando: 'refresh', 'sin-conexion': 'alert', conflicto: 'alert', 'version-nueva': 'alert', conectando: 'refresh' }[n.estado] || 'shield';
     return '<span><strong>' + esc((n.perfil && n.perfil.nombre) || 'Tus datos') + '</strong>'
       + '<span class="mock-largo"> · en la nube: todos los aparatos ven lo mismo</span></span>'
       + '<span class="nube-estado nube-' + n.estado + '">' + icon(ic, 'i-sm') + esc(n.texto()) + '</span>'
@@ -1544,7 +1684,7 @@
       + (BG.puede('prepararEnvios') ? item('#/envios', 'truck', 'Envíos') : '')
       + (BG.puede('verPrecios') ? item('#/productos', 'box', d ? 'Productos' : 'Lista de precios') : '')
       + (BG.puede('verCaja') ? item('#/caja', 'register', 'Caja del día') : '')
-      + (d ? item('#/pedidos', 'box2', 'Pedidos al proveedor') + item('#/gastos', 'gasto', 'Gastos y ganancia neta')
+      + (d ? item('#/pedidos', 'box2', 'Pedidos al proveedor') + item('#/ahorro', 'wallet', 'Cuenta de ahorro') + item('#/gastos', 'gasto', 'Gastos y ganancia neta')
         + item('#/resumen', 'pie', 'Resumen') + item('#/reportes', 'chart', 'Reportes') + item('#/auditoria', 'audit', 'Auditoría') + item('#/ajustes', 'sliders', 'Ajustes') : '')
       + '<div class="sheet-sep"></div>'
       + '<div class="sheet-tema"><span class="small muted">Tema</span>' + BG.selectorTema() + '</div>'
@@ -1628,7 +1768,9 @@
 
   BG.render = function () {
     const guia = $('#guide');
-    if (!BG.sesion) {
+    // Sin sesión, o con la nube frenada porque otro aparato guardó con una versión más nueva (lo que se hiciera
+    // acá no se podría guardar): la pantalla de ingreso, que en ese caso pide recargar.
+    if (!BG.sesion || (BG.nube && BG.nube.bloqueada)) {
       document.body.classList.remove('route-print');
       BG.vistas.login();
       return;

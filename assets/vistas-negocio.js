@@ -150,6 +150,141 @@
     };
   };
 
+  /* ── Cuenta de ahorro para las compras ───────────────────────────────── */
+
+  /** Anotar lo que había al empezar, un depósito o un retiro. */
+  BG.ahorroUI = async (tipo) => {
+    const st = { tipo: tipo, monto: 0, fecha: BG.hoy(), concepto: '' };
+    const titulos = { inicial: 'Lo que hay hoy en la cuenta', deposito: 'Anotar un depósito', retiro: 'Anotar un retiro' };
+    const ayuda = {
+      inicial: 'Lo que tiene la cuenta de ahorro ahora (miralo en el banco o en la app). Desde acá se van sumando y restando los movimientos.',
+      deposito: 'Plata que pusiste en la cuenta (por ejemplo, lo cobrado en la semana).',
+      retiro: 'Plata que sacaste para otra cosa. Para pagar un pedido, usá «Pagar» desde el pedido: así queda unido a ese pedido.',
+    };
+    const r = await BG.modal({
+      titulo: titulos[tipo],
+      cuerpo: '<p class="small">' + ayuda[tipo] + '</p>'
+        + (tipo === 'retiro' ? '<p class="small">En la cuenta hay <strong>' + gs(BG.saldoAhorro()) + '</strong>.</p>' : '')
+        + '<div class="grid-2 grid-mini"><div class="field"><label for="ah-monto">Monto</label>' + BG.campoGs('ah-monto', '', '') + '</div>'
+        + '<div class="field"><label for="ah-fecha">Fecha</label><input id="ah-fecha" class="input input-date" type="date" value="' + st.fecha + '" max="' + BG.hoy() + '"></div></div>'
+        + '<div class="field"><label for="ah-concepto">Detalle <span class="small muted">(opcional)</span></label><input id="ah-concepto" class="input" maxlength="100" autocomplete="off" placeholder="'
+        + (tipo === 'deposito' ? 'Ej.: cobros de la semana' : tipo === 'retiro' ? 'Ej.: pago de la luz' : 'Ej.: saldo del banco al 30/09') + '"></div>'
+        + '<span class="error-text" id="ah-err" role="alert" hidden></span>',
+      acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Guardar', valor: 'ok', clase: 'btn-primary', submit: true }],
+      onMount: (dlg) => $('#ah-monto', dlg).focus(),
+      validar: (v, dlg) => {
+        st.monto = BG.leerGs($('#ah-monto', dlg));
+        st.fecha = $('#ah-fecha', dlg).value;
+        st.concepto = $('#ah-concepto', dlg).value;
+        const er = $('#ah-err', dlg);
+        const falla = (m) => { er.textContent = m; er.hidden = false; return false; };
+        if (!(st.monto > 0)) return falla('Escribí el monto.');
+        if (!st.fecha || st.fecha > BG.hoy()) return falla('La fecha no puede ser futura.');
+        if (tipo === 'retiro' && st.monto > BG.saldoAhorro()) return falla('En la cuenta hay ' + gs(BG.saldoAhorro()) + ': no alcanza. Si falta anotar un depósito, anotalo primero.');
+        return true;
+      },
+    });
+    if (r !== 'ok') return false;
+    BG.guardarMovimientoAhorro(st);
+    BG.toast((tipo === 'retiro' ? 'Retiro anotado: ' : tipo === 'deposito' ? 'Depósito anotado: ' : 'Guardado: ') + gs(st.monto) + '. En la cuenta quedan ' + gs(BG.saldoAhorro()) + '.');
+    return true;
+  };
+
+  /** Pagar un pedido con la cuenta de ahorro (lo que salió de la cuenta, en guaraníes). */
+  BG.pagarPedidoUI = async (p) => {
+    const saldo = BG.saldoAhorro();
+    const usd = p.items ? BG.totalUSDPedido(p.items) : null;
+    const sugerido = usd && !C.isZero(usd) ? Number(C.roundQ(C.mul(usd, C.asQ(BG.db.config.cotizacion.valor)))) : 0;
+    const st = { monto: 0, fecha: BG.hoy(), nota: '' };
+    const r = await BG.modal({
+      titulo: 'Pagar el pedido a ' + p.proveedor,
+      cuerpo: '<p class="small">Sale de la <strong>cuenta de ahorro</strong>, que hoy tiene <strong>' + gs(saldo) + '</strong>. Anotá lo que salió de verdad de la cuenta (lo que te cobraron en guaraníes).</p>'
+        + (sugerido ? '<p class="hint">El pedido suma ' + C.fmtUSD(usd) + ' en mercadería: al dólar de hoy son unos ' + gs(sugerido) + '.</p>' : '')
+        + '<div class="grid-2 grid-mini"><div class="field"><label for="pp-monto">Monto</label>' + BG.campoGs('pp-monto', '', '') + '</div>'
+        + '<div class="field"><label for="pp-fecha">Fecha</label><input id="pp-fecha" class="input input-date" type="date" value="' + st.fecha + '" max="' + BG.hoy() + '"></div></div>'
+        + '<div class="field"><label for="pp-nota">Detalle <span class="small muted">(opcional)</span></label><input id="pp-nota" class="input" maxlength="100" autocomplete="off" placeholder="Ej.: tarjeta de débito"></div>'
+        + '<span class="error-text" id="pp-err" role="alert" hidden></span>',
+      acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Pagar', valor: 'ok', clase: 'btn-primary', submit: true }],
+      onMount: (dlg) => $('#pp-monto', dlg).focus(),
+      validar: (v, dlg) => {
+        st.monto = BG.leerGs($('#pp-monto', dlg));
+        st.fecha = $('#pp-fecha', dlg).value;
+        st.nota = $('#pp-nota', dlg).value;
+        const er = $('#pp-err', dlg);
+        const falla = (m) => { er.textContent = m; er.hidden = false; return false; };
+        if (!(st.monto > 0)) return falla('Escribí cuánto salió de la cuenta.');
+        if (!st.fecha || st.fecha > BG.hoy()) return falla('La fecha no puede ser futura.');
+        if (st.monto > saldo) return falla('En la cuenta de ahorro hay ' + gs(saldo) + ': no alcanza. Si una parte la pagaste con otra plata, anotá solo lo que salió de la cuenta.');
+        return true;
+      },
+    });
+    if (r !== 'ok') return false;
+    BG.pagarPedido({ pedidoId: p.id, monto: st.monto, fecha: st.fecha, nota: st.nota });
+    BG.toast('Pedido pagado: ' + gs(st.monto) + ' de la cuenta de ahorro. Quedan ' + gs(BG.saldoAhorro()) + '.');
+    return true;
+  };
+
+  BG.vistas.ahorro = () => {
+    const html = '<div class="page"><div class="page-head"><div><h1 class="page-title">Cuenta de ahorro</h1>'
+      + '<p class="page-sub">La plata que guardás para comprar mercadería: lo que entra, lo que sale y lo que pagaste de cada pedido.</p></div>'
+      + '<div class="page-actions" id="ah-acciones"></div></div><div id="ah-cuerpo" class="stack"></div></div>';
+    let root = null;
+    const pintar = () => {
+      const saldo = BG.saldoAhorro();
+      const libro = BG.libroAhorro();
+      const hayInicial = libro.some((m) => m.tipo === 'inicial' && !m.anulado);
+      const anulados = libro.filter((m) => m.anulado).length;
+      const lista = BG.sinAnulados(libro.slice().reverse(), (m) => !!m.anulado);
+      const mes = BG.hoy().slice(0, 7);
+      const enPedidosMes = -libro.filter((m) => !m.anulado && m.tipo === 'pedido' && m.fecha.slice(0, 7) === mes).reduce((a, m) => a + m.monto, 0);
+      $('#ah-acciones', root).innerHTML = (hayInicial ? '' : '<button type="button" class="btn btn-primary" data-ah="inicial">' + icon('wallet') + 'Lo que hay hoy</button>')
+        + '<button type="button" class="btn' + (hayInicial ? ' btn-primary' : '') + '" data-ah="deposito">' + icon('plus') + 'Depósito</button>'
+        + '<button type="button" class="btn" data-ah="retiro">' + icon('undo') + 'Retiro</button>';
+      $('#ah-cuerpo', root).innerHTML = '<section class="balance' + (saldo > 0 ? ' is-clear' : '') + '" aria-label="Saldo de la cuenta de ahorro"><div><p class="balance-label">Hay en la cuenta</p><p class="hero-figure">' + gs(saldo) + '</p>'
+        + '<p class="balance-sub">' + (hayInicial ? (enPedidosMes ? 'Este mes se pagaron ' + gs(enPedidosMes) + ' en pedidos.' : 'Este mes todavía no se pagó ningún pedido.')
+          : 'Empezá anotando lo que hay hoy en la cuenta: después cada depósito, retiro y pedido pagado lo va moviendo.') + '</p></div></section>'
+        + '<section class="card card-flush"><div class="card-head pad"><h2>Movimientos</h2>' + BG.htmlVerAnulados(anulados, 'el movimiento anulado', 'los ' + anulados + ' movimientos anulados') + '</div>'
+        // Tres columnas para que entre en el celular: qué fue (con la fecha), cuánto entró o salió y cuánto quedó.
+        + (lista.length ? '<div class="table-wrap list-top"><table class="table table-ahorro"><thead><tr><th>Movimiento</th><th class="num">Monto</th><th class="num">Queda</th></tr></thead><tbody>'
+          + lista.map((m) => '<tr><td><span class="' + (m.anulado ? 'strike' : '') + '">' + esc(m.concepto) + '</span>'
+            + '<div class="t-sub">' + BG.fmtFecha(m.fecha) + ' · ' + esc(BG.TIPOS_AHORRO[m.tipo]) + (m.pedidoId ? ' · <a href="#/pedidos/' + m.pedidoId + '">ver el pedido</a>' : '') + ' · ' + esc(m.usuario)
+            + (m.anulado ? ' · anulado: ' + esc(m.anulado.motivo) : '') + '</div>'
+            + (m.anulado ? '' : '<button type="button" class="btn-link small" data-anular-ah="' + m.id + '">Anular</button>') + '</td>'
+            + '<td class="num ' + (m.monto > 0 ? 't-favor' : '') + (m.anulado ? ' strike' : '') + '">' + (m.monto > 0 ? '+' : '−') + gs(Math.abs(m.monto)) + '</td>'
+            + '<td class="num"><strong>' + (m.anulado ? '' : gs(m.saldo)) + '</strong></td></tr>').join('')
+          + '</tbody></table></div>'
+          : '<p class="empty">Todavía no anotaste nada en la cuenta de ahorro.</p>')
+        + '</section>'
+        + '<p class="hint">No es plata de la caja ni de las clientas: no entra en los cuadres ni en la ganancia (lo que pagás de un pedido ya está en el costo de cada artículo). Solo la ve ' + esc(BG.nombreDuena()) + '.</p>';
+    };
+    return {
+      html: html,
+      mount: (r) => {
+        root = r;
+        pintar();
+        BG.engancharAnulados(root, pintar);
+        root.addEventListener('click', async (ev) => {
+          try {
+            const b = ev.target.closest('[data-ah]');
+            if (b && (await BG.ahorroUI(b.dataset.ah))) { pintar(); return; }
+            const a = ev.target.closest('[data-anular-ah]');
+            if (!a) return;
+            const m = BG.db.ahorro.find((x) => x.id === a.dataset.anularAh);
+            const queda = BG.saldoAhorro() - m.monto;
+            if (queda < 0) { BG.toast('No se puede anular: esa plata ya salió de la cuenta (quedaría en −' + gs(-queda) + '). Anulá primero el retiro o el pago que la usó.', 'error'); return; }
+            const mot = await BG.pedirMotivoAnulacion('ahorro', 'Anular el movimiento',
+              '<p><strong>' + esc(m.concepto) + '</strong> · ' + gs(Math.abs(m.monto)) + ' del ' + BG.fmtFecha(m.fecha) + '. ¿Por qué se anula?</p>', 'Anular',
+              () => '<div class="callout callout-warn efecto">' + icon('info') + '<div><strong>Al anular:</strong><ul class="efecto-lista">'
+                + '<li>La cuenta pasa de ' + gs(BG.saldoAhorro()) + ' a <strong>' + gs(queda) + '</strong>.</li>'
+                + (m.pedidoId ? '<li>El pedido vuelve a figurar sin ese pago.</li>' : '')
+                + '<li>Queda en la lista tachado, con fecha, motivo y usuario.</li></ul></div></div>');
+            if (mot) { BG.anularMovimientoAhorro(m.id, mot.texto, mot.tipo); BG.toast('Movimiento anulado. En la cuenta quedan ' + gs(BG.saldoAhorro()) + '.'); pintar(); }
+          } catch (err) { BG.toast(err.message, 'error'); }
+        });
+      },
+    };
+  };
+
   /* ── Conteo de inventario ────────────────────────────────────────────── */
 
   BG.vistas.conteo = () => {
@@ -345,6 +480,19 @@
       + '<p class="hint pad-x-card">Se comparan por descripción. Si algo quedó sin emparejar, revisá el nombre con el que lo cargaste.</p></section>';
   }
 
+  /** Lo pagado de un pedido desde la cuenta de ahorro, y el botón para pagarlo. */
+  function cardPagoPedido(p, est) {
+    const pagos = BG.pagosDePedido(p.id);
+    const total = -pagos.reduce((a, m) => a + m.monto, 0);
+    if (est === 'cancelado' && !pagos.length) return '';
+    return '<section class="card stack"><div class="card-head"><h2>' + icon('wallet') + 'Pago del pedido</h2>'
+      + (est !== 'cancelado' ? '<button type="button" class="btn btn-sm' + (pagos.length ? '' : ' btn-primary') + '" data-accion="pagar-pedido">' + icon('wallet', 'i-sm') + (pagos.length ? 'Otro pago' : 'Pagar desde la cuenta de ahorro') + '</button>' : '') + '</div>'
+      + (pagos.length ? '<ul class="lines">' + pagos.map((m) => '<li class="line"><div class="row-title">' + gs(-m.monto) + ' de la cuenta de ahorro</div><div class="row-sub">' + BG.fmtFecha(m.fecha) + ' · ' + esc(m.usuario) + ' · ' + esc(m.concepto) + '</div></li>').join('')
+        + '</ul><p class="small">Pagado en total: <strong>' + gs(total) + '</strong> · en la cuenta quedan ' + gs(BG.saldoAhorro()) + '. <a href="#/ahorro">Ver la cuenta</a></p>'
+        : '<p class="small muted">Todavía sin pagos anotados. En la cuenta de ahorro hay ' + gs(BG.saldoAhorro()) + '.</p>')
+      + '</section>';
+  }
+
   BG.vistas.pedidoDetalle = (args) => {
     const p = BG.db.pedidos.find((x) => x.id === args[0]);
     if (!p) return { html: '<div class="page"><p class="empty">No encontramos ese pedido. <a href="#/pedidos">Ver pedidos</a></p></div>' };
@@ -376,6 +524,7 @@
           return '<tr><td><div class="t-title">' + esc(it.desc) + '</div><div class="t-sub">' + esc(it.cat) + (it.nota ? ' · ' + esc(it.nota) : '') + '</div></td><td class="num">' + n + '</td><td class="num">' + (q ? C.fmtUSD(q) : '—') + '</td>'
             + '<td class="num col-sm-hide">' + (it.peso ? esc(it.peso) + ' kg' : '—') + '</td><td class="num">' + (q ? C.fmtUSD(C.mul(q, C.Q(BigInt(n)))) : '—') + '</td></tr>'; }).join('')
         + '</tbody><tfoot><tr><td colspan="3">Total en mercadería</td><td class="col-sm-hide"></td><td class="num">' + C.fmtUSD(usd) + '</td></tr></tfoot></table></div></section>' : '')
+      + cardPagoPedido(p, est)
       + (p.items && productos.length ? htmlComparativa(p) : '')
       + (productos.length ? '<section class="card card-flush"><div class="card-head pad"><h2>Cargado al stock</h2><span class="small muted">' + productos.length + ' productos</span></div><ul class="list list-plain">'
         + productos.map((x) => '<li><a class="list-row" href="#/productos?ver=' + x.id + '"><span class="avatar">' + icon('tag', 'i-sm') + '</span><span class="row-main"><span class="row-title">' + esc(x.descripcion) + '</span>'
@@ -392,6 +541,7 @@
           if (!b) return;
           try {
             if (b.dataset.accion === 'camino' && (await BG.enCaminoUI(p))) BG.render();
+            if (b.dataset.accion === 'pagar-pedido' && (await BG.pagarPedidoUI(p))) BG.render();
             if (b.dataset.accion === 'cancelar') {
               const motivo = await pedirTexto('Cancelar el pedido', '<p>El pedido no se borra: queda como cancelado, con el motivo.</p>', 'Motivo', 'Cancelar pedido', true);
               if (motivo) { BG.cambiarEstadoPedido(p.id, 'cancelado', { nota: motivo }); BG.toast('Pedido cancelado.'); BG.render(); }

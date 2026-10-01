@@ -20,9 +20,15 @@
     const conCuenta = nube.configurada && BG.modoDatos === 'mios' && nube.estado !== 'apagada' && !(BG.soloAca && BG.soloAca());
     // «Entrando…» solo si este aparato ya había entrado antes: si es la primera vez, se muestra el formulario.
     const conectando = conCuenta && BG.entradoAntes && BG.entradoAntes() && (nube.estado === 'conectando' || !nube.disponible);
+    // La nube tiene datos de una versión más nueva del sistema: no se entra (no se puede guardar sin pisar nada)
+    // hasta recargar. Antes se veía la pantalla de cuenta, como si se hubiera cerrado la sesión.
+    const frenada = !!nube.bloqueada && nube.estado === 'version-nueva';
     $('#root').innerHTML = '<div class="login"><div class="login-card">'
       + '<div class="login-brand">' + BG.logo() + '</div>'
-      + (conectando
+      + (frenada
+        ? '<h1>Hay una versión nueva del sistema</h1><p>Desde otro aparato ya se guardó con la versión nueva. Recargá la página para ver tus datos y seguir trabajando: así no se pisa nada.</p>'
+          + '<button type="button" class="btn btn-primary btn-lg btn-block" id="n-recargar">' + icon('refresh') + 'Recargar</button>'
+        : conectando
         ? '<h1>Entrando…</h1><p class="hint">Traemos tus datos de la nube. Si tarda, fijate si tenés internet.</p>'
         : conCuenta
         ? '<h1>Entrá con tu cuenta</h1>'
@@ -75,6 +81,9 @@
     if (form) form.addEventListener('submit', (e) => { e.preventDefault(); entrar($('#usuario').value); });
     const reintentar = $('#n-reintentar');
     if (reintentar) reintentar.addEventListener('click', () => { BG.nube.falla = null; BG.nube.arrancar(); BG.render(); });
+    // Una dirección que el navegador nunca guardó: trae sí o sí el sistema nuevo.
+    const recargar = $('#n-recargar');
+    if (recargar) recargar.addEventListener('click', () => { location.replace(location.pathname + '?nuevo=' + Date.now()); });
     const aLocal = $('#n-local');
     if (aLocal) aLocal.addEventListener('click', () => { if (BG.soloAca) BG.soloAca(true); BG.render(); });
     const aNube = $('#n-nube');
@@ -135,7 +144,18 @@
         extra: '<span class="pill pill-warn">Salió de la caja</span>',
       });
     }
-    for (const v of BG.db.ventas.filter((x) => x.fecha === fecha)) {
+    // Artículos que se sumaron hoy a una compra de otro día.
+    for (const v of BG.db.ventas) {
+      for (const a of (v.agregados || []).filter((x) => x.fecha === fecha && v.fecha !== fecha)) {
+        movs.push({
+          ts: a.ts, href: '#/ventas/' + v.id, icono: 'plus', anulado: !!v.anulada, monto: a.totalDespues - a.totalAntes,
+          titulo: 'Se sumó a una compra · ' + esc(BG.cliente(v.clienteId).nombre),
+          sub: BG.fmtHora(a.ts) + ' · ' + esc(a.items.map((i) => v.items[i].cantidad + ' × ' + v.items[i].descripcion).join(', ')) + ' · ' + BG.fmtRecibo(v.recibo),
+        });
+      }
+    }
+    // Las compras de antes del sistema no son movimientos de ningún día de caja.
+    for (const v of BG.db.ventas.filter((x) => x.fecha === fecha && !x.anterior)) {
       const cli = BG.cliente(v.clienteId);
       const n = sum(v.items, BG.cantidadViva);
       movs.push({
@@ -144,7 +164,7 @@
         extra: BG.estadoVenta(v),
       });
     }
-    for (const p of BG.db.pagos.filter((x) => x.fecha === fecha && !x.inicial)) {
+    for (const p of BG.db.pagos.filter((x) => x.fecha === fecha && !x.inicial && !x.anterior)) {
       const cli = BG.cliente(p.clienteId);
       movs.push({
         ts: p.ts, href: p.ventaId ? '#/ventas/' + p.ventaId : '#/clientes/' + p.clienteId, icono: 'cash', anulado: !!p.anulado,
@@ -205,8 +225,8 @@
     const duena = BG.esDuena();
     const hora = new Date().getHours();
     const saludo = hora < 12 ? 'Buen día' : hora < 19 ? 'Buenas tardes' : 'Buenas noches';
-    const ventasHoy = BG.db.ventas.filter((v) => v.fecha === h && !v.anulada);
-    const f = BG.totalesPorForma(BG.db.pagos.filter((p) => p.fecha === h && !p.anulado));
+    const ventasHoy = BG.db.ventas.filter((v) => v.fecha === h && BG.ventaDelSistema(v));
+    const f = BG.totalesPorForma(BG.db.pagos.filter((p) => p.fecha === h && BG.pagoDelSistema(p)));
     const cobrado = f.efectivo + f.transferencia + f.qr + f.tarjeta;
     const devueltoHoy = sum((BG.db.egresos || []).filter((e) => e.fecha === h), (e) => e.monto);
     const desglose = ['efectivo', 'transferencia', 'qr', 'tarjeta'].filter((k) => f[k] > 0).map((k) => BG.FORMAS_CORTAS[k] + ' ' + gs(f[k])).join(' · ') || 'Todavía sin cobros';
@@ -215,7 +235,7 @@
     const cu = BG.cuadre();
     const cf = BG.cuadreFavor();
     const mes = h.slice(0, 7);
-    const ventasMes = BG.db.ventas.filter((v) => v.fecha.slice(0, 7) === mes && !v.anulada);
+    const ventasMes = BG.db.ventas.filter((v) => v.fecha.slice(0, 7) === mes && BG.ventaDelSistema(v));
     const movs = BG.movimientosDelDia(h);
     const cerrada = BG.cajaCerrada(h);
     const cfg = BG.db.config;
@@ -389,40 +409,14 @@
       + '<span class="sale-date">' + BG.fmtFecha(v.fecha) + '<small>' + BG.fmtRecibo(v.recibo) + '</small></span>'
       + '<span class="sale-desc"><span class="row-title' + (v.anulada ? ' strike' : '') + '">' + esc(nombres) + '</span>'
       + '<span class="row-sub">' + n + (n === 1 ? ' artículo' : ' artículos') + ' · total ' + gs(v.total) + (v.anulada ? '' : ' · pagado ' + gs(BG.pagadoVenta(v))) + '</span></span>'
-      + '<span class="sale-end">' + BG.estadoVenta(v) + (!v.anulada && BG.saldoVenta(v) > 0 ? (ep && ep.proxima ? BG.pillCuota(ep.proxima) : BG.edad(v.fecha)) : '')
+      + '<span class="sale-end">' + (BG.esAnterior(v) ? '<span class="pill pill-muted">' + icon('file') + 'Antes del sistema</span>' : '')
+      + BG.estadoVenta(v) + (!v.anulada && BG.saldoVenta(v) > 0 ? (ep && ep.proxima ? BG.pillCuota(ep.proxima) : BG.edad(v.fecha)) : '')
       + (devs.length ? '<span class="pill pill-muted">' + icon('undo') + (devs.some((d) => d.tipo !== 'devolucion') ? 'Con cambio' : 'Con devolución') + '</span>' : '') + '</span></a></li>';
   }
   BG.filaVenta = filaVenta;
 
-  /**
-   * Estado de cuenta exacto: la compra con su total original, después cada ajuste de precio, devolución o cambio en su fecha,
-   * los pagos, y lo que una devolución pasó a saldo a favor (sale de esta cuenta y entra en la de saldo a favor).
-   * La última línea siempre da el saldo actual.
-   */
-  function libroCliente(cid) {
-    const mov = [];
-    for (const v of BG.ventasDeCliente(cid)) {
-      const num = BG.fmtRecibo(v.recibo);
-      const cambios = (v.ajustes || []).map((a) => ({ ts: a.ts, fecha: a.fecha, delta: a.totalDespues - a.totalAntes, concepto: 'Precio ajustado en la compra ' + num + ' · ' + a.descripcion }))
-        .concat((v.devoluciones || []).filter((d) => d.totalDespues !== d.totalAntes).map((d) => ({
-          ts: d.ts, fecha: d.fecha, delta: d.totalDespues - d.totalAntes,
-          concepto: (d.tipo === 'cambio' ? 'Cambio' : 'Devolución') + ' en la compra ' + num + ' · ' + d.cantidad + ' × ' + d.descripcion + (d.productoNuevo ? ' por ' + d.productoNuevo : ''),
-        })));
-      const totalOriginal = v.total - sum(cambios, (x) => x.delta);
-      mov.push({ ts: v.ts, fecha: v.fecha, concepto: 'Compra ' + num + ' · ' + v.items.filter((it) => !it.cambioDe).map((it) => it.descripcion).join(', '), cargo: v.anulada ? 0 : totalOriginal, anulado: v.anulada ? 'Anulada: ' + v.anulada.motivo : '' });
-      if (v.anulada) continue;
-      cambios.forEach((x) => mov.push({ ts: x.ts, fecha: x.fecha, concepto: x.concepto, cargo: x.delta > 0 ? x.delta : 0, abono: x.delta < 0 ? -x.delta : 0 }));
-      (v.devoluciones || []).filter((d) => d.aFavor).forEach((d) => mov.push({ ts: d.ts + ':01', fecha: d.fecha, concepto: 'Lo pagado de más pasó a saldo a favor' + (d.reintegro ? ' (se le devolvió' + (d.reintegro < d.aFavor ? ' ' + gs(d.reintegro) : '') + ' en ' + BG.FORMAS[d.forma].toLowerCase() + ')' : ''), cargo: d.aFavor }));
-    }
-    for (const p of BG.db.pagos.filter((x) => x.clienteId === cid && x.ventaId)) {
-      const v = BG.venta(p.ventaId);
-      mov.push({ ts: p.ts, fecha: p.fecha, concepto: 'Pago ' + BG.fmtRecibo(p.recibo) + ' · ' + p.partes.map((x) => BG.FORMAS[x.forma]).join(' + '), abono: p.anulado || v.anulada ? 0 : p.total, anulado: p.anulado ? 'Anulado: ' + p.anulado.motivo : (v.anulada ? 'Pasó a saldo a favor' : '') });
-      if (p.anulado && p.anulado.aFavorRevertido && !v.anulada) mov.push({ ts: p.anulado.ts + ':01', fecha: p.anulado.fecha, concepto: 'Sin ese pago, la devolución ya no deja saldo a favor', abono: p.anulado.aFavorRevertido });
-    }
-    mov.sort((a, b) => a.ts.localeCompare(b.ts));
-    let saldo = 0;
-    return mov.map((m) => { saldo += (m.cargo || 0) - (m.abono || 0); return Object.assign(m, { saldo: saldo }); });
-  }
+  /** Estado de cuenta exacto: vive en el núcleo (BG.libroCliente), porque también lo usa el comprobante. */
+  const libroCliente = BG.libroCliente;
 
   /** Devolver en plata todo o parte del saldo a favor (sale de la caja; la vendedora necesita el PIN del dueño). */
   BG.devolverFavorUI = async (c) => {
@@ -545,7 +539,20 @@
   function cardPuntos(c) {
     const p = BG.resumenPuntos(c.id);
     if (!p) return '';
-    if (!p.ganados && !p.pendientes && !p.canjeados) return '';
+    // Compras que no suman solas (de antes de que empezara el programa, o anteriores al sistema): se dice por qué
+    // no tiene puntos y el dueño puede sumárselos, compra por compra.
+    const sinPuntos = BG.comprasSinPuntos(c.id);
+    const darian = sinPuntos.reduce((a, x) => a + x.puntos, 0);
+    const lineaSinPuntos = sinPuntos.length
+      ? '<div class="callout callout-soft">' + icon('info') + '<div><p class="small">' + (sinPuntos.length === 1 ? 'Tiene 1 compra que no suma puntos' : 'Tiene ' + sinPuntos.length + ' compras que no suman puntos')
+        + ' porque ' + (sinPuntos.some((x) => BG.esAnterior(x.v)) && !sinPuntos.every((x) => BG.esAnterior(x.v)) ? 'son de antes del programa' : sinPuntos.every((x) => BG.esAnterior(x.v)) ? 'son de antes del sistema' : 'son de antes del ' + BG.fmtFecha(BG.configFidelidad().desde) + ', cuando empezó el programa')
+        + '. ' + (BG.esDuena() ? 'Si querés, se los sumás: darían <strong>' + darian + (darian === 1 ? ' punto' : ' puntos') + '</strong>.' : 'Si corresponde sumárselos, lo hace ' + esc(BG.nombreDuena()) + '.') + '</p>'
+        + (BG.esDuena() ? '<button type="button" class="btn btn-sm" data-accion="puntos-aparte">' + icon('star', 'i-sm') + 'Sumar puntos de esas compras</button>' : '') + '</div></div>'
+      : '';
+    if (!p.ganados && !p.pendientes && !p.canjeados) {
+      return lineaSinPuntos ? '<section class="card stack card-puntos" aria-labelledby="t-pts"><div class="card-head"><h2 id="t-pts">' + icon('star') + 'Sus puntos</h2>'
+        + '<span class="small muted">1 punto cada ' + gs(p.cadaGs) + ' · cada punto ' + gs(p.valorPunto) + '</span></div>' + lineaSinPuntos + '</section>' : '';
+    }
     const wa = BG.textosWa.puntos(c, p);
     return '<section class="card stack card-puntos" aria-labelledby="t-pts">'
       + '<div class="card-head"><h2 id="t-pts">' + icon('star') + 'Sus puntos</h2>'
@@ -561,8 +568,162 @@
       + '<a class="btn" href="' + BG.waLink(c, wa) + '" target="_blank" rel="noopener">' + icon('chat') + 'Mandarle sus puntos</a>'
       + (p.canjeable ? '<button type="button" class="btn btn-primary" data-accion="canjear-puntos">' + icon('star') + 'Canjear</button>' : '')
       + '</div></div>'
-      + '<details class="terminos"><summary>Condiciones del programa</summary><p>' + esc(p.terminos) + '</p></details>'
+      + lineaSinPuntos
+      + '<details class="terminos"><summary>Cómo se usan los puntos y condiciones</summary>'
+      + '<p><strong>Para usarlos:</strong> cuando llega a ' + p.minimo + ' puntos, tocás «Canjear» (acá o al venderle). Los puntos pasan a su saldo a favor y se descuentan en esa compra; '
+      + 'en el recibo sale «Con tus puntos», cuándo los usó y en qué compra. Lo pagado con puntos no suma puntos y no se devuelve en plata.</p>'
+      + '<p>' + esc(p.terminos) + '</p></details>'
       + '</section>';
+  }
+
+  /**
+   * Sumar los puntos de compras que no suman solas: el dueño elige cuáles (vienen todas marcadas) y ve cuánto
+   * suma cada una antes de confirmar. Las pagadas se pueden usar enseguida; las que deben, al terminar de pagar.
+   */
+  BG.puntosAparteUI = async (c) => {
+    const lista = BG.comprasSinPuntos(c.id);
+    if (!lista.length) { BG.toast('No tiene compras para sumar: todas sus compras ya suman puntos.'); return false; }
+    const elegidas = new Set(lista.map((x) => x.v.id));
+    let motivo = '';
+    const resumen = () => {
+      const sel = lista.filter((x) => elegidas.has(x.v.id));
+      const ya = sel.filter((x) => x.pagada).reduce((a, x) => a + x.puntos, 0);
+      const luego = sel.filter((x) => !x.pagada).reduce((a, x) => a + x.puntos, 0);
+      return sel.length ? 'Suma <strong>' + ya + (ya === 1 ? ' punto' : ' puntos') + '</strong> ahora' + (luego ? ' y <strong>' + luego + '</strong> más cuando termine de pagar' : '') + '.' : 'Elegí al menos una compra.';
+    };
+    const r = await BG.modal({
+      titulo: 'Sumar puntos de compras anteriores',
+      cuerpo: '<p class="small">Estas compras de <strong>' + esc(c.nombre) + '</strong> no suman solas. Las que marques suman con la regla de hoy '
+        + '(1 punto cada ' + gs(BG.configFidelidad().cadaGs) + ') y queda anotado que lo hiciste vos.</p>'
+        + '<div class="motivos" role="group" aria-label="Compras">'
+        + lista.map((x) => '<label class="motivo"><input type="checkbox" name="pa-v" value="' + x.v.id + '" checked>'
+          + '<span class="grow"><span class="row-title">' + BG.fmtFecha(x.v.fecha) + ' · ' + BG.fmtRecibo(x.v.recibo) + (BG.esAnterior(x.v) ? ' · antes del sistema' : '') + ' · ' + gs(x.v.total) + '</span>'
+          + '<span class="row-sub">' + x.puntos + (x.puntos === 1 ? ' punto' : ' puntos') + (x.pagada ? ' · está pagada: se pueden usar enseguida' : ' · debe ' + gs(BG.saldoVenta(x.v)) + ': se suman al terminar de pagar') + '</span></span></label>').join('')
+        + '</div><p class="small" id="pa-res" aria-live="polite">' + resumen() + '</p>'
+        + '<div class="field"><label for="pa-motivo">Por qué <span class="small muted">(opcional, queda en la auditoría)</span></label>'
+        + '<input id="pa-motivo" class="input" maxlength="120" autocomplete="off" placeholder="Ej.: clienta de antes del sistema"></div>'
+        + '<span class="error-text" id="pa-err" hidden></span>',
+      acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Sumar puntos', valor: 'ok', clase: 'btn-primary' }],
+      onMount: (dlg) => {
+        dlg.addEventListener('change', (ev) => {
+          if (ev.target.name !== 'pa-v') return;
+          if (ev.target.checked) elegidas.add(ev.target.value); else elegidas.delete(ev.target.value);
+          $('#pa-res', dlg).innerHTML = resumen();
+        });
+      },
+      validar: (v, dlg) => {
+        motivo = $('#pa-motivo', dlg).value;
+        if (elegidas.size) return true;
+        const er = $('#pa-err', dlg);
+        er.textContent = 'Marcá al menos una compra.';
+        er.hidden = false;
+        return false;
+      },
+    });
+    if (r !== 'ok') return false;
+    const res = BG.sumarPuntosAparte(Array.from(elegidas), motivo);
+    BG.toast('Listo: ' + c.nombre.split(' ')[0] + ' sumó ' + res.ganados + (res.ganados === 1 ? ' punto' : ' puntos') + (res.pendientes ? ' (y ' + res.pendientes + ' más al terminar de pagar)' : '') + '. Ahora tiene ' + BG.puntosDe(c.id).puntos + '.');
+    return true;
+  };
+
+  /**
+   * Cargar lo que una clienta llevó antes del sistema: fecha, artículos (a mano, no son del stock) y cuánto ya
+   * pagó. Queda en su cuenta aparte de lo de ahora; si quedó debiendo, se le cobra como cualquier deuda.
+   */
+  BG.compraAnteriorUI = async (c) => {
+    const st = { fecha: '', items: [{ descripcion: '', cantidad: 1, precio: 0 }, { descripcion: '', cantidad: 1, precio: 0 }, { descripcion: '', cantidad: 1, precio: 0 }], pagado: null, nota: '' };
+    const total = () => st.items.reduce((a, x) => a + (x.descripcion.trim() && x.precio > 0 ? x.precio * (x.cantidad || 0) : 0), 0);
+    const filaItem = (x, i) => '<div class="row row-nowrap ca-fila" data-i="' + i + '">'
+      + '<input class="input grow" data-campo="descripcion" maxlength="80" autocomplete="off" placeholder="Qué llevó (ej.: vestido floreado)" value="' + esc(x.descripcion) + '" aria-label="Artículo ' + (i + 1) + '">'
+      + '<input class="input input-cant" data-campo="cantidad" inputmode="numeric" autocomplete="off" value="' + x.cantidad + '" aria-label="Cantidad del artículo ' + (i + 1) + '">'
+      + BG.campoGs('ca-precio-' + i, x.precio || '', 'data-campo="precio" aria-label="Precio del artículo ' + (i + 1) + '" placeholder="Precio"') + '</div>';
+    const pintarTotales = (dlg) => {
+      const t = total();
+      const pag = st.pagado == null ? t : st.pagado;
+      $('#ca-tot', dlg).innerHTML = '<dl class="summary"><dt>Lo que llevó</dt><dd>' + gs(t) + '</dd><dt>Ya pagó</dt><dd>' + gs(Math.min(pag, t)) + '</dd><div class="sep"></div>'
+        + '<dt><strong>Queda debiendo</strong></dt><dd class="big ' + (t - pag > 0 ? 'due' : 'clear') + '">' + gs(Math.max(0, t - pag)) + '</dd></dl>';
+    };
+    const r = await BG.modal({
+      titulo: 'Lo que llevó antes del sistema',
+      ancho: 'wide',
+      cuerpo: '<p class="small">Para que quede en la cuenta de <strong>' + esc(c.nombre) + '</strong> lo que compró antes de usar el sistema. '
+        + 'No toca el stock ni la caja de hoy, y queda aparte de sus compras nuevas (con su propio comprobante).</p>'
+        + '<div class="field"><label for="ca-fecha">¿Cuándo fue? <span class="req">*</span></label><input id="ca-fecha" class="input input-date" type="date" max="' + BG.hoy() + '">'
+        + '<span class="hint">Si no sabés el día exacto, poné uno aproximado (por ejemplo, el 1 de ese mes).</span></div>'
+        + '<div class="field"><span class="field-label">Qué llevó <span class="req">*</span></span>'
+        + '<div class="row row-nowrap ca-cab" aria-hidden="true"><span class="grow">Artículo</span><span class="ca-c-cant">Cant.</span><span class="ca-c-precio">Precio c/u</span></div>'
+        + '<div id="ca-items" class="stack-sm">' + st.items.map(filaItem).join('') + '</div>'
+        + '<button type="button" class="btn btn-sm btn-quiet" data-accion="ca-mas">' + icon('plus', 'i-sm') + 'Otro artículo</button></div>'
+        + '<div class="field"><label for="ca-pagado">¿Cuánto ya pagó de esto?</label>' + BG.campoGs('ca-pagado', '', 'placeholder="Todo"')
+        + '<span class="hint">Si lo dejás vacío, se toma que ya pagó todo. Si quedó debiendo, escribí lo que sí pagó (0 si no pagó nada).</span></div>'
+        + '<div class="field"><label for="ca-nota">Nota <span class="small muted">(opcional)</span></label><input id="ca-nota" class="input" maxlength="120" autocomplete="off" placeholder="Ej.: del cuaderno de junio"></div>'
+        + '<div id="ca-tot"></div><span class="error-text" id="ca-err" role="alert" hidden></span>',
+      acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Guardar en su cuenta', valor: 'ok', clase: 'btn-primary', submit: true }],
+      onMount: (dlg) => {
+        const form = $('form', dlg);
+        pintarTotales(form);
+        form.addEventListener('input', (ev) => {
+          const t = ev.target;
+          const fila = t.closest('.ca-fila');
+          if (fila) {
+            const x = st.items[Number(fila.dataset.i)];
+            if (t.dataset.campo === 'descripcion') x.descripcion = t.value;
+            else if (t.dataset.campo === 'cantidad') x.cantidad = Math.round(Number(String(t.value).replace(/\D/g, ''))) || 0;
+            else if (t.dataset.campo === 'precio') x.precio = BG.leerGs(t) || 0;
+          } else if (t.id === 'ca-pagado') st.pagado = String(t.value).trim() === '' ? null : BG.leerGs(t) || 0;
+          else if (t.id === 'ca-fecha') st.fecha = t.value;
+          else if (t.id === 'ca-nota') st.nota = t.value;
+          pintarTotales(form);
+        });
+        form.addEventListener('change', (ev) => { if (ev.target.id === 'ca-fecha') st.fecha = ev.target.value; });
+        form.addEventListener('click', (ev) => {
+          if (!ev.target.closest('[data-accion="ca-mas"]')) return;
+          st.items.push({ descripcion: '', cantidad: 1, precio: 0 });
+          $('#ca-items', form).insertAdjacentHTML('beforeend', filaItem(st.items[st.items.length - 1], st.items.length - 1));
+          $('#ca-items .ca-fila:last-child input', form).focus();
+        });
+        $('#ca-fecha', form).focus();
+      },
+      validar: (v, dlg) => {
+        const er = $('#ca-err', dlg);
+        const falla = (m) => { er.textContent = m; er.hidden = false; return false; };
+        if (!st.fecha) return falla('Poné la fecha (aunque sea aproximada).');
+        if (st.fecha > BG.hoy()) return falla('La fecha no puede ser futura.');
+        const usados = st.items.filter((x) => x.descripcion.trim() || x.precio > 0);
+        if (!usados.length) return falla('Anotá al menos un artículo con su precio.');
+        const sinPrecio = usados.find((x) => !(x.precio > 0));
+        if (sinPrecio) return falla('Falta el precio de «' + (sinPrecio.descripcion.trim() || 'un artículo') + '».');
+        if (usados.some((x) => !x.descripcion.trim())) return falla('A un artículo le falta qué era.');
+        if (usados.some((x) => !(x.cantidad >= 1))) return falla('Revisá las cantidades (1 o más).');
+        if (st.pagado != null && st.pagado > total()) return falla('Escribiste que pagó ' + gs(st.pagado) + ' y lo que llevó suma ' + gs(total()) + '.');
+        return true;
+      },
+    });
+    if (r !== 'ok') return false;
+    const t = total();
+    const res = BG.registrarCompraAnterior({ clienteId: c.id, fecha: st.fecha, items: st.items, pagado: st.pagado == null ? t : st.pagado, nota: st.nota });
+    const debe = BG.saldoVenta(res.venta);
+    BG.toast('Guardado en la cuenta de ' + c.nombre.split(' ')[0] + ': ' + gs(t) + ' del ' + BG.fmtFecha(st.fecha) + (debe > 0 ? ', debe ' + gs(debe) + ' de eso.' : ', ya pagado.'));
+    return true;
+  };
+
+  /** Lo que llevó antes del sistema: aparte de lo de ahora, con su comprobante. */
+  function cardAnteriores(c) {
+    const ants = BG.ventasDeCliente(c.id).filter((v) => BG.esAnterior(v) && !v.anulada).sort((a, b) => a.ts.localeCompare(b.ts));
+    if (!ants.length) return '';
+    const total = sum(ants, (v) => v.total);
+    const debe = BG.saldoAnterior(c.id);
+    return '<section class="card card-flush" aria-labelledby="t-ant"><div class="card-head pad"><h2 id="t-ant">Antes del sistema</h2>'
+      + '<span class="small">Llevó <strong>' + gs(total) + '</strong> · ' + (debe > 0 ? 'debe <strong class="t-devuelto">' + gs(debe) + '</strong>' : 'todo pagado') + '</span></div>'
+      + '<ul class="list list-plain">' + ants.map((v) => '<li><a class="list-row" href="#/ventas/' + v.id + '"><span class="avatar">' + icon('file', 'i-sm') + '</span>'
+        + '<span class="row-main"><span class="row-title">' + BG.fmtFecha(v.fecha) + ' · ' + esc(v.items.map((it) => (it.cantidad > 1 ? it.cantidad + ' × ' : '') + it.descripcion).join(', ')) + '</span>'
+        + '<span class="row-sub">' + BG.fmtRecibo(v.recibo) + ' · total ' + gs(v.total) + (v.anterior.nota ? ' · ' + esc(v.anterior.nota) : '') + '</span></span>'
+        + '<span class="row-end"><span class="amount">' + (BG.saldoVenta(v) > 0 ? gs(BG.saldoVenta(v)) : 'Pagada') + '</span></span></a></li>').join('') + '</ul>'
+      + '<div class="card-foot">'
+      + (BG.puede('emitirRecibos') ? '<a class="btn btn-sm" href="#/recibo/a/' + c.id + '">' + icon('receipt', 'i-sm') + 'Comprobante de lo de antes</a>' : '')
+      + (debe > 0 && BG.puede('registrarCobros') ? '<a class="btn btn-sm" href="#/cobros/nuevo?cliente=' + c.id + '">' + icon('cash', 'i-sm') + 'Cobrar</a>' : '')
+      + (BG.esDuena() ? '<button type="button" class="btn btn-sm btn-quiet" data-accion="compra-anterior">' + icon('plus', 'i-sm') + 'Anotar más</button>' : '')
+      + '</div></section>';
   }
 
   /**
@@ -637,6 +798,7 @@
     const c = BG.cliente(args[0]);
     if (!c) return { html: '<div class="page"><p class="empty">No encontramos ese cliente. <a href="#/clientes">Volver a clientes</a></p></div>' };
     const saldo = BG.saldoCliente(c.id);
+    const saldoAnt = BG.saldoAnterior(c.id);
     const aFavor = BG.creditoCliente(c.id);
     const pend = BG.pendientesDe(c.id);
     const todasSus = BG.ventasDeCliente(c.id).slice().sort((a, b) => b.ts.localeCompare(a.ts));
@@ -661,6 +823,7 @@
       + (BG.puede('editarClientes') || BG.esDuena()
         ? '<div class="page-actions">'
           + (BG.puede('editarClientes') ? '<a class="btn btn-quiet" href="#/clientes/' + c.id + '/editar">' + icon('edit') + 'Editar</a>' : '')
+          + (BG.esDuena() ? '<button type="button" class="btn btn-quiet" data-accion="compra-anterior">' + icon('file') + 'Lo que llevó antes</button>' : '')
           + (BG.esDuena() ? '<button type="button" class="btn btn-quiet btn-del" data-accion="borrar-cliente">' + icon('trash') + 'Borrar</button>' : '')
           + '</div>' : '') + '</div>'
       + (aFavor > 0 ? '<section class="favor-banner" aria-label="Saldo a favor"><span class="favor-ic">' + icon('wallet') + '</span>'
@@ -673,7 +836,9 @@
         + '</div></section>' : '')
       + '<section class="balance' + (saldo > 0 ? '' : ' is-clear') + '" aria-label="Saldo">'
       + '<div><p class="balance-label">' + (saldo > 0 ? 'Saldo pendiente' : 'Cuenta al día') + '</p><p class="hero-figure">' + gs(saldo) + '</p>'
-      + '<p class="balance-sub">' + (pend.length ? 'En ' + pend.length + (pend.length === 1 ? ' compra' : ' compras') + ' · la más antigua ' + BG.haceDias(pend[0].fecha) : 'No debe nada.') + '</p></div>'
+      + '<p class="balance-sub">' + (pend.length ? 'En ' + pend.length + (pend.length === 1 ? ' compra' : ' compras') + ' · la más antigua ' + BG.haceDias(pend[0].fecha) : 'No debe nada.') + '</p>'
+      + (saldoAnt > 0 ? '<p class="balance-sub">' + (saldoAnt === saldo ? 'Todo es de compras de antes del sistema.' : 'De eso, <strong>' + gs(saldoAnt) + '</strong> es de antes del sistema y <strong>' + gs(saldo - saldoAnt) + '</strong> de lo de ahora.') + '</p>' : '')
+      + '</div>'
       + '<div class="balance-actions">'
       + (saldo > 0 && BG.puede('registrarCobros') ? '<a class="btn btn-primary" href="#/cobros/nuevo?cliente=' + c.id + '">' + icon('cash') + 'Registrar cobro</a>' : '')
       + (BG.puede('registrarVentas') ? '<a class="btn' + (saldo > 0 ? '' : ' btn-primary') + '" href="#/ventas/nueva?cliente=' + c.id + '">' + icon('bag') + 'Nueva venta</a>' : '')
@@ -683,6 +848,7 @@
       + '</div></section>'
       + (c.notas ? '<div class="callout">' + icon('info') + '<div>' + esc(c.notas) + '</div></div>' : '')
       + cardPuntos(c)
+      + cardAnteriores(c)
       + (BG.esDuena() ? cardCreditoBeneficios(c) : '')
       + (cuotas.length ? '<section class="card card-flush" aria-labelledby="t-cc"><div class="card-head pad"><h2 id="t-cc">Cuotas acordadas</h2><a class="small" href="#/cuotas">Todas las cuotas</a></div>'
         + '<ul class="list list-plain">' + cuotas.map((x) => '<li class="list-row"><span class="avatar">' + icon('calendar', 'i-sm') + '</span>'
@@ -727,6 +893,8 @@
           try {
             if (b.dataset.accion === 'devolver-favor' && (await BG.devolverFavorUI(c))) BG.render();
             else if (b.dataset.accion === 'canjear-puntos' && (await BG.canjeUI(c.id))) BG.render();
+            else if (b.dataset.accion === 'puntos-aparte' && (await BG.puntosAparteUI(c))) BG.render();
+            else if (b.dataset.accion === 'compra-anterior' && (await BG.compraAnteriorUI(c))) BG.render();
             else if (b.dataset.accion === 'borrar-cliente') await BG.borrarClienteUI(c);
           } catch (err) { BG.toast(err.message, 'error'); }
         });

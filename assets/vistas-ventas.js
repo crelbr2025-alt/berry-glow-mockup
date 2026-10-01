@@ -75,15 +75,19 @@
   };
 
   BG.anularVentaUI = async (v) => {
-    if (BG.cajaCerrada(v.fecha) && !(await BG.pedirPin('La venta es del ' + BG.fmtFecha(v.fecha) + ' y la caja de ese día ya está cerrada.'))) return false;
-    const pagado = BG.pagadoVenta(v);
+    // Una compra de antes del sistema no es de ningún día de caja.
+    if (!v.anterior && BG.cajaCerrada(v.fecha) && !(await BG.pedirPin('La venta es del ' + BG.fmtFecha(v.fecha) + ' y la caja de ese día ya está cerrada.'))) return false;
+    // Lo «pagado antes del sistema» se anula junto con la compra anterior (no pasa a saldo a favor).
+    const pagadoAntes = v.anterior ? sum(BG.pagosDeVenta(v.id).filter((p) => p.anterior), (p) => p.total) : 0;
+    const pagado = BG.pagadoVenta(v) - pagadoAntes;
     const puntos = BG.puntosDeVenta(v);
-    const unidades = sum(v.items, (it) => BG.cantidadViva(it));
+    const unidades = v.anterior ? 0 : sum(v.items, (it) => BG.cantidadViva(it));
     const parcial = (v.items || []).length > 1;
     // Lo que va a pasar. Es igual con cualquier motivo (el sistema no tiene dos aritméticas), pero se lo
     // muestra escrito para que nadie anule pensando que hace otra cosa.
     const efecto = (tipo) => '<div class="callout callout-warn efecto">' + icon('info') + '<div><strong>Al anular con este motivo:</strong><ul class="efecto-lista">'
       + (unidades ? '<li>Vuelven al stock <strong>' + unidades + (unidades === 1 ? ' unidad</strong>' : ' unidades</strong>') + ' de esta compra.</li>' : '')
+      + (v.anterior ? '<li>Es una compra de antes del sistema: no hay stock que vuelva' + (pagadoAntes ? ', y lo anotado como pagado antes (<strong>' + gs(pagadoAntes) + '</strong>) se anula con ella' : '') + '.</li>' : '')
       + (puntos ? '<li>Pierde los <strong>' + puntos + (puntos === 1 ? ' punto' : ' puntos') + '</strong> de esta compra.</li>'
         : '<li>No tenía puntos para perder en esta compra.</li>')
       + (pagado ? '<li>Lo que ya pagó (<strong>' + gs(pagado) + '</strong>) queda como <strong>saldo a favor</strong>; si se le devuelve en plata, se hace desde su ficha con «Devolver en plata».</li>'
@@ -328,6 +332,147 @@
     return true;
   };
 
+  /* ── Agregar artículos a una compra hecha ────────────────────────────── */
+
+  /**
+   * Suma artículos a la compra (mismo recibo, el total sube). Van a precio de lista: si hace falta otro precio,
+   * después se usa «Ajustar precio», que pide el motivo. Lo agregado se puede pagar en el momento o dejar a cuenta.
+   */
+  BG.agregarArticulosUI = async (v) => {
+    const cli = BG.cliente(v.clienteId);
+    const st = { items: [], paga: 'no', forma: 'efectivo', monto: 0, montoTocado: false };
+    const disponible = (p) => BG.disponibles(p) - st.items.filter((x) => x.productoId === p.id).reduce((a, x) => a + x.cantidad, 0);
+    const filtro = (p) => p.precioVenta > 0 && disponible(p) > 0;
+    const agregado = () => st.items.reduce((a, x) => a + BG.producto(x.productoId).precioVenta * x.cantidad, 0);
+    const simular = () => BG.totalesDe(v, v.items.concat(st.items.map((x) => ({ precio: BG.producto(x.productoId).precioVenta, cantidad: x.cantidad }))));
+    const pagado = BG.pagadoVenta(v);
+    const pintar = (form) => {
+      $('#ag-lista', form).innerHTML = st.items.length ? st.items.map((x, i) => {
+        const p = BG.producto(x.productoId);
+        return '<div class="picked"><span class="avatar">' + icon('tag', 'i-sm') + '</span><div class="grow"><div class="row-title">' + esc(p.descripcion) + '</div>'
+          + '<div class="row-sub">' + gs(p.precioVenta) + ' c/u · quedan ' + BG.disponibles(p) + '</div></div>'
+          + '<div class="qty" role="group" aria-label="Cantidad de ' + esc(p.descripcion) + '"><button type="button" class="btn-icon" data-ag="menos" data-i="' + i + '" aria-label="Uno menos">−</button>'
+          + '<span class="qty-n">' + x.cantidad + '</span><button type="button" class="btn-icon" data-ag="mas" data-i="' + i + '" aria-label="Uno más"' + (disponible(p) > 0 ? '' : ' disabled') + '>+</button></div>'
+          + '<button type="button" class="btn-icon" data-ag="quitar" data-i="' + i + '" aria-label="Quitar ' + esc(p.descripcion) + '">' + icon('x') + '</button></div>';
+      }).join('') : '<p class="small muted">Buscá arriba lo que se lleva ahora.</p>';
+      const t = simular();
+      const saldoNuevo = t.total - pagado;
+      if (!st.montoTocado) st.monto = Math.min(agregado(), Math.max(0, saldoNuevo));
+      const ep = BG.estadoPlan(v);
+      $('#ag-info', form).innerHTML = st.items.length
+        ? '<dl class="summary"><dt>Total de la compra</dt><dd>' + gs(v.total) + ' → ' + gs(t.total) + '</dd><dt>Ya pagó</dt><dd>' + gs(pagado) + '</dd><div class="sep"></div>'
+          + '<dt><strong>Saldo nuevo</strong></dt><dd class="big ' + (saldoNuevo - (st.paga === 'si' ? st.monto : 0) > 0 ? 'due' : 'clear') + '">' + gs(Math.max(0, saldoNuevo - (st.paga === 'si' ? st.monto : 0))) + '</dd></dl>'
+          + (ep ? '<p class="hint">Tiene cuotas: lo que quede debiendo de esto se suma a la última cuota.</p>' : '')
+        : '';
+      $('#ag-pago', form).hidden = !st.items.length;
+      $('#ag-pago-campos', form).hidden = st.paga !== 'si';
+      const m = $('#ag-monto', form);
+      if (m && !st.montoTocado && document.activeElement !== m) m.value = st.monto ? BG.C.groupThousands(st.monto) : '';
+    };
+    const r = await BG.modal({
+      titulo: 'Agregar a la compra ' + BG.fmtRecibo(v.recibo),
+      ancho: 'wide',
+      cuerpo: '<p class="small">Lo que se lleva ahora <strong>' + esc(cli.nombre) + '</strong> se suma a esta compra del ' + BG.fmtFecha(v.fecha)
+        + ': mismo recibo, el total sube y el stock baja. Va a precio de lista (si hace falta otro precio, después usá «Ajustar precio»).</p>'
+        + '<div class="search"><label class="sr-only" for="ag-q">Buscar el artículo</label><div class="search-box">' + icon('search')
+        + '<input id="ag-q" class="search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Buscar el artículo que se lleva" role="combobox" aria-expanded="false" aria-controls="ag-q-lista" aria-autocomplete="list"></div>'
+        + '<ul class="cb-list" id="ag-q-lista" role="listbox" hidden></ul></div>'
+        + '<div id="ag-lista" class="stack-sm"></div><div id="ag-info"></div>'
+        + '<div id="ag-pago" class="stack-sm" hidden><div class="field"><span class="field-label" id="ag-paga-l">¿Paga ahora lo que se agrega?</span><div class="seg" role="radiogroup" aria-labelledby="ag-paga-l">'
+        + '<label><input type="radio" name="ag-paga" value="no" checked>No, queda a cuenta</label><label><input type="radio" name="ag-paga" value="si">Sí, paga ahora</label></div></div>'
+        + '<div id="ag-pago-campos" class="row" hidden><div class="seg" role="radiogroup" aria-label="Cómo paga">'
+        + Object.keys(BG.FORMAS_CORTAS).map((k) => '<label><input type="radio" name="ag-forma" value="' + k + '"' + (k === 'efectivo' ? ' checked' : '') + '>' + BG.FORMAS_CORTAS[k] + '</label>').join('') + '</div>'
+        + BG.campoGs('ag-monto', '', 'aria-label="Cuánto paga"') + '</div></div>'
+        + '<p class="error-text" id="ag-error" role="alert" hidden></p>',
+      acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Agregar a la compra', valor: 'ok', clase: 'btn-primary', submit: true }],
+      onMount: (dlg) => {
+        const form = $('form', dlg);
+        pintar(form);
+        BG.combobox($('#ag-q', form), $('#ag-q-lista', form), {
+          mostrarVacio: true,
+          buscar: (q) => (q.trim() ? BG.buscarProductos(q, 10, filtro) : BG.productosVivos().filter(filtro).slice(-10).reverse()).map((p) => ({ p: p })),
+          pintar: (x, q) => '<span class="avatar">' + icon('tag', 'i-sm') + '</span><span class="row-main"><span class="row-title">' + BG.resaltar(x.p.descripcion, q) + '</span>'
+            + '<span class="row-sub">' + esc(x.p.categoria) + ' · quedan ' + disponible(x.p) + '</span></span><span class="row-end"><span class="amount">' + gs(x.p.precioVenta) + '</span></span>',
+          vacio: (q) => q.trim() ? 'No hay nada con stock que se llame «' + esc(q) + '»' : 'No hay artículos con stock y precio.',
+          elegir: (x) => {
+            const ya = st.items.find((y) => y.productoId === x.p.id);
+            if (ya) ya.cantidad++; else st.items.push({ productoId: x.p.id, cantidad: 1 });
+            $('#ag-q', form).value = '';
+            pintar(form);
+          },
+        });
+        form.addEventListener('click', (e) => {
+          const b = e.target.closest('[data-ag]');
+          if (!b) return;
+          const x = st.items[Number(b.dataset.i)];
+          if (b.dataset.ag === 'mas' && disponible(BG.producto(x.productoId)) > 0) x.cantidad++;
+          else if (b.dataset.ag === 'menos') { x.cantidad--; if (x.cantidad < 1) st.items.splice(Number(b.dataset.i), 1); }
+          else if (b.dataset.ag === 'quitar') st.items.splice(Number(b.dataset.i), 1);
+          pintar(form);
+        });
+        form.addEventListener('change', (e) => {
+          if (e.target.name === 'ag-paga') { st.paga = e.target.value; pintar(form); }
+          if (e.target.name === 'ag-forma') st.forma = e.target.value;
+        });
+        form.addEventListener('input', (e) => { if (e.target.id === 'ag-monto') { st.monto = BG.leerGs(e.target); st.montoTocado = true; pintar(form); } });
+        $('#ag-q', form).focus();
+      },
+      validar: (val, dlg) => {
+        const er = $('#ag-error', dlg);
+        const falla = (m) => { er.textContent = m; er.hidden = false; return false; };
+        if (!st.items.length) return falla('Elegí al menos un artículo.');
+        if (st.paga === 'si') {
+          const saldoNuevo = simular().total - pagado;
+          if (!(st.monto > 0)) return falla('Escribí cuánto paga ahora (o elegí que queda a cuenta).');
+          if (st.monto > saldoNuevo) return falla('Paga ' + gs(st.monto) + ' y la compra quedaría debiendo ' + gs(saldoNuevo) + ': poné lo justo. Para darle vuelto o dejarle a favor, usá «Registrar cobro».');
+        }
+        return true;
+      },
+    });
+    if (r !== 'ok') return false;
+    const partes = st.paga === 'si' ? [{ forma: st.forma, monto: st.monto }] : [];
+    // Mismos permisos del mostrador que al vender: a cuenta fuera del límite y cobrar con la caja cerrada piden el PIN.
+    let creditoAutorizadoPor = null;
+    const queda = Math.max(0, simular().total - v.total - (st.paga === 'si' ? st.monto : 0));
+    const cred = BG.estadoCredito(v.clienteId, queda);
+    if (!cred.ok) {
+      if (!BG.esDuena()) {
+        if (!(await BG.pedirPin('Lo agregado a la compra de ' + cli.nombre + ' queda a cuenta: ' + BG.textoCredito(cred) + '.'))) return false;
+        creditoAutorizadoPor = BG.nombreDuena();
+      }
+    }
+    if (partes.length && BG.cajaCerrada(BG.hoy()) && !(await BG.pedirPin('La caja de hoy ya está cerrada y entra un pago de ' + gs(st.monto) + '.'))) return false;
+    const res = BG.agregarArticulos({ ventaId: v.id, items: st.items.map((x) => ({ productoId: x.productoId, cantidad: x.cantidad, precio: BG.producto(x.productoId).precioVenta })),
+      partes: partes, creditoAutorizadoPor: creditoAutorizadoPor });
+    const n = st.items.reduce((a, x) => a + x.cantidad, 0);
+    BG.toast('Listo: ' + n + (n === 1 ? ' artículo se sumó' : ' artículos se sumaron') + ' a la compra ' + BG.fmtRecibo(v.recibo) + '. Total ' + gs(res.agregado.totalDespues)
+      + (BG.saldoVenta(v) > 0 ? ', debe ' + gs(BG.saldoVenta(v)) + '.' : ', quedó saldada.'));
+    return true;
+  };
+
+  /** Puntos de una compra que no suma sola (dueño): sumarlos, o quitar los que se sumaron a mano. */
+  BG.puntosCompraUI = async (v, accion) => {
+    const cli = BG.cliente(v.clienteId);
+    if (accion === 'quitar') {
+      const n = BG.puntosDeVenta(v);
+      const ok = await BG.modal({ titulo: 'Quitar los puntos de esta compra', cuerpo: '<p>Esta compra le sumó <strong>' + n + (n === 1 ? ' punto' : ' puntos') + '</strong> porque se eligió sumarlos a mano. Si los quitás, ' + esc(cli.nombre.split(' ')[0]) + ' tiene ' + n + ' menos. Lo que ya canjeó no se deshace.</p>',
+        acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Quitar puntos', valor: 'ok', clase: 'btn-danger-solid' }] });
+      if (ok !== 'ok') return false;
+      BG.quitarPuntosAparte(v.id);
+      BG.toast('Se quitaron ' + n + (n === 1 ? ' punto' : ' puntos') + '. Ahora tiene ' + BG.puntosDe(cli.id).puntos + '.');
+      return true;
+    }
+    const n = BG.puntosDeVenta(v, true);
+    const ok = await BG.modal({ titulo: 'Sumar puntos con esta compra', cuerpo: '<p>Esta compra no suma sola porque es ' + (BG.esAnterior(v) ? 'de antes del sistema' : 'de antes del ' + BG.fmtFecha(BG.configFidelidad().desde) + ', cuando empezó el programa')
+      + '. Si la sumás, ' + esc(cli.nombre.split(' ')[0]) + ' gana <strong>' + n + (n === 1 ? ' punto' : ' puntos') + '</strong>'
+      + (BG.saldoVenta(v) > 0 ? ' cuando termine de pagarla (debe ' + gs(BG.saldoVenta(v)) + ').' : ', que puede usar enseguida.') + ' Queda anotado que lo decidiste vos.</p>',
+      acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Sumar puntos', valor: 'ok', clase: 'btn-primary' }] });
+    if (ok !== 'ok') return false;
+    const res = BG.sumarPuntosAparte([v.id], 'Elegido en la compra ' + BG.fmtRecibo(v.recibo));
+    BG.toast(res.ganados ? 'Listo: sumó ' + res.ganados + ' puntos. Ahora tiene ' + BG.puntosDe(cli.id).puntos + '.' : 'Listo: va a sumar ' + res.pendientes + ' puntos cuando termine de pagar.');
+    return true;
+  };
+
   /* ── Cuotas con fecha ────────────────────────────────────────────────── */
 
   /** Editor de cuotas: cuántas, cada cuánto y la primera fecha, con la vista previa de cada una. */
@@ -397,7 +542,9 @@
       + '<span class="sale-date">' + BG.fmtFecha(v.fecha) + '<small>' + BG.fmtRecibo(v.recibo) + '</small></span>'
       + '<span class="sale-desc"><span class="row-title' + (v.anulada ? ' strike' : '') + '">' + (q ? BG.resaltar(cli.nombre, q) : esc(cli.nombre)) + '</span>'
       + '<span class="row-sub">' + esc(v.items.filter((it) => BG.cantidadViva(it) > 0).map((it) => it.descripcion).join(', ') || v.items.map((it) => it.descripcion).join(', ')) + ' · ' + n + (n === 1 ? ' artículo' : ' artículos') + ' · ' + gs(v.total) + '</span></span>'
-      + '<span class="sale-end">' + BG.estadoVenta(v) + (!v.anulada && BG.saldoVenta(v) > 0 ? (ep && ep.proxima ? BG.pillCuota(ep.proxima) : BG.edad(v.fecha)) : '')
+      + '<span class="sale-end">' + (BG.esAnterior(v) ? '<span class="pill pill-muted">' + icon('file') + 'Antes del sistema</span>' : '')
+      + BG.estadoVenta(v) + (!v.anulada && BG.saldoVenta(v) > 0 ? (ep && ep.proxima ? BG.pillCuota(ep.proxima) : BG.edad(v.fecha)) : '')
+      + ((v.agregados || []).length ? '<span class="pill pill-muted">' + icon('plus') + 'Con agregados</span>' : '')
       + ((v.devoluciones || []).length ? '<span class="pill pill-muted">' + icon('undo') + ((v.devoluciones || []).some((d) => d.tipo !== 'devolucion') ? 'Con cambio' : 'Con devolución') + '</span>' : '') + '</span></a></li>';
   }
 
@@ -476,10 +623,12 @@
       const esp = it.precioLista != null && it.precio !== it.precioLista;
       const ev = BG.evaluarPrecio(it.precio, it.costoUnitGs);
       const partes = [];
+      const ag = it.agregado ? (v.agregados || []).find((a) => a.id === it.agregado) : null;
+      if (ag) partes.push('<span class="t-favor">Se sumó el ' + BG.fmtFecha(ag.fecha) + '</span> a las ' + BG.fmtHora(ag.ts) + ' por ' + esc(ag.usuario));
       if (it.cambioDe) partes.push('<span class="t-favor">Se lo llevó a cambio</span> de «' + esc(v.items[it.cambioDe.item].descripcion) + '»');
       if (it.devueltas) partes.push('<span class="t-devuelto">Devolvió ' + it.devueltas + (it.devueltas === it.cantidad ? (it.cantidad === 1 ? '' : ' (todas)') : ' de ' + it.cantidad) + '</span>');
       if (esp) partes.push('<span class="t-especial">Precio especial</span> · lista <span class="strike">' + gs(it.precioLista) + '</span>');
-      if (duena) partes.push((!esp && it.margen ? 'Margen ' + it.margen + ' %' : ev ? 'margen ' + BG.fmtMargen(ev.margen) : 'Precio a mano') + ' · costo ' + gs(it.costoUnitGs) + '/u');
+      if (duena && it.productoId) partes.push((!esp && it.margen ? 'Margen ' + it.margen + ' %' : ev ? 'margen ' + BG.fmtMargen(ev.margen) : 'Precio a mano') + ' · costo ' + gs(it.costoUnitGs) + '/u');
       else if (esp && ev && BG.veGanancia()) partes.push('gana ' + gs(ev.ganancia) + '/u · margen ' + BG.fmtMargen(ev.margen));
       return partes.length ? '<div class="t-sub">' + partes.join(' · ') + '</div>' : '';
     };
@@ -516,6 +665,19 @@
         : '<p class="small">Quedó a cuenta sin fechas. Acordá cuotas para ver qué vence esta semana y qué está atrasado.</p>')
       + '</section>' : '';
     const textoWa = BG.textosWa.compra(cli, v);
+    // Puntos de esta compra: cuántos suma (o por qué no) y, para el dueño, sumarlos o quitarlos a mano.
+    const fid = BG.configFidelidad();
+    const ptsSi = fid.activo && !v.anulada ? BG.puntosDeVenta(v) : 0;
+    const ptsDarian = fid.activo && !v.anulada && !BG.ventaSumaPuntos(v) ? BG.puntosDeVenta(v, true) : 0;
+    const lineaPuntos = !fid.activo || v.anulada || (!ptsSi && !ptsDarian) ? ''
+      : '<div class="callout callout-soft">' + icon('star') + '<div class="grow"><span class="small">'
+        + (ptsSi ? (saldo > 0 ? 'Suma <strong>' + ptsSi + ' puntos</strong> cuando termine de pagarla.' : 'Esta compra le sumó <strong>' + ptsSi + ' puntos</strong>.')
+          + (v.puntosAparte ? ' Los sumó ' + esc(v.puntosAparte.usuario) + ' a mano el ' + BG.fmtFecha(v.puntosAparte.fecha) + '.' : '')
+          : 'No suma puntos sola: es ' + (v.anterior ? 'de antes del sistema' : 'de antes del ' + BG.fmtFecha(fid.desde) + ', cuando empezó el programa') + '. Daría ' + ptsDarian + (ptsDarian === 1 ? ' punto.' : ' puntos.'))
+        + '</span></div>'
+        + (duena && ptsDarian ? '<button type="button" class="btn btn-sm" data-accion="puntos-sumar">' + icon('star', 'i-sm') + 'Sumar puntos</button>' : '')
+        + (duena && v.puntosAparte ? '<button type="button" class="btn btn-sm btn-quiet" data-accion="puntos-quitar">Quitar</button>' : '')
+        + '</div>';
 
     const html = '<div class="page">'
       + '<a class="back-link" href="#/clientes/' + cli.id + '">' + icon('left', 'i-sm') + esc(cli.nombre) + '</a>'
@@ -531,10 +693,14 @@
       + (BG.puede('emitirRecibos') ? '<a class="btn" href="#/recibo/v/' + v.id + '">' + icon('receipt') + 'Recibo</a>' : '')
       + (!v.anulada && BG.puede('prepararEnvios') ? (envio ? '<a class="btn" href="#/envios/' + envio.id + '">' + icon('truck') + 'Envío ' + esc(envio.numero) + '</a>'
         : '<a class="btn" href="#/envios/nuevo?venta=' + v.id + '">' + icon('truck') + 'Preparar envío</a>') : '')
-      + (!v.anulada && hayVivos && BG.puede('devoluciones') ? '<button type="button" class="btn" data-accion="devolucion">' + icon('undo') + 'Devolución o cambio</button>' : '')
+      + (!v.anulada && !v.anterior && BG.puede('registrarVentas') ? '<button type="button" class="btn" data-accion="agregar">' + icon('plus') + 'Agregar artículos</button>' : '')
+      + (!v.anulada && !v.anterior && hayVivos && BG.puede('devoluciones') ? '<button type="button" class="btn" data-accion="devolucion">' + icon('undo') + 'Devolución o cambio</button>' : '')
       + (!v.anulada && hayVivos && BG.puede('preciosEspeciales') ? '<button type="button" class="btn" data-accion="ajustar-precio">' + icon('tag') + 'Ajustar precio</button>' : '')
       + (v.anulada || !BG.esDuena() ? '' : '<button type="button" class="btn btn-danger" data-accion="anular-venta">' + icon('ban') + 'Anular venta</button>')
       + '</div></div>'
+      + (v.anterior ? '<div class="callout">' + icon('file') + '<div><strong>Compra de antes del sistema.</strong> Se anotó el ' + BG.fmtFecha(v.anterior.ts.slice(0, 10)) + ' por ' + esc(v.anterior.usuario)
+        + (v.anterior.nota ? ' (' + esc(v.anterior.nota) + ')' : '') + '. No movió el stock ni entra en la caja ni en los reportes; lo que debe de acá se cobra como cualquier deuda.</div></div>' : '')
+      + lineaPuntos
       + (v.anulada ? '<div class="callout callout-bad">' + icon('ban') + '<div><strong>Venta anulada el ' + BG.fmtFecha(v.anulada.fecha) + ' a las ' + BG.fmtHora(v.anulada.ts) + ' por ' + esc(v.anulada.usuario) + '.</strong> Motivo: ' + esc(v.anulada.motivo) + '</div></div>' : '')
       + (!v.anulada && saldo > 0 && favorCliente > 0 ? '<div class="favor-banner favor-banner-sm">' + '<span class="favor-ic">' + icon('wallet') + '</span><div class="grow"><strong>' + esc(cli.nombre.split(' ')[0]) + ' tiene ' + gs(favorCliente) + ' a favor.</strong> '
         + '<span class="small">Se puede usar para pagar esta venta.</span></div>'
@@ -547,15 +713,16 @@
       + '</tbody><tfoot>'
       + (v.descuento.monto ? '<tr><td colspan="3">Subtotal</td><td class="num">' + gs(v.subtotal) + '</td></tr><tr><td colspan="3">Descuento' + (v.descuento.tipo === 'porcentaje' ? ' (' + BG.C.fmtNum(v.descuento.valor, 0, 2) + ' %)' : '') + '</td><td class="num">−' + gs(v.descuento.monto) + '</td></tr>' : '')
       + '<tr><td colspan="3">Total</td><td class="num">' + gs(v.total) + '</td></tr></tfoot></table></div>'
-      + (duena ? '<div class="card-foot"><span class="small muted">Solo ' + esc(BG.nombreDuena()) + ' ve esto</span><span class="small">Costo congelado <strong>' + gs(costo) + '</strong> · Ganancia real <strong>' + gs(ganancia) + '</strong>'
+      + (duena && !v.anterior ? '<div class="card-foot"><span class="small muted">Solo ' + esc(BG.nombreDuena()) + ' ve esto</span><span class="small">Costo congelado <strong>' + gs(costo) + '</strong> · Ganancia real <strong>' + gs(ganancia) + '</strong>'
         + (evVenta ? ' (' + BG.fmtMargen(evVenta.margen) + ' sobre el costo)' : '') + '</span></div>'
         : cambios.length && evVenta && BG.veGanancia() ? '<div class="card-foot"><span class="small muted">Por los precios especiales</span><span class="small">' + BG.infoPrecio(evVenta, false, true) + '</span></div>' : '')
       + '</section>'
       + '<section class="card"><div class="card-head"><h2>Pagos</h2>' + (v.anulada ? '' : '<span class="amount">' + (saldo > 0 ? 'Debe ' + gs(saldo) : 'Saldada') + '</span>') + '</div>'
       + (pagos.length ? '<ul class="lines">' + pagos.map((p) => '<li class="line"><div class="line-top"><div class="grow">'
         + '<div class="row-title' + (p.anulado ? ' strike' : '') + '">' + gs(p.total) + (p.excedente ? ' ' + BG.pillFavor(p.excedente) : '') + '</div>'
-        + '<div class="row-sub">' + BG.fmtFecha(p.fecha) + ' ' + BG.fmtHora(p.ts) + ' · ' + BG.fmtRecibo(p.recibo) + (p.inicial ? ' · pago inicial' : '') + ' · por ' + esc(p.usuario) + '</div>'
-        + '<div class="row-sub">' + p.partes.map((x) => BG.FORMAS[x.forma] + ' ' + gs(x.monto)).join(' + ') + '</div>'
+        + '<div class="row-sub">' + (p.anterior ? 'Pagado antes del sistema · anotado por ' + esc(p.usuario)
+          : BG.fmtFecha(p.fecha) + ' ' + BG.fmtHora(p.ts) + ' · ' + BG.fmtRecibo(p.recibo) + (p.inicial ? ' · pago inicial' : '') + ' · por ' + esc(p.usuario)) + '</div>'
+        + (p.anterior ? '' : '<div class="row-sub">' + p.partes.map((x) => BG.FORMAS[x.forma] + ' ' + gs(x.monto) + (x.deCanje ? ' (' + gs(x.deCanje) + ' con puntos)' : '')).join(' + ') + '</div>')
         + (p.anulado ? '<div class="row-sub">Anulado el ' + BG.fmtFecha(p.anulado.fecha) + ': ' + esc(p.anulado.motivo) + '</div>' : '')
         + '</div>' + (p.anulado || v.anulada || !BG.esDuena() ? '' : '<button type="button" class="btn btn-sm btn-quiet" data-accion="anular-pago" data-id="' + p.id + '">Anular</button>')
         + '</div></li>').join('')
@@ -582,6 +749,9 @@
             if (b.dataset.accion === 'ajustar-precio' && (await BG.ajustarPrecioUI(v))) BG.render();
             if (b.dataset.accion === 'devolucion' && (await BG.devolucionUI(v))) BG.render();
             if (b.dataset.accion === 'plan' && (await BG.planUI(v))) BG.render();
+            if (b.dataset.accion === 'agregar' && (await BG.agregarArticulosUI(v))) BG.render();
+            if (b.dataset.accion === 'puntos-sumar' && (await BG.puntosCompraUI(v, 'sumar'))) BG.render();
+            if (b.dataset.accion === 'puntos-quitar' && (await BG.puntosCompraUI(v, 'quitar'))) BG.render();
             if (b.dataset.accion === 'anular-pago') {
               const pg = BG.db.pagos.find((x) => x.id === b.dataset.id);
               if (await BG.anularPagoUI(pg)) BG.render();
