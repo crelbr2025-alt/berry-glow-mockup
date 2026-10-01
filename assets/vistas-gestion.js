@@ -149,6 +149,7 @@
       const [desde, hasta] = rango(e.periodo);
       const enRango = (f) => f >= desde && f <= hasta;
       const cuerpo = $('#rep-cuerpo', root);
+      const mesNuevo = conPeriodo && e.periodo === 'mes' ? BG.htmlMesQueEmpieza(BG.cierreMesAnterior()) : '';
       if (e.tab === 'ventas') {
         const ventas = BG.db.ventas.filter((v) => BG.ventaDelSistema(v) && enRango(v.fecha));
         const pagos = BG.db.pagos.filter((p) => BG.pagoDelSistema(p) && enRango(p.fecha));
@@ -162,7 +163,7 @@
           const fd = new Date(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, Number(d.slice(8, 10)));
           dias.push({ fecha: d, etiqueta: BG.DIAS[fd.getDay()] + ' ' + BG.fmtFechaCorta(d), corta: String(fd.getDate()), valor: sum(del, (v) => v.total), n: del.length });
         }
-        cuerpo.innerHTML = '<div class="tiles">' + tile('Vendido', gs(vendido), ventas.length + ' ventas') + tile('Cobrado', gs(cobrado), 'por fecha de cobro')
+        cuerpo.innerHTML = mesNuevo + '<div class="tiles">' + tile('Vendido', gs(vendido), ventas.length + ' ventas') + tile('Cobrado', gs(cobrado), 'por fecha de cobro')
           + tile('Ticket promedio', gs(ventas.length ? Math.round(vendido / ventas.length) : 0)) + tile('Quedó a cuenta', gs(sum(ventas, BG.saldoVenta)), 'de estas ventas, todavía sin cobrar') + '</div>'
           + (dias.length > 1 ? '<section class="card"><div class="card-head"><h2>Ventas por día</h2><span class="small muted">' + BG.fmtFecha(desde) + ' al ' + BG.fmtFecha(hasta) + '</span></div>' + grafico('g-ventas', dias) + '</section>' : '')
           + '<section class="card"><div class="card-head"><h2>Cobrado por forma de pago</h2></div><div class="table-wrap table-bare"><table class="table"><thead><tr><th>Forma</th><th class="num">Monto</th></tr></thead><tbody>'
@@ -315,7 +316,7 @@
         const costo = sum(ventas, (v) => v.total - BG.gananciaVenta(v));
         const gan = neto - costo;
         const res = BG.resultado(desde, hasta);
-        cuerpo.innerHTML = '<div class="tiles tiles-compact">' + tile('Ventas netas', gs(neto), 'con descuentos') + tile('Costo de lo vendido', gs(costo), 'costo congelado de cada artículo')
+        cuerpo.innerHTML = mesNuevo + '<div class="tiles tiles-compact">' + tile('Ventas netas', gs(neto), 'con descuentos') + tile('Costo de lo vendido', gs(costo), 'costo congelado de cada artículo')
           + tile('Ganancia bruta', gs(gan), (costo ? Math.round((gan / costo) * 100) : 0) + ' % sobre el costo') + tile('Ganancia neta', gs(res.neta), 'después de gastos', res.neta < 0 ? 'tile-bad' : 'tile-good') + '</div>'
           + '<section class="card stack"><div class="card-head"><h2>De la ganancia bruta a la neta</h2><a class="small" href="#/gastos">Cargar gastos</a></div>' + BG.htmlResultado(res) + '</section>'
           + '<p class="callout">' + icon('info') + '<span>Ganancia bruta = precio al que se vendió − costo congelado del producto. El 50/80/100/120 % es solo la sugerencia al cargar; acá cuentan los descuentos y los precios editados.</span></p>'

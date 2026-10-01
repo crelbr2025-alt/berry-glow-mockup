@@ -603,6 +603,44 @@
   BG.mesActual = () => { const h = hoy(); return [h.slice(0, 8) + '01', h]; };
   BG.mesAnterior = () => { const fin = sumarDias(hoy().slice(0, 8) + '01', -1); return [fin.slice(0, 8) + '01', fin]; };
 
+  /* ── El mes que recién empieza ──
+   * El día 1, «Este mes» da todo en cero y parece que se borró algo (pasó el 01/10/2026: el dueño creyó que se habían
+   * borrado lo que faltaba cobrar y la ganancia). Los primeros días del mes, o mientras el mes no tenga ventas, las
+   * pantallas por período muestran al lado cómo cerró el anterior. Las cifras salen de BG.resultado (la misma fórmula
+   * de la ganancia) y lo cobrado es la plata que entró, sin el saldo a favor aplicado (igual que en Reportes).
+   * Devuelve null pasados esos días con ventas, o si el mes anterior no tuvo ni ventas ni cobros.
+   */
+  BG.DIAS_MES_NUEVO = 7;
+  BG.cierreMesAnterior = (h) => {
+    h = h || hoy();
+    const desdeAct = h.slice(0, 8) + '01';
+    const dia = Number(h.slice(8, 10));
+    const hayVentas = BG.db.ventas.some((v) => BG.ventaDelSistema(v) && v.fecha >= desdeAct && v.fecha <= h);
+    if (dia > BG.DIAS_MES_NUEVO && hayVentas) return null;
+    const hasta = sumarDias(desdeAct, -1);
+    const desde = hasta.slice(0, 8) + '01';
+    const res = BG.resultado(desde, hasta);
+    const f = BG.totalesPorForma(BG.db.pagos.filter((p) => BG.pagoDelSistema(p) && p.fecha >= desde && p.fecha <= hasta));
+    const cobrado = f.efectivo + f.transferencia + f.qr + f.tarjeta;
+    if (!res.ventas && !cobrado) return null;
+    return {
+      mes: MESES[Number(hasta.slice(5, 7)) - 1], mesActual: MESES[Number(h.slice(5, 7)) - 1], dia: dia, recienEmpieza: dia <= BG.DIAS_MES_NUEVO, conVentas: hayVentas,
+      desde: desde, hasta: hasta, ventas: res.ventas, vendido: res.ventasNetas, cobrado: cobrado, bruta: res.bruta, neta: res.neta,
+    };
+  };
+  /** El aviso para las pantallas por período (solo del dueño). El botón cambia a «Mes anterior» con el mismo data-periodo de los chips. */
+  BG.htmlMesQueEmpieza = (c) => {
+    if (!c) return '';
+    const may = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+    const nw = (s) => '<span class="nowrap">' + s + '</span>';
+    const cuando = c.dia === 1 ? ' (hoy es el día 1)' : ' (van ' + c.dia + ' días)';
+    const porQue = c.conVentas ? ' recién empieza' + cuando + ':</strong> «Este mes» ' + (c.dia === 1 ? 'es solo lo de hoy. ' : 'cuenta solo desde el día 1. ')
+      : (c.recienEmpieza ? ' recién empieza' + cuando + ' y todavía' : ' todavía') + ' no tiene ventas:</strong> por eso «Este mes» da cero. No se borró nada. ';
+    return '<div class="callout callout-mes" role="note">' + BG.icon('info') + '<div class="grow"><strong>' + may(c.mesActual) + porQue + may(c.mes) + ' cerró con ' + nw(gs(c.vendido)) + ' vendidos en '
+      + c.ventas + (c.ventas === 1 ? ' venta' : ' ventas') + ', ' + nw(gs(c.cobrado)) + ' cobrados y ganancia bruta ' + nw(gs(c.bruta))
+      + ' (neta ' + nw(gs(c.neta)) + ').</div><button type="button" class="btn btn-sm" data-periodo="anterior">Ver ' + c.mes + '</button></div>';
+  };
+
   /* ── Límite de crédito (lo configura el dueño; en el mostrador solo se ve el aviso) ── */
 
   BG.configCredito = () => Object.assign({ activo: false, limite: 0, diasAtraso: 15 }, BG.db.config.credito);

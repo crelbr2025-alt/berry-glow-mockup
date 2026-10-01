@@ -105,6 +105,7 @@
         .sort((a, b) => b.v - a.v);
       const max = Math.max(1, ...barras.map((x) => x.v));
       $('#g-cuerpo', root).innerHTML = '<p class="small muted">Del ' + BG.fmtFecha(desde) + ' al ' + BG.fmtFecha(hasta) + '</p>'
+        + (e.periodo === 'mes' ? BG.htmlMesQueEmpieza(BG.cierreMesAnterior()) : '')
         + '<div class="tiles tiles-compact">' + tile('Ganancia bruta', gs(r.bruta), 'ventas − costo congelado') + tile('Gastos', gs(r.totalGastos), 'cargados y automáticos')
         + tile('Ganancia neta', gs(r.neta), r.neta >= 0 ? 'lo que queda de verdad' : 'el período dio pérdida', r.neta >= 0 ? 'tile-good' : 'tile-bad') + '</div>'
         + '<div class="grid-2 grid-charts"><section class="card stack"><div class="card-head"><h2>Cómo se llega a la ganancia neta</h2></div>' + BG.htmlResultado(r) + '</section>'
@@ -130,7 +131,7 @@
         BG.engancharAnulados(root, pintar);
         root.addEventListener('click', async (ev) => {
           const p = ev.target.closest('[data-periodo]');
-          if (p) { e.periodo = p.dataset.periodo; $$('[data-periodo]', root).forEach((x) => x.setAttribute('aria-pressed', String(x === p))); pintar(); return; }
+          if (p) { e.periodo = p.dataset.periodo; $$('.chip[data-periodo]', root).forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.periodo === e.periodo))); pintar(); return; }
           try {
             if (ev.target.closest('[data-accion="gasto"]') && (await BG.gastoUI())) pintar();
             const a = ev.target.closest('[data-anular]');
@@ -485,7 +486,7 @@
     const pagos = BG.pagosDePedido(p.id);
     const total = -pagos.reduce((a, m) => a + m.monto, 0);
     if (est === 'cancelado' && !pagos.length) return '';
-    return '<section class="card stack"><div class="card-head"><h2>' + icon('wallet') + 'Pago del pedido</h2>'
+    return '<section class="card stack"><div class="card-head card-head-wrap"><h2>' + icon('wallet') + 'Pago del pedido</h2>'
       + (est !== 'cancelado' ? '<button type="button" class="btn btn-sm' + (pagos.length ? '' : ' btn-primary') + '" data-accion="pagar-pedido">' + icon('wallet', 'i-sm') + (pagos.length ? 'Otro pago' : 'Pagar desde la cuenta de ahorro') + '</button>' : '') + '</div>'
       + (pagos.length ? '<ul class="lines">' + pagos.map((m) => '<li class="line"><div class="row-title">' + gs(-m.monto) + ' de la cuenta de ahorro</div><div class="row-sub">' + BG.fmtFecha(m.fecha) + ' · ' + esc(m.usuario) + ' · ' + esc(m.concepto) + '</div></li>').join('')
         + '</ul><p class="small">Pagado en total: <strong>' + gs(total) + '</strong> · en la cuenta quedan ' + gs(BG.saldoAhorro()) + '. <a href="#/ahorro">Ver la cuenta</a></p>'

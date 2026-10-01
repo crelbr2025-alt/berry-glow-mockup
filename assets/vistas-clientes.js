@@ -246,6 +246,8 @@
     const meta = !duena && u.comision && u.comision.activa && u.comision.ve ? BG.htmlMeta(u, BG.comisionDe(u, mDesde, mHasta), 'Tu mes: meta y comisión') : '';
     const quietos = duena ? BG.db.productos.filter((p) => BG.disponibles(p) > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO) : [];
     const resMes = duena ? BG.resultado(mDesde, mHasta) : null;
+    // Los primeros días del mes la ganancia da casi cero: al lado va cómo cerró el anterior, para que no parezca que se borró algo.
+    const cierre = duena ? BG.cierreMesAnterior() : null;
     const cumples = duena ? BG.db.clientes.map((c) => ({ c: c, k: BG.cumpleDe(c) })).filter((x) => x.k && x.k.enSemana && x.k.dias >= -1).sort((a, b) => a.k.dias - b.k.dias) : [];
     const pedidosCamino = duena ? BG.db.pedidos.filter((p) => BG.estadoPedido(p) === 'en_camino') : [];
     const ultimoConteo = (BG.db.conteos || []).slice().sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
@@ -292,7 +294,9 @@
       + '<div class="tile"><span class="tile-label">Cobrado hoy</span><span class="tile-value">' + gs(cobrado) + '</span><span class="tile-sub">' + desglose + (devueltoHoy ? ' · devuelto ' + gs(devueltoHoy) : '') + '</span></div>'
       + tileLink('#/clientes?filtro=deben', 'Por cobrar', gs(sum(deudores, (d) => d.saldo)), deudores.length + ' clientes con saldo')
       + tileLink('#/clientes?filtro=favor', icon('wallet', 'i-sm') + 'Saldo a favor', gs(sum(aFavor, (x) => x.favor)), aFavor.length + (aFavor.length === 1 ? ' cliente: la tienda le debe' : ' clientes: la tienda les debe'), 'tile-favor')
-      + (duena ? tileLink('#/gastos', 'Ganancia neta de ' + BG.MESES[Number(mes.slice(5, 7)) - 1], gs(resMes.neta), 'bruta ' + gs(resMes.bruta) + ' − gastos ' + gs(resMes.totalGastos), resMes.neta < 0 ? 'tile-bad' : '') : '')
+      + (duena ? tileLink('#/gastos', 'Ganancia neta de ' + BG.MESES[Number(mes.slice(5, 7)) - 1], gs(resMes.neta),
+        cierre ? cierre.mes.charAt(0).toUpperCase() + cierre.mes.slice(1) + ' cerró en <span class="nowrap">' + gs(cierre.neta) + '</span>'
+          : 'bruta ' + gs(resMes.bruta) + ' − gastos ' + gs(resMes.totalGastos), resMes.neta < 0 ? 'tile-bad' : '') : '')
       + '</section>'
       + '<div class="grid-2">' + cardCuotas() + cardFavor() + '</div>'
       + '<div class="grid-2">'

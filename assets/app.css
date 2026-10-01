@@ -326,6 +326,10 @@ mark { background: var(--glow-soft); color: inherit; border-radius: 3px; padding
 .callout-warn { background: var(--warn-soft); color: var(--warn); }
 .callout-bad { background: var(--bad-soft); color: var(--bad); }
 .callout-good { background: var(--good-soft); color: var(--good); }
+/* El mes que recién empieza: el texto toma el ancho y el botón baja a su propia línea si no entra (celular). */
+.callout-mes { flex-wrap: wrap; }
+.callout-mes > .grow { flex: 1 1 240px; min-width: 0; }
+.callout-mes > .btn { margin-left: auto; align-self: center; }
 .callout strong { color: inherit; }
 
 /* ── Cifras (stat tiles) ──────────────────────────────────────────────── */

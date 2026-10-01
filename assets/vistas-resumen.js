@@ -261,6 +261,7 @@
       });
 
       $('#rs-cuerpo', root).innerHTML = '<p class="small muted">Del ' + BG.fmtFecha(desde) + ' al ' + BG.fmtFecha(hasta) + '</p>'
+        + (e.periodo === 'mes' ? BG.htmlMesQueEmpieza(BG.cierreMesAnterior()) : '')
         + '<div class="tiles tiles-5 tiles-compact">' + tile('Vendido', gs(vendido), ventas.length + (ventas.length === 1 ? ' venta' : ' ventas'))
         + tile('Cobrado', gs(cobrado), 'plata que entró en el período') + tile('Ganancia bruta', gs(ganancia), 'precio de venta − costo congelado')
         + tile('Por cobrar hoy', gs(sum(deudores, (d) => d.saldo)), deudores.length + ' clientes') + '<a class="tile tile-link' + (res.neta < 0 ? ' tile-bad' : ' tile-good') + '" href="#/gastos"><span class="tile-label">Ganancia neta</span><span class="tile-value">' + gs(res.neta) + '</span><span class="tile-sub">después de gastos ' + gs(res.totalGastos) + '</span></a>' + '</div>'
@@ -300,7 +301,7 @@
           const b = ev.target.closest('[data-periodo]');
           if (!b) return;
           e.periodo = b.dataset.periodo;
-          $$('[data-periodo]', root).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+          $$('.chip[data-periodo]', root).forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.periodo === e.periodo)));
           pintar();
         });
       },
