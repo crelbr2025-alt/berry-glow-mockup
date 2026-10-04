@@ -21,7 +21,10 @@
   const soloDigitos = (s) => String(s == null ? '' : s).replace(/\D/g, '');
   const sum = (arr, f) => arr.reduce((s, x) => s + (f ? f(x) : x), 0);
   const gs = (n) => C.fmtGs(n);
-  const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  // Identificadores: la hora, un contador de este aparato (dos registros creados en el mismo milisegundo nunca chocan) y cuatro
+  // caracteres al azar (dos aparatos distintos tampoco).
+  let secuenciaUid = 0;
+  const uid = (p) => p + Date.now().toString(36) + (secuenciaUid++ % 1296).toString(36).padStart(2, '0') + Math.random().toString(36).slice(2, 6);
 
   // Fechas: siempre la fecha local del dispositivo (Paraguay), nunca la de UTC.
   const isoLocal = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
@@ -84,7 +87,7 @@
     // Opcionales que se agregaron sin cambiar la versión (ver arriba): la libreta de la cuenta de ahorro.
     if (!Array.isArray(d.ahorro)) d.ahorro = [];
     // Y los de la ronda del 04/10: avisos de cobranza, apartados con seña y lo que las clientas pidieron.
-    ['recordatorios', 'reservas', 'deseos'].forEach((k) => { if (!Array.isArray(d[k])) d[k] = []; });
+    ['recordatorios', 'reservas', 'deseos', 'puntosManuales'].forEach((k) => { if (!Array.isArray(d[k])) d[k] = []; });
     return d;
   };
   /** Vuelve a los datos de ejemplo del día de hoy. No toca los datos de la tienda. */
@@ -377,6 +380,128 @@
     const reconstruido = sum(Array.from(esperado.values()));
     return { registro: registro, reconstruido: reconstruido, negativos: negativos, diferencias: diferencias, ok: !negativos.length && !diferencias.length && registro === reconstruido };
   };
+  /* ── Revisión de integridad (solo lectura) ─────────────────────────────────
+   * Los dos cuadres comparan la plata contra sí misma; esta revisión mira que cada dato sea coherente con los demás:
+   * que nada apunte a algo que no existe, que cada monto sea un entero en guaraníes, que el total de cada compra sea
+   * el que dan sus artículos, que cada pago sume lo que entregó, que el stock no sea negativo y que los apartados
+   * estén respaldados. NO modifica nada. Devuelve { ok, problemas: [{ codigo, texto, grave }] }; `grave: false` es un
+   * aviso (algo raro pero que no rompe cuentas). La usan las pruebas, el recorrido al azar y Ajustes → Revisar mis datos.
+   */
+  BG.revisarIntegridad = () => {
+    const db = BG.db;
+    const problemas = [];
+    const mal = (codigo, texto, grave) => { if (problemas.length < 200) problemas.push({ codigo: codigo, texto: texto, grave: grave !== false }); };
+    const ent = (n) => typeof n === 'number' && Number.isFinite(n) && Math.round(n) === n;
+    const fechaOk = (f) => /^\d{4}-\d{2}-\d{2}$/.test(f || '') && !isNaN(new Date(f + 'T00:00:00').getTime());
+    const monto = (donde, campo, n, minimo) => { if (!ent(n) || n < (minimo == null ? 0 : minimo)) mal('monto', donde + ': «' + campo + '» no es un monto válido (' + n + ')'); };
+    const lista = (k) => (Array.isArray(db[k]) ? db[k] : []);
+    const ids = (k) => new Set(lista(k).map((x) => x.id));
+    const cliIds = ids('clientes');
+    const proIds = ids('productos');
+    const venIds = ids('ventas');
+    const pagIds = ids('pagos');
+    for (const k of ['clientes', 'productos', 'ventas', 'pagos', 'creditos', 'egresos', 'canjes', 'envios', 'reservas', 'deseos', 'gastos', 'pedidos', 'conteos', 'ahorro', 'puntosManuales']) {
+      const vistos = new Set();
+      for (const x of lista(k)) { if (x.id == null) mal('id', k + ': hay un registro sin identificador'); else if (vistos.has(x.id)) mal('id', k + ': el identificador ' + x.id + ' está repetido'); vistos.add(x.id); }
+    }
+    // Compras
+    const recibos = new Map();
+    for (const v of lista('ventas')) {
+      const d = 'Compra ' + BG.fmtRecibo(v.recibo);
+      if (!cliIds.has(v.clienteId)) mal('huerfano', d + ': la clienta no existe');
+      if (!fechaOk(v.fecha)) mal('fecha', d + ': fecha inválida (' + v.fecha + ')');
+      if (!Array.isArray(v.items) || !v.items.length) { mal('items', d + ': no tiene artículos'); continue; }
+      if (recibos.has(v.recibo)) mal('recibo', d + ': el número de recibo está repetido'); recibos.set(v.recibo, true);
+      monto(d, 'total', v.total); monto(d, 'subtotal', v.subtotal);
+      v.items.forEach((it, i) => {
+        const w = d + ', artículo ' + (i + 1);
+        // Una corrección puede dejar una línea en 0 (se sacó de la compra); de otra forma, no.
+        if (!ent(it.cantidad) || it.cantidad < ((v.correcciones || []).length ? 0 : 1)) mal('cantidad', w + ': cantidad inválida (' + it.cantidad + ')');
+        if (!ent(it.devueltas || 0) || (it.devueltas || 0) < 0 || (it.devueltas || 0) > it.cantidad) mal('cantidad', w + ': devueltas fuera de rango (' + it.devueltas + ' de ' + it.cantidad + ')');
+        monto(w, 'precio', it.precio); if (it.costoUnitGs != null) monto(w, 'costo', it.costoUnitGs);
+        // Un artículo borrado por error de una compra anulada es normal (la compra guarda su descripción y su precio).
+        if (it.productoId && !proIds.has(it.productoId)) mal('huerfano', w + ': el producto no existe', !!v.anulada === false);
+        if (!v.anterior && !it.productoId) mal('items', w + ': no es de antes del sistema y no tiene producto', false);
+      });
+      if (!v.anulada) {
+        const t = BG.totalesDe(v);
+        if (t.total !== v.total) mal('total', d + ': el total guardado (' + v.total + ') no es el que dan sus artículos (' + t.total + ')');
+        if (t.subtotal !== v.subtotal) mal('total', d + ': el subtotal guardado (' + v.subtotal + ') no es el que dan sus artículos (' + t.subtotal + ')');
+        const saldo = BG.saldoVenta(v);
+        if (saldo < 0) mal('saldo', d + ': pagó ' + (-saldo) + ' de más');
+        // En cero solo cuando se devolvió todo (la compra queda en pie, sin nada que cobrar).
+        if (v.total < 0 || (v.total === 0 && v.items.some((it) => BG.cantidadViva(it) > 0))) mal('total', d + ': el total es cero o negativo');
+        if (v.plan) {
+          const sumaPlan = v.plan.cuotas.reduce((a, c) => a + c.monto, 0);
+          if (sumaPlan !== v.plan.saldoInicial) mal('plan', d + ': las cuotas suman ' + sumaPlan + ' y el saldo inicial era ' + v.plan.saldoInicial);
+        }
+      }
+      if ((v.aFavor || 0) < 0 || !ent(v.aFavor || 0)) mal('monto', d + ': «a favor» inválido (' + v.aFavor + ')');
+    }
+    // Pagos
+    for (const p of lista('pagos')) {
+      const d = 'Pago ' + BG.fmtRecibo(p.recibo) + (p.ventaId ? '' : ' (seña)');
+      if (!cliIds.has(p.clienteId)) mal('huerfano', d + ': la clienta no existe');
+      if (p.ventaId) {
+        const v = BG.venta(p.ventaId);
+        if (!v) mal('huerfano', d + ': la compra no existe');
+        else if (v.clienteId !== p.clienteId) mal('cliente', d + ': es de otra clienta que la compra a la que se aplicó');
+      }
+      if (!fechaOk(p.fecha)) mal('fecha', d + ': fecha inválida (' + p.fecha + ')');
+      monto(d, 'total', p.total); monto(d, 'excedente', p.excedente || 0);
+      let suma = 0;
+      for (const x of p.partes || []) {
+        monto(d, 'parte ' + x.forma, x.monto, 1);
+        if (!BG.FORMAS[x.forma]) mal('forma', d + ': forma de pago desconocida (' + x.forma + ')');
+        suma += x.monto;
+      }
+      if (!(p.partes || []).length) mal('pago', d + ': no tiene partes');
+      if (suma !== p.total + (p.excedente || 0)) mal('pago', d + ': las partes suman ' + suma + ' y el pago dice ' + p.total + ' + ' + (p.excedente || 0) + ' de excedente');
+    }
+    // Saldo a favor, devoluciones en plata, canjes y gastos
+    for (const c of lista('creditos')) { if (!cliIds.has(c.clienteId)) mal('huerfano', 'Saldo a favor «' + c.motivo + '»: la clienta no existe'); if (!ent(c.monto) || c.monto === 0) mal('monto', 'Saldo a favor «' + c.motivo + '»: monto inválido (' + c.monto + ')'); }
+    for (const e of lista('egresos')) { if (!cliIds.has(e.clienteId)) mal('huerfano', 'Plata devuelta: la clienta no existe'); monto('Plata devuelta', 'monto', e.monto, 1); }
+    for (const k of lista('canjes')) { if (!cliIds.has(k.clienteId)) mal('huerfano', 'Canje de puntos: la clienta no existe'); monto('Canje de puntos', 'monto', k.monto, 1); if (!ent(k.puntos) || k.puntos < 1) mal('monto', 'Canje de puntos: puntos inválidos'); }
+    for (const g of lista('gastos')) { monto('Gasto «' + g.concepto + '»', 'monto', g.monto, 1); if (!fechaOk(g.fecha)) mal('fecha', 'Gasto «' + g.concepto + '»: fecha inválida'); }
+    for (const e of lista('envios')) { if (!cliIds.has(e.clienteId)) mal('huerfano', 'Envío ' + e.numero + ': la clienta no existe'); if (e.ventaId && !venIds.has(e.ventaId)) mal('huerfano', 'Envío ' + e.numero + ': la compra no existe'); }
+    for (const e of lista('emisiones')) { if (e.clienteId && !cliIds.has(e.clienteId)) mal('huerfano', 'Recibo emitido: la clienta no existe', false); }
+    // Stock y apartados
+    for (const p of lista('productos')) {
+      if (!ent(p.cantidad) || p.cantidad < 0) mal('stock', 'Producto «' + p.descripcion + '»: cantidad cargada inválida (' + p.cantidad + ')');
+      if (BG.disponibles(p) < 0) mal('stock', 'Producto «' + p.descripcion + '»: el stock quedó en ' + BG.disponibles(p));
+      if (p.precioVenta != null && !ent(p.precioVenta)) mal('monto', 'Producto «' + p.descripcion + '»: precio inválido');
+      else if (!p.archivado && BG.vendibles(p) < 0) mal('apartado', 'Producto «' + p.descripcion + '»: hay más apartado (' + BG.reservadas(p.id) + ') que stock (' + BG.disponibles(p) + ')', false);
+    }
+    for (const a of lista('ajustesStock')) if (!proIds.has(a.productoId)) mal('huerfano', 'Ajuste de stock: el producto no existe', false);
+    for (const r of lista('reservas')) {
+      if (!['activa', 'retirada', 'liberada'].includes(r.estado)) mal('apartado', 'Apartado: estado desconocido (' + r.estado + ')');
+      if (!cliIds.has(r.clienteId)) mal('huerfano', 'Apartado: la clienta no existe');
+      for (const it of r.items || []) if (!proIds.has(it.productoId)) mal('huerfano', 'Apartado: un producto no existe', r.estado === 'activa');
+      if (r.sena && !pagIds.has(r.sena.pagoId)) mal('huerfano', 'Apartado: el pago de la seña no existe');
+    }
+    for (const x of lista('deseos')) if (x.clienteId && !cliIds.has(x.clienteId)) mal('huerfano', 'Pedido «' + x.texto + '»: la clienta no existe');
+    for (const x of lista('recordatorios')) if (!cliIds.has(x.clienteId)) mal('huerfano', 'Aviso de cobranza: la clienta no existe', false);
+    for (const x of lista('puntosManuales')) {
+      if (!cliIds.has(x.clienteId)) mal('huerfano', 'Puntos dados a mano: la clienta no existe');
+      if (!ent(x.puntos) || x.puntos < 1 || x.puntos % BG.PUNTOS_PASO !== 0) mal('puntos', 'Puntos dados a mano: cantidad inválida (' + x.puntos + ')');
+    }
+    // Numeración de recibos: el próximo tiene que ser mayor que todos los usados
+    const usados = lista('ventas').map((v) => v.recibo).concat(lista('pagos').map((p) => p.recibo));
+    const mayor = usados.length ? Math.max.apply(null, usados) : 0;
+    if (db.config && db.config.proximoRecibo <= mayor) mal('recibo', 'El próximo número de recibo (' + db.config.proximoRecibo + ') no es mayor que el último usado (' + mayor + ')');
+    // Puntos: nadie canjeó más de lo que ganó
+    for (const c of lista('clientes')) {
+      const p = BG.puntosDe(c.id);
+      // Aviso y no error: si se anula la compra que dio puntos ya canjeados, el canje no se revierte (decisión pendiente, HANDOFF §13).
+      if (p && p.canjeados > p.ganados) mal('puntos', c.nombre + ': canjeó ' + p.canjeados + ' puntos y hoy solo respaldan ' + p.ganados + ' (se anuló o se devolvió una compra que ya había canjeado)', false);
+    }
+    const cu = BG.cuadre();
+    if (!cu.ok) mal('cuadre', 'Las cuentas por cobrar no cuadran (' + cu.porClientes + ' / ' + cu.libro + ')');
+    const cf = BG.cuadreFavor();
+    if (!cf.ok) mal('cuadre', 'Los saldos a favor no cuadran (registro ' + cf.registro + ' / reconstruido ' + cf.reconstruido + ')');
+    return { ok: !problemas.some((x) => x.grave), problemas: problemas };
+  };
+
   /**
    * Libro de la cuenta de una clienta (lo usan la ficha y el estado de cuenta: una sola cuenta en el sistema).
    * La compra con su total original; después cada ajuste de precio, artículo agregado, devolución o cambio en su
@@ -547,6 +672,9 @@
     }
     if ((BG.db.ajustesStock || []).some((a) => a.productoId === p.id)) {
       return { ok: false, archivar: true, razon: 'Ya entró en un conteo de inventario: se corrige con otro conteo, no borrando.' };
+    }
+    if ((BG.db.reservas || []).some((r) => r.estado === 'activa' && r.items.some((it) => it.productoId === p.id))) {
+      return { ok: false, razon: 'Está apartado para una clienta: liberá el apartado antes de borrarlo.' };
     }
     // La vendedora puede borrar lo que cargó ella (los de antes, sin usuario anotado, solo el dueño).
     const mio = !!p.usuario && p.usuario === BG.usuario().nombre;
@@ -802,7 +930,9 @@
   BG.puntosDe = (cid) => {
     const f = BG.configFidelidad();
     if (!f.activo) return null;
-    let ganados = 0;
+    // Los que el dueño le dio a mano (sin compra de por medio) cuentan como ganados: se canjean igual que los demás.
+    const deLaTienda = BG.totalPuntosManuales(cid);
+    let ganados = deLaTienda;
     let pendientes = 0;
     const porGanar = [];
     for (const v of BG.ventasDeCliente(cid)) {
@@ -816,8 +946,17 @@
     }
     const canjeados = sum((BG.db.canjes || []).filter((k) => k.clienteId === cid), (k) => k.puntos);
     const puntos = Math.max(0, ganados - canjeados);
-    return { puntos: puntos, valor: puntos * f.valorPunto, canjeable: puntos >= f.minimo, ganados: ganados, canjeados: canjeados, pendientes: pendientes, porGanar: porGanar };
+    return { puntos: puntos, valor: puntos * f.valorPunto, canjeable: puntos >= f.minimo, ganados: ganados, canjeados: canjeados, pendientes: pendientes, porGanar: porGanar, deLaTienda: deLaTienda };
   };
+  /**
+   * Puntos que el dueño le da a una clienta a mano, sin que haya comprado nada (de 10 en 10): se anotan en `db.puntosManuales`
+   * con quién, cuándo y por qué. Nada se borra: se anulan (BG.quitarPuntosManuales).
+   */
+  BG.PUNTOS_PASO = 10;
+  BG.PUNTOS_MANUAL_MAX = 500;
+  BG.MOTIVOS_PUNTOS = ['Regalo de la tienda', 'Compras de antes sin anotar', 'Corrección de un error', 'Otro'];
+  BG.puntosManualesDe = (cid) => (BG.db.puntosManuales || []).filter((x) => x.clienteId === cid && !x.anulado).sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+  BG.totalPuntosManuales = (cid) => sum(BG.puntosManualesDe(cid), (x) => x.puntos);
   /**
    * ¿Esta compra suma puntos? Las de antes de que empezara el programa (`fidelidad.desde`) y las compras
    * anteriores al sistema no suman solas: el dueño puede elegir que sumen, compra por compra (`v.puntosAparte`).
@@ -925,6 +1064,8 @@
     return Object.assign({}, p, {
       minimo: f.minimo, valorPunto: f.valorPunto, cadaGs: f.cadaGs, terminos: f.terminos,
       ganadas: ganadas, canjes: BG.canjesDe(cid),
+      /** Lo que le dio la tienda a mano (en el comprobante sale como «Puntos que te dio la tienda», sin el motivo interno). */
+      manuales: BG.puntosManualesDe(cid),
       /** Puntos que le faltan para llegar al mínimo de canje (0 si ya puede). */
       falta: Math.max(0, f.minimo - p.puntos),
       /** Lo que ya canjeó y todavía no gastó: se usa en compras, no se devuelve en plata. */

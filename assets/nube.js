@@ -208,6 +208,7 @@
       if (cache && cache.datos) { N.version = cache.version || 0; BG.usarDatosDeLaNube(cache.datos); }
       N.activa = true;
       estado('sin-conexion');
+      if (cache && cache.sinSubir) { pendiente = true; setTimeout(() => { empujar(); }, 6000); }   // lo que quedó sin subir se reintenta solo
       BG.render();
       return;
     }
@@ -227,9 +228,24 @@
       N.actualizado = fila.actualizado;
       N.por = fila.por;
       N.activa = true;
-      BG.usarDatosDeLaNube(fila.datos);
-      BG.escribir(KEY_CACHE, { version: fila.version, datos: fila.datos });
-      estado('al-dia');
+      // Trabajo de este aparato que quedó sin subir (sin internet, o se cerró antes de que subiera): nunca se pisa en silencio.
+      //  · Si nadie más guardó mientras tanto (misma versión), se sigue con lo de este aparato y se sube.
+      //  · Si otro aparato guardó, no se puede mezclar solo: lo de acá se guarda aparte, se muestra qué hay que repetir y se usa lo de la nube.
+      const cache = BG.leer(KEY_CACHE);
+      const sinSubir = !!(cache && cache.sinSubir && cache.datos && BG.datosSirven(cache.datos));
+      if (sinSubir && cache.version === fila.version) {
+        BG.usarDatosDeLaNube(cache.datos);
+        pendiente = true;
+        estado('guardando');
+        setTimeout(() => { empujar(); }, 120);
+        BG.toast('Había cambios de este aparato sin subir: se están subiendo ahora.');
+      } else {
+        if (sinSubir) BG.escribir(KEY_DESCARTADO, { ts: BG.ahora(), datos: cache.datos, version: cache.version });
+        BG.usarDatosDeLaNube(fila.datos);
+        BG.escribir(KEY_CACHE, { version: fila.version, datos: fila.datos, sinSubir: false });
+        estado(sinSubir ? 'conflicto' : 'al-dia');
+        if (sinSubir) setTimeout(avisarDescartado, 300);
+      }
     }
     ajustarSesion();
     if (primera && (!location.hash || location.hash === '#/')) location.hash = '#/inicio';
@@ -253,7 +269,8 @@
     // Con la nube frenada por versión no se sube nada: lo hecho queda en este aparato hasta recargar.
     if (N.bloqueada) { BG.escribir(KEY_DESCARTADO, { ts: BG.ahora(), datos: BG.db }); estado('version-nueva'); return false; }
     pendiente = true;
-    const ok = BG.escribir(KEY_CACHE, { version: N.version, datos: BG.db });
+    const ok = BG.escribir(KEY_CACHE, { version: N.version, datos: BG.db, sinSubir: true });
+    if (!ok) BG.toast('No hay lugar en este navegador para la copia de seguridad local. Lo que cargues se sube a la nube igual, pero liberá espacio en el navegador.', 'error');
     if (!empujando) setTimeout(() => { empujar(); }, 120);
     return ok;
   };
@@ -274,7 +291,7 @@
       N.version = data.version;
       N.actualizado = data.actualizado;
       N.por = data.por;
-      BG.escribir(KEY_CACHE, { version: N.version, datos: enviado });
+      BG.escribir(KEY_CACHE, { version: N.version, datos: enviado, sinSubir: pendiente });   // si se cambió algo mientras subía, sigue sin subir
       estado('al-dia');
     } catch (e) {
       const msg = (e && (e.message || e.details)) || '';
@@ -305,13 +322,14 @@
     N.actualizado = fila.actualizado;
     N.por = fila.por;
     BG.usarDatosDeLaNube(fila.datos);
-    BG.escribir(KEY_CACHE, { version: fila.version, datos: fila.datos });
+    BG.escribir(KEY_CACHE, { version: fila.version, datos: fila.datos, sinSubir: false });
     ajustarSesion();
     estado(motivo === 'conflicto' ? 'conflicto' : 'al-dia');
     BG.renderChrome();
     BG.render();
     if (motivo === 'conflicto') {
       BG.toast('Lo último no se guardó: ' + esc(fila.por) + ' guardó al mismo tiempo desde otro aparato. Mirá cómo quedó y repetí esa operación.', 'error');
+      avisarDescartado();
     } else if (quien && quien !== (N.perfil && N.perfil.nombre)) {
       BG.toast('Se actualizó con lo que cargó ' + esc(quien) + '.');
     }
@@ -326,9 +344,70 @@
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'tienda_aviso' }, (p) => {
         const v = p.new && p.new.version;
         if (!v || v <= N.version || empujando) return;
+        if (pendiente) { setTimeout(() => { empujar(); }, 120); return; }   // hay cambios de acá sin subir: se suben primero (el servidor frena si chocan)
         traerDeNuevo('remoto', p.new.por);
       })
       .subscribe();
+  }
+
+  /* ── Lo que no se pudo guardar ───────────────────────────────────────── */
+
+  /**
+   * Qué tenía el documento que no se pudo subir y no está en el que quedó (registros nuevos de este aparato), para que la
+   * persona sepa qué repetir. No mezcla nada: solo lista. Lo que se cambió de algo que ya existía (una anulación, una
+   * devolución) no se puede distinguir de lo que cambió el otro aparato; por eso el aviso lo dice aparte.
+   */
+  N.queSePierde = (descartado, actual) => {
+    const D = descartado || {};
+    const Ac = actual || {};
+    const ids = (l) => new Set((l || []).map((x) => x.id));
+    const nombre = (id) => { const c = (D.clientes || []).find((x) => x.id === id) || (Ac.clientes || []).find((x) => x.id === id); return c ? c.nombre : 'una clienta'; };
+    const nuevos = (k) => { const a = ids(Ac[k]); return (D[k] || []).filter((x) => !a.has(x.id)); };
+    const recibo = (n) => 'N° ' + String(n || 0).padStart(6, '0');
+    const filas = [];
+    nuevos('clientes').forEach((x) => filas.push('Clienta nueva: ' + x.nombre));
+    nuevos('productos').forEach((x) => filas.push('Producto cargado: ' + x.descripcion));
+    nuevos('ventas').forEach((v) => filas.push('Venta ' + recibo(v.recibo) + ' · ' + nombre(v.clienteId) + ' · ' + BG.gs(v.total)));
+    nuevos('pagos').forEach((p) => filas.push((p.ventaId ? 'Cobro ' : 'Seña ') + recibo(p.recibo) + ' · ' + nombre(p.clienteId) + ' · ' + BG.gs((p.total || 0) + (p.excedente || 0))));
+    nuevos('egresos').forEach((x) => filas.push('Plata devuelta a ' + nombre(x.clienteId) + ' · ' + BG.gs(x.monto)));
+    nuevos('canjes').forEach((x) => filas.push('Canje de puntos de ' + nombre(x.clienteId)));
+    nuevos('gastos').forEach((x) => filas.push('Gasto: ' + x.concepto + ' · ' + BG.gs(x.monto)));
+    nuevos('reservas').forEach((x) => filas.push('Apartado de ' + nombre(x.clienteId)));
+    nuevos('deseos').forEach((x) => filas.push('Pedido anotado: ' + x.texto));
+    nuevos('conteos').forEach(() => filas.push('Conteo de inventario'));
+    nuevos('ahorro').forEach((x) => filas.push('Movimiento de la cuenta de ahorro · ' + BG.gs(x.monto)));
+    nuevos('envios').forEach((x) => filas.push('Envío ' + x.numero));
+    return filas;
+  };
+  const htmlPerdido = (filas) => '<p>Otro aparato guardó al mismo tiempo y esto, que se había cargado en <strong>este</strong> aparato, no quedó guardado. '
+    + 'Hay que <strong>cargarlo de nuevo</strong>:</p><ul class="efecto-lista">' + filas.map((f) => '<li>' + BG.esc(f) + '</li>').join('') + '</ul>'
+    + '<p class="hint">Si además anulaste o cambiaste algo que ya existía desde este aparato, revisalo: puede que también haya que repetirlo.</p>';
+  /** Muestra qué no se guardó (si hay algo) con un botón para dejarlo anotado como hecho. */
+  function avisarDescartado() {
+    const d = BG.leer(KEY_DESCARTADO);
+    if (!d || !d.datos || !BG.db || !BG.modal) return;
+    const filas = N.queSePierde(d.datos, BG.db);
+    if (!filas.length) return;
+    BG.modal({ titulo: 'Esto no se guardó: cargalo de nuevo', cuerpo: htmlPerdido(filas), acciones: [{ texto: 'Ya lo repito', valor: 'ok', clase: 'btn-primary' }] });
+  }
+  N.avisarDescartado = avisarDescartado;
+  /** Aviso fijo en Inicio mientras haya algo sin repetir. */
+  BG.htmlAvisoDescartado = () => {
+    const d = BG.leer(KEY_DESCARTADO);
+    if (!d || !d.datos || !BG.db) return '';
+    const filas = N.queSePierde(d.datos, BG.db);
+    if (!filas.length) return '';
+    return '<div class="callout callout-warn">' + BG.icon('alert') + '<div><strong>Hay ' + filas.length + (filas.length === 1 ? ' cosa' : ' cosas') + ' de este aparato que no se guardaron.</strong> '
+      + '<button type="button" class="linkish" data-nube="ver">Ver cuáles</button> · <button type="button" class="linkish" data-nube="listo">Ya las repetí</button></div></div>';
+  };
+  N.limpiarDescartado = () => { try { localStorage.removeItem(KEY_DESCARTADO); } catch (e) { /* sin almacenamiento */ } };
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('click', (e) => {
+      const b = e.target && e.target.closest ? e.target.closest('[data-nube]') : null;
+      if (!b) return;
+      if (b.dataset.nube === 'ver') avisarDescartado();
+      else if (b.dataset.nube === 'listo') { N.limpiarDescartado(); BG.toast('Listo: el aviso se sacó.'); BG.render(); }
+    });
   }
 
   /** Para el recorrido de pruebas y para reintentar a mano. */

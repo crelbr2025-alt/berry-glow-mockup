@@ -285,6 +285,7 @@
     const html = '<div class="page">'
       + '<div class="page-head"><div><p class="eyebrow">' + BG.fmtFechaLarga(h) + '</p><h1 class="page-title">' + saludo + ', ' + esc(u.nombre) + '</h1></div></div>'
       + cardPrimerosPasos
+      + (BG.htmlAvisoDescartado ? BG.htmlAvisoDescartado() : '')   // lo que no se pudo guardar por un choque entre aparatos, hasta que se repita
       + (rapidas.length ? '<section class="quick" aria-label="Acciones rápidas">' + rapidas.join('') + '</section>' : '')
       + (meta ? '<section class="card" aria-label="Tu meta del mes">' + meta + '</section>' : '')
       + '<section class="tiles tiles-5 tiles-compact" aria-label="Resumen">'
@@ -509,6 +510,8 @@
         + linea(lo.canjes.length, 'canje de puntos', 'canjes de puntos', '')
         + linea(lo.envios.length, 'envío', 'envíos', '')
         + linea(lo.emisiones.length, 'recibo emitido', 'recibos emitidos', '')
+        + linea(lo.apartados.length, 'apartado', 'apartados', '')
+        + linea(lo.pedidos.length, 'pedido anotado', 'pedidos anotados', '')
         + '</ul>'
         + '<p class="small">Esto <strong>cambia los números</strong> de esos días: la caja, los reportes y la ganancia del período dejan de contar esas ventas y esos cobros. '
         + 'Los recibos que ya le diste en papel o por WhatsApp no se pueden deshacer.</p>'
@@ -554,9 +557,17 @@
         + '. ' + (BG.esDuena() ? 'Si querés, se los sumás: darían <strong>' + darian + (darian === 1 ? ' punto' : ' puntos') + '</strong>.' : 'Si corresponde sumárselos, lo hace ' + esc(BG.nombreDuena()) + '.') + '</p>'
         + (BG.esDuena() ? '<button type="button" class="btn btn-sm" data-accion="puntos-aparte">' + icon('star', 'i-sm') + 'Sumar puntos de esas compras</button>' : '') + '</div></div>'
       : '';
+    // Solo el dueño puede darle puntos a mano (sin una compra): botón aparte, con alerta y PIN (BG.darPuntosUI).
+    const botonDar = BG.esDuena() ? '<button type="button" class="btn btn-sm" data-accion="dar-puntos">' + icon('star', 'i-sm') + 'Darle puntos a mano</button>' : '';
+    // Lo que le dio la tienda: el dueño ve el motivo y puede anularlo; la vendedora solo ve que lo tiene.
+    const dadosAMano = !p.manuales.length ? '' : BG.esDuena()
+      ? '<div class="stack-sm"><p class="small"><strong>Puntos que le diste a mano</strong> (sin una compra)</p><ul class="lines">' + p.manuales.map((x) => '<li class="line"><div class="line-top"><div class="grow"><div class="row-title">+' + x.puntos + ' puntos · ' + BG.fmtFecha(x.fecha) + '</div>'
+        + '<div class="row-sub">' + esc(x.motivo) + (x.nota ? ' · ' + esc(x.nota) : '') + ' · por ' + esc(x.usuario) + '</div></div>'
+        + '<button type="button" class="btn btn-sm btn-quiet" data-accion="quitar-puntos-manuales" data-id="' + esc(x.id) + '">Quitar</button></div></li>').join('') + '</ul></div>'
+      : '<p class="small muted">Incluye ' + p.deLaTienda + ' puntos que le dio la tienda.</p>';
     if (!p.ganados && !p.pendientes && !p.canjeados) {
-      return lineaSinPuntos ? '<section class="card stack card-puntos" aria-labelledby="t-pts"><div class="card-head"><h2 id="t-pts">' + icon('star') + 'Sus puntos</h2>'
-        + '<span class="small muted">1 punto cada ' + gs(p.cadaGs) + ' · cada punto ' + gs(p.valorPunto) + '</span></div>' + lineaSinPuntos + '</section>' : '';
+      return lineaSinPuntos || botonDar ? '<section class="card stack card-puntos" aria-labelledby="t-pts"><div class="card-head"><h2 id="t-pts">' + icon('star') + 'Sus puntos</h2>'
+        + '<span class="small muted">1 punto cada ' + gs(p.cadaGs) + ' · cada punto ' + gs(p.valorPunto) + '</span></div>' + lineaSinPuntos + (botonDar ? '<div class="balance-actions">' + botonDar + '</div>' : '') + '</section>' : '';
     }
     const wa = BG.textosWa.puntos(c, p);
     return '<section class="card stack card-puntos" aria-labelledby="t-pts">'
@@ -572,7 +583,9 @@
       + (BG.puede('emitirRecibos') ? '<a class="btn' + (p.canjeable ? '' : ' btn-primary') + '" href="#/recibo/p/' + c.id + '">' + icon('receipt') + 'Comprobante de puntos</a>' : '')
       + '<a class="btn" href="' + BG.waLink(c, wa) + '" target="_blank" rel="noopener">' + icon('chat') + 'Mandarle sus puntos</a>'
       + (p.canjeable ? '<button type="button" class="btn btn-primary" data-accion="canjear-puntos">' + icon('star') + 'Canjear</button>' : '')
+      + botonDar
       + '</div></div>'
+      + dadosAMano
       + lineaSinPuntos
       + '<details class="terminos"><summary>Cómo se usan los puntos y condiciones</summary>'
       + '<p><strong>Para usarlos:</strong> cuando llega a ' + p.minimo + ' puntos, tocás «Canjear» (acá o al venderle). Los puntos pasan a su saldo a favor y se descuentan en esa compra; '
@@ -580,6 +593,102 @@
       + '<p>' + esc(p.terminos) + '</p></details>'
       + '</section>';
   }
+
+  /**
+   * Darle puntos a una clienta sin que haya comprado nada (solo el dueño). Es una acción delicada: los puntos valen plata cuando
+   * se canjean. Tres pasos, para que no se haga sin querer: (1) cuántos (de 10 en 10) y por qué, (2) una alerta que dice qué va a
+   * pasar y (3) el PIN. Queda anotado con su nombre, la fecha y el motivo (BG.darPuntos).
+   */
+  BG.darPuntosUI = async (c) => {
+    const f = BG.configFidelidad();
+    if (!f.activo) { BG.toast('El programa de puntos está apagado: se prende en Ajustes → Clientas frecuentes.', 'error'); return false; }
+    const st = { puntos: BG.PUNTOS_PASO, motivo: '', nota: '' };
+    const MAX = BG.PUNTOS_MANUAL_MAX;
+    const PASO = BG.PUNTOS_PASO;
+    const ajustar = (n) => Math.max(PASO, Math.min(MAX, Math.round((Number(n) || PASO) / PASO) * PASO));
+    const pintar = (dlg) => {
+      $('#dp-n', dlg).value = st.puntos;
+      $('#dp-menos', dlg).disabled = st.puntos <= PASO;
+      $('#dp-mas', dlg).disabled = st.puntos >= MAX;
+      $('#dp-valor', dlg).innerHTML = 'Valen <strong>' + gs(st.puntos * f.valorPunto) + '</strong> de descuento cuando los canjee. Hoy tiene <strong>' + (BG.puntosDe(c.id).puntos) + '</strong> y quedaría con <strong>' + (BG.puntosDe(c.id).puntos + st.puntos) + '</strong>.';
+    };
+    const r1 = await BG.modal({
+      titulo: 'Darle puntos a ' + c.nombre.split(' ')[0],
+      cuerpo: '<div class="callout callout-warn">' + icon('alert') + '<div><strong>Es una acción delicada.</strong> Le das puntos <strong>sin que haya comprado nada</strong> y los puntos valen plata cuando los canjea. '
+        + 'Solo lo hacés vos, y queda anotado con tu nombre, la fecha y el motivo.</div></div>'
+        + '<div class="field"><span class="field-label" id="dp-l">¿Cuántos puntos? <span class="small muted">(de ' + PASO + ' en ' + PASO + ', hasta ' + MAX + ')</span></span>'
+        + '<div class="stepper" role="group" aria-labelledby="dp-l"><button type="button" class="btn-icon" id="dp-menos" aria-label="' + PASO + ' puntos menos">−</button>'
+        + '<input id="dp-n" class="input" inputmode="numeric" autocomplete="off" value="' + st.puntos + '" aria-label="Cantidad de puntos">'
+        + '<button type="button" class="btn-icon" id="dp-mas" aria-label="' + PASO + ' puntos más">+</button></div>'
+        + '<div class="chips" role="group" aria-label="Cantidades comunes">' + [10, 20, 50, 100].map((n) => '<button type="button" class="chip" data-dp="' + n + '">' + n + '</button>').join('') + '</div>'
+        + '<p class="small" id="dp-valor" aria-live="polite"></p></div>'
+        + '<div class="field"><label for="dp-motivo">¿Por qué se los das? <span class="req">*</span></label><select id="dp-motivo" class="select"><option value="">Elegí el motivo</option>'
+        + BG.MOTIVOS_PUNTOS.map((m) => '<option value="' + esc(m) + '">' + esc(m) + '</option>').join('') + '</select></div>'
+        + '<div class="field"><label for="dp-nota">Detalle <span class="small muted">(obligatorio si el motivo es «Otro»; solo lo ves vos)</span></label><input id="dp-nota" class="input" maxlength="140" autocomplete="off"></div>'
+        + '<p class="error-text" id="dp-err" role="alert" hidden></p>',
+      acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Continuar', valor: 'ok', clase: 'btn-primary', submit: true }],
+      onMount: (dlg) => {
+        const form = $('form', dlg);
+        pintar(form);
+        form.addEventListener('click', (e) => {
+          if (e.target.closest('#dp-menos')) { st.puntos = ajustar(st.puntos - PASO); pintar(form); }
+          else if (e.target.closest('#dp-mas')) { st.puntos = ajustar(st.puntos + PASO); pintar(form); }
+          else if (e.target.closest('[data-dp]')) { st.puntos = ajustar(e.target.closest('[data-dp]').dataset.dp); pintar(form); }
+        });
+        form.addEventListener('input', (e) => { if (e.target.id === 'dp-nota') st.nota = e.target.value; });
+        form.addEventListener('change', (e) => {
+          if (e.target.id === 'dp-n') { st.puntos = ajustar(e.target.value); pintar(form); }
+          if (e.target.id === 'dp-motivo') st.motivo = e.target.value;
+        });
+      },
+      validar: (v, dlg) => {
+        const er = $('#dp-err', dlg);
+        const falla = (m) => { er.textContent = m; er.hidden = false; return false; };
+        st.puntos = ajustar($('#dp-n', dlg).value);
+        pintar(dlg);
+        if (!st.motivo) return falla('Elegí por qué se los das.');
+        if (st.motivo === 'Otro' && st.nota.trim().length < 5) return falla('Contá por qué en «Detalle» (queda en el historial).');
+        return true;
+      },
+    });
+    if (r1 !== 'ok') return false;
+    // La alerta: qué va a pasar, escrito, antes de hacerlo.
+    const r2 = await BG.modal({
+      titulo: '¿Seguro que querés darle ' + st.puntos + ' puntos?',
+      cuerpo: '<div class="callout callout-bad">' + icon('alert') + '<div><strong>Revisá antes de confirmar.</strong> Esto no se hace solo y no viene de ninguna compra.</div></div>'
+        + '<ul class="efecto-lista">'
+        + '<li><strong>' + esc(c.nombre) + '</strong> pasa de ' + BG.puntosDe(c.id).puntos + ' a <strong>' + (BG.puntosDe(c.id).puntos + st.puntos) + ' puntos</strong>.</li>'
+        + '<li>Esos ' + st.puntos + ' puntos valen <strong>' + gs(st.puntos * f.valorPunto) + '</strong> de descuento cuando los canjee: es plata que la tienda deja de cobrar.</li>'
+        + '<li>Aparecen en su ficha y en el comprobante de puntos que se le manda, como «Puntos que te dio la tienda» (sin el motivo).</li>'
+        + '<li>Queda escrito en la auditoría con la fecha, tu nombre y el motivo: «' + esc(st.motivo) + '»' + (st.nota.trim() ? ' (' + esc(st.nota.trim()) + ')' : '') + '.</li>'
+        + '<li>Se puede anular después solo si todavía no los canjeó.</li></ul>',
+      acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Sí, darle los puntos', valor: 'ok', clase: 'btn-danger-solid' }],
+    });
+    if (r2 !== 'ok') return false;
+    if (!(await BG.pedirPin('Darle ' + st.puntos + ' puntos (' + gs(st.puntos * f.valorPunto) + ') a ' + c.nombre + ' sin una compra.'))) return false;
+    BG.darPuntos({ clienteId: c.id, puntos: st.puntos, motivo: st.motivo, nota: st.nota });
+    BG.toast('Listo: le diste ' + st.puntos + ' puntos a ' + c.nombre.split(' ')[0] + ' y ahora tiene ' + BG.puntosDe(c.id).puntos + '. Quedó anotado en su ficha y en la auditoría.');
+    return true;
+  };
+
+  /** Quitar puntos que se dieron a mano (se anulan con motivo; nada se borra). No se puede si ya los canjeó. */
+  BG.quitarPuntosManualesUI = async (c, x) => {
+    let motivo = '';
+    const r = await BG.modal({
+      titulo: 'Quitar ' + x.puntos + ' puntos',
+      cuerpo: '<p>Se le sacan a <strong>' + esc(c.nombre) + '</strong> los <strong>' + x.puntos + ' puntos</strong> que le diste el ' + BG.fmtFecha(x.fecha) + '. El registro queda (anulado), no se borra.</p>'
+        + '<div class="field"><label for="qp-m">¿Por qué se quitan? <span class="req">*</span></label><input id="qp-m" class="input" maxlength="140" autocomplete="off"></div>'
+        + '<p class="error-text" id="qp-err" role="alert" hidden></p>',
+      acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Quitar los puntos', valor: 'ok', clase: 'btn-danger-solid', submit: true }],
+      validar: (v, dlg) => {
+        motivo = $('#qp-m', dlg).value;
+        try { BG.quitarPuntosManuales(x.id, motivo); return true; } catch (e) { const er = $('#qp-err', dlg); er.textContent = e.message; er.hidden = false; return false; }
+      },
+    });
+    if (r !== 'ok') return false;
+    BG.toast('Listo: se quitaron ' + x.puntos + ' puntos. ' + c.nombre.split(' ')[0] + ' ahora tiene ' + BG.puntosDe(c.id).puntos + '.');
+    return true;
+  };
 
   /**
    * Sumar los puntos de compras que no suman solas: el dueño elige cuáles (vienen todas marcadas) y ve cuánto
@@ -636,32 +745,42 @@
    * pagó. Queda en su cuenta aparte de lo de ahora; si quedó debiendo, se le cobra como cualquier deuda.
    */
   BG.compraAnteriorUI = async (c) => {
-    const st = { fecha: '', items: [{ descripcion: '', cantidad: 1, precio: 0 }, { descripcion: '', cantidad: 1, precio: 0 }, { descripcion: '', cantidad: 1, precio: 0 }], pagado: null, nota: '' };
-    const total = () => st.items.reduce((a, x) => a + (x.descripcion.trim() && x.precio > 0 ? x.precio * (x.cantidad || 0) : 0), 0);
+    // Por defecto solo el monto: lo común es saber cuánto llevó y no qué. El detalle se puede cargar si se tiene.
+    const st = { modo: 'monto', fecha: '', monto: 0, items: [{ descripcion: '', cantidad: 1, precio: 0 }, { descripcion: '', cantidad: 1, precio: 0 }, { descripcion: '', cantidad: 1, precio: 0 }], pagado: null, nota: '' };
+    const total = () => (st.modo === 'monto' ? st.monto : st.items.reduce((a, x) => a + (x.descripcion.trim() && x.precio > 0 ? x.precio * (x.cantidad || 0) : 0), 0));
+    // Lo que ya pagó: vacío = 0 cuando solo se anota el monto (lo que se quiere es lo que debe) y = todo cuando se detalla (compra vieja ya saldada).
+    const pagadoEfectivo = () => (st.pagado != null ? st.pagado : st.modo === 'monto' ? 0 : total());
     const filaItem = (x, i) => '<div class="row row-nowrap ca-fila" data-i="' + i + '">'
       + '<input class="input grow" data-campo="descripcion" maxlength="80" autocomplete="off" placeholder="Qué llevó (ej.: vestido floreado)" value="' + esc(x.descripcion) + '" aria-label="Artículo ' + (i + 1) + '">'
       + '<input class="input input-cant" data-campo="cantidad" inputmode="numeric" autocomplete="off" value="' + x.cantidad + '" aria-label="Cantidad del artículo ' + (i + 1) + '">'
       + BG.campoGs('ca-precio-' + i, x.precio || '', 'data-campo="precio" aria-label="Precio del artículo ' + (i + 1) + '" placeholder="Precio"') + '</div>';
     const pintarTotales = (dlg) => {
       const t = total();
-      const pag = st.pagado == null ? t : st.pagado;
+      const pag = pagadoEfectivo();
       $('#ca-tot', dlg).innerHTML = '<dl class="summary"><dt>Lo que llevó</dt><dd>' + gs(t) + '</dd><dt>Ya pagó</dt><dd>' + gs(Math.min(pag, t)) + '</dd><div class="sep"></div>'
         + '<dt><strong>Queda debiendo</strong></dt><dd class="big ' + (t - pag > 0 ? 'due' : 'clear') + '">' + gs(Math.max(0, t - pag)) + '</dd></dl>';
+      $('#ca-pagado-hint', dlg).textContent = st.modo === 'monto' ? 'Si no pagó nada de esto, dejalo vacío.' : 'Si lo dejás vacío, se toma que ya pagó todo. Si quedó debiendo, escribí lo que sí pagó (0 si no pagó nada).';
+      $('#ca-bloque-monto', dlg).hidden = st.modo !== 'monto';
+      $('#ca-bloque-detalle', dlg).hidden = st.modo !== 'detalle';
     };
     const r = await BG.modal({
       titulo: 'Lo que llevó antes del sistema',
       ancho: 'wide',
       cuerpo: '<p class="small">Para que quede en la cuenta de <strong>' + esc(c.nombre) + '</strong> lo que compró antes de usar el sistema. '
         + 'No toca el stock ni la caja de hoy, y queda aparte de sus compras nuevas (con su propio comprobante).</p>'
+        + '<div class="field"><span class="field-label" id="ca-modo-l">¿Cómo lo anotás?</span><div class="seg" role="radiogroup" aria-labelledby="ca-modo-l">'
+        + '<label><input type="radio" name="ca-modo" value="monto" checked>Solo el monto</label><label><input type="radio" name="ca-modo" value="detalle">Con lo que llevó</label></div>'
+        + '<span class="hint">Si no tenés anotado qué llevó, alcanza con la fecha y el monto: queda el registro y a la clienta se le manda solo lo que debe, sin decir qué era.</span></div>'
         + '<div class="field"><label for="ca-fecha">¿Cuándo fue? <span class="req">*</span></label><input id="ca-fecha" class="input input-date" type="date" max="' + BG.hoy() + '">'
         + '<span class="hint">Si no sabés el día exacto, poné uno aproximado (por ejemplo, el 1 de ese mes).</span></div>'
-        + '<div class="field"><span class="field-label">Qué llevó <span class="req">*</span></span>'
+        + '<div class="field" id="ca-bloque-monto"><label for="ca-monto">¿Cuánto llevó en total? <span class="req">*</span></label>' + BG.campoGs('ca-monto', '', 'placeholder="Monto total"') + '</div>'
+        + '<div class="field" id="ca-bloque-detalle" hidden><span class="field-label">Qué llevó <span class="req">*</span></span>'
         + '<div class="row row-nowrap ca-cab" aria-hidden="true"><span class="grow">Artículo</span><span class="ca-c-cant">Cant.</span><span class="ca-c-precio">Precio c/u</span></div>'
         + '<div id="ca-items" class="stack-sm">' + st.items.map(filaItem).join('') + '</div>'
         + '<button type="button" class="btn btn-sm btn-quiet" data-accion="ca-mas">' + icon('plus', 'i-sm') + 'Otro artículo</button></div>'
-        + '<div class="field"><label for="ca-pagado">¿Cuánto ya pagó de esto?</label>' + BG.campoGs('ca-pagado', '', 'placeholder="Todo"')
-        + '<span class="hint">Si lo dejás vacío, se toma que ya pagó todo. Si quedó debiendo, escribí lo que sí pagó (0 si no pagó nada).</span></div>'
-        + '<div class="field"><label for="ca-nota">Nota <span class="small muted">(opcional)</span></label><input id="ca-nota" class="input" maxlength="120" autocomplete="off" placeholder="Ej.: del cuaderno de junio"></div>'
+        + '<div class="field"><label for="ca-pagado">¿Cuánto ya pagó de esto?</label>' + BG.campoGs('ca-pagado', '', 'placeholder="0"')
+        + '<span class="hint" id="ca-pagado-hint"></span></div>'
+        + '<div class="field"><label for="ca-nota">Nota <span class="small muted">(opcional, solo para vos)</span></label><input id="ca-nota" class="input" maxlength="120" autocomplete="off" placeholder="Ej.: del cuaderno de junio"></div>'
         + '<div id="ca-tot"></div><span class="error-text" id="ca-err" role="alert" hidden></span>',
       acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Guardar en su cuenta', valor: 'ok', clase: 'btn-primary', submit: true }],
       onMount: (dlg) => {
@@ -676,11 +795,15 @@
             else if (t.dataset.campo === 'cantidad') x.cantidad = Math.round(Number(String(t.value).replace(/\D/g, ''))) || 0;
             else if (t.dataset.campo === 'precio') x.precio = BG.leerGs(t) || 0;
           } else if (t.id === 'ca-pagado') st.pagado = String(t.value).trim() === '' ? null : BG.leerGs(t) || 0;
+          else if (t.id === 'ca-monto') st.monto = BG.leerGs(t) || 0;
           else if (t.id === 'ca-fecha') st.fecha = t.value;
           else if (t.id === 'ca-nota') st.nota = t.value;
           pintarTotales(form);
         });
-        form.addEventListener('change', (ev) => { if (ev.target.id === 'ca-fecha') st.fecha = ev.target.value; });
+        form.addEventListener('change', (ev) => {
+          if (ev.target.id === 'ca-fecha') st.fecha = ev.target.value;
+          if (ev.target.name === 'ca-modo') { st.modo = ev.target.value; pintarTotales(form); }
+        });
         form.addEventListener('click', (ev) => {
           if (!ev.target.closest('[data-accion="ca-mas"]')) return;
           st.items.push({ descripcion: '', cantidad: 1, precio: 0 });
@@ -694,19 +817,25 @@
         const falla = (m) => { er.textContent = m; er.hidden = false; return false; };
         if (!st.fecha) return falla('Poné la fecha (aunque sea aproximada).');
         if (st.fecha > BG.hoy()) return falla('La fecha no puede ser futura.');
-        const usados = st.items.filter((x) => x.descripcion.trim() || x.precio > 0);
-        if (!usados.length) return falla('Anotá al menos un artículo con su precio.');
-        const sinPrecio = usados.find((x) => !(x.precio > 0));
-        if (sinPrecio) return falla('Falta el precio de «' + (sinPrecio.descripcion.trim() || 'un artículo') + '».');
-        if (usados.some((x) => !x.descripcion.trim())) return falla('A un artículo le falta qué era.');
-        if (usados.some((x) => !(x.cantidad >= 1))) return falla('Revisá las cantidades (1 o más).');
+        if (st.modo === 'monto') {
+          if (!(st.monto > 0)) return falla('Escribí cuánto llevó en total.');
+        } else {
+          const usados = st.items.filter((x) => x.descripcion.trim() || x.precio > 0);
+          if (!usados.length) return falla('Anotá al menos un artículo con su precio.');
+          const sinPrecio = usados.find((x) => !(x.precio > 0));
+          if (sinPrecio) return falla('Falta el precio de «' + (sinPrecio.descripcion.trim() || 'un artículo') + '».');
+          if (usados.some((x) => !x.descripcion.trim())) return falla('A un artículo le falta qué era.');
+          if (usados.some((x) => !(x.cantidad >= 1))) return falla('Revisá las cantidades (1 o más).');
+        }
         if (st.pagado != null && st.pagado > total()) return falla('Escribiste que pagó ' + gs(st.pagado) + ' y lo que llevó suma ' + gs(total()) + '.');
         return true;
       },
     });
     if (r !== 'ok') return false;
     const t = total();
-    const res = BG.registrarCompraAnterior({ clienteId: c.id, fecha: st.fecha, items: st.items, pagado: st.pagado == null ? t : st.pagado, nota: st.nota });
+    const res = BG.registrarCompraAnterior(st.modo === 'monto'
+      ? { clienteId: c.id, fecha: st.fecha, monto: st.monto, pagado: pagadoEfectivo(), nota: st.nota }
+      : { clienteId: c.id, fecha: st.fecha, items: st.items, pagado: pagadoEfectivo(), nota: st.nota });
     const debe = BG.saldoVenta(res.venta);
     BG.toast('Guardado en la cuenta de ' + c.nombre.split(' ')[0] + ': ' + gs(t) + ' del ' + BG.fmtFecha(st.fecha) + (debe > 0 ? ', debe ' + gs(debe) + ' de eso.' : ', ya pagado.'));
     return true;
@@ -900,6 +1029,8 @@
             if (b.dataset.accion === 'devolver-favor' && (await BG.devolverFavorUI(c))) BG.render();
             else if (b.dataset.accion === 'canjear-puntos' && (await BG.canjeUI(c.id))) BG.render();
             else if (b.dataset.accion === 'puntos-aparte' && (await BG.puntosAparteUI(c))) BG.render();
+            else if (b.dataset.accion === 'dar-puntos' && (await BG.darPuntosUI(c))) BG.render();
+            else if (b.dataset.accion === 'quitar-puntos-manuales' && (await BG.quitarPuntosManualesUI(c, (BG.db.puntosManuales || []).find((x) => x.id === b.dataset.id)))) BG.render();
             else if (b.dataset.accion === 'compra-anterior' && (await BG.compraAnteriorUI(c))) BG.render();
             else if (b.dataset.accion === 'apartar' && (await BG.apartarUI({ clienteId: c.id }))) BG.render();
             else if (b.dataset.accion === 'anotar-deseo' && (await BG.deseoUI({ clienteId: c.id }))) BG.render();

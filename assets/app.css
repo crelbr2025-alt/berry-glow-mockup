@@ -1478,3 +1478,9 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 .practica summary { cursor: pointer; }
 .practica[open] summary { margin-bottom: 8px; }
 .cuota-fila .row-end .pill { white-space: normal; }
+
+/* ── Dar puntos a mano: cantidad de 10 en 10 ─────────────────────────────── */
+.stepper { display: flex; align-items: center; gap: 8px; }
+.stepper .input { max-width: 120px; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums; }
+.stepper .btn-icon { width: 44px; height: 44px; font-size: 22px; font-weight: 800; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); }
+.stepper .btn-icon:disabled { opacity: .4; }

@@ -610,6 +610,7 @@
       + '<div class="row">'
       + (mios
         ? '<button type="button" class="btn btn-sm btn-primary" data-accion="copia">' + icon('download', 'i-sm') + 'Bajar copia de seguridad</button>'
+          + '<button type="button" class="btn btn-sm" data-accion="revisar-datos">' + icon('shield', 'i-sm') + 'Revisar mis datos</button>'
           + '<label class="btn btn-sm" for="aj-restaurar">' + icon('upload', 'i-sm') + 'Restaurar una copia</label>'
           + '<input id="aj-restaurar" type="file" accept=".json,application/json" hidden>'
           + '<a class="btn btn-sm" href="#/ajustes/excel">' + icon('file', 'i-sm') + (info ? 'Volver a traer el Excel' : 'Traer mi Excel') + '</a>'
@@ -946,6 +947,23 @@
             const nombre = descargarCopia();
             BG.toast('Copia guardada: ' + nombre + '. Guardala en un lugar seguro (correo, Drive o pendrive).');
             repintar('aj-mios', htmlMisDatos);
+          } else if (a === 'revisar-datos') {
+            // Solo lee: controla que cada dato sea coherente con los demás (BG.revisarIntegridad). No cambia nada.
+            const rev = BG.revisarIntegridad();
+            const graves = rev.problemas.filter((x) => x.grave);
+            const avisos = rev.problemas.filter((x) => !x.grave);
+            const cuentas = BG.cuadre();
+            const cant = (n, uno, varios) => n + ' ' + (n === 1 ? uno : varios);
+            await BG.modal({
+              titulo: 'Revisión de tus datos',
+              cuerpo: (graves.length
+                ? '<div class="callout callout-bad">' + icon('alert') + '<div><strong>Hay ' + graves.length + (graves.length === 1 ? ' cosa que no cierra' : ' cosas que no cierran') + '.</strong> No se tocó nada: avisale a quien hizo el sistema y mostrale esta lista.</div></div>'
+                  + '<ul class="efecto-lista">' + graves.slice(0, 12).map((x) => '<li>' + esc(x.texto) + '</li>').join('') + '</ul>' + (graves.length > 12 ? '<p class="small muted">Y ' + (graves.length - 12) + ' más.</p>' : '')
+                : '<div class="callout callout-good">' + icon('shield') + '<div><strong>Todo en orden.</strong> Revisé ' + cant(BG.db.clientes.length, 'clienta', 'clientas') + ', ' + cant(BG.db.ventas.length, 'compra', 'compras') + ', ' + cant(BG.db.pagos.length, 'pago', 'pagos') + ' y ' + cant(BG.db.productos.length, 'producto', 'productos') + ': los totales, los pagos, el stock y los saldos a favor son coherentes entre sí y las dos cuentas cuadran (por cobrar ' + gs(cuentas.libro) + ').</div></div>')
+                + (avisos.length ? '<p class="small"><strong>Avisos</strong> (no rompen las cuentas, conviene mirarlos):</p><ul class="efecto-lista">' + avisos.slice(0, 8).map((x) => '<li>' + esc(x.texto) + '</li>').join('') + '</ul>' : '')
+                + '<p class="hint">Esta revisión solo lee tus datos; no cambia nada.</p>',
+              acciones: [{ texto: 'Cerrar', valor: 'ok', clase: 'btn-primary' }],
+            });
           } else if (a === 'cero') {
             const ok = await BG.modal({
               titulo: 'Empezar de cero',

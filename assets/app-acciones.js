@@ -15,6 +15,7 @@
   const limpiar = (s) => String(s == null ? '' : s).trim().replace(/\s+/g, ' ');
 
   BG.guardarCliente = (datos, id) => {
+    if (!BG.puede('editarClientes')) throw new Error(BG.nombreDuena() + ' no te habilitó crear ni editar clientes.');
     const campos = {
       nombre: limpiar(datos.nombre), ci: limpiar(datos.ci), telefono: limpiar(datos.telefono),
       direccion: limpiar(datos.direccion), email: limpiar(datos.email), notas: String(datos.notas || '').trim(),
@@ -49,6 +50,9 @@
       canjes: (BG.db.canjes || []).filter((k) => k.clienteId === id),
       envios: BG.db.envios.filter((e) => e.clienteId === id),
       emisiones: BG.db.emisiones.filter((e) => e.clienteId === id),
+      apartados: (BG.db.reservas || []).filter((r) => r.clienteId === id),
+      puntosManuales: (BG.db.puntosManuales || []).filter((x) => x.clienteId === id),
+      pedidos: (BG.db.deseos || []).filter((x) => x.clienteId === id),
       vendido: sum(vivas, (v) => v.total),
       cobrado: sum(pagosVivos, (p) => p.total + (p.excedente || 0)),
       devuelto: sum(egresos, (e) => e.monto),
@@ -93,6 +97,11 @@
     if (BG.db.egresos) BG.db.egresos = BG.db.egresos.filter((e) => e.clienteId !== id);
     BG.db.envios = BG.db.envios.filter((e) => e.clienteId !== id);
     BG.db.emisiones = BG.db.emisiones.filter((e) => e.clienteId !== id);
+    // Lo que no es plata pero cuelga de ella: sus apartados (liberan el stock), lo que pidió y los avisos de cobranza.
+    if (BG.db.reservas) BG.db.reservas = BG.db.reservas.filter((r) => r.clienteId !== id);
+    if (BG.db.deseos) BG.db.deseos = BG.db.deseos.filter((x) => x.clienteId !== id);
+    if (BG.db.recordatorios) BG.db.recordatorios = BG.db.recordatorios.filter((x) => x.clienteId !== id);
+    if (BG.db.puntosManuales) BG.db.puntosManuales = BG.db.puntosManuales.filter((x) => x.clienteId !== id);
     const cu = BG.cuadre();
     const cf = BG.cuadreFavor();
     if (!cu.ok || !cf.ok) {
@@ -104,6 +113,7 @@
       + lo.pagos.length + (lo.pagos.length === 1 ? ' cobro' : ' cobros') + ' por ' + gs(lo.cobrado)
       + (lo.devuelto ? ', ' + gs(lo.devuelto) + ' devueltos en plata' : '')
       + (lo.envios.length ? ', ' + lo.envios.length + (lo.envios.length === 1 ? ' envío' : ' envíos') : '')
+      + (lo.apartados.length ? ', ' + lo.apartados.length + (lo.apartados.length === 1 ? ' apartado' : ' apartados') : '')
       + (limpiar(motivo) ? ' · motivo: ' + limpiar(motivo) : ''));
     BG.guardar();
     return lo;
@@ -201,6 +211,7 @@
     return v.plan;
   };
   BG.quitarPlan = (ventaId) => {
+    if (!BG.puede('registrarCobros') && !BG.puede('registrarVentas')) throw new Error('Tu usuario no puede acordar cuotas.');
     const v = BG.venta(ventaId);
     if (!v || !v.plan) return;
     v.plan = null;
@@ -275,10 +286,48 @@
     }
   }
 
+  const fechaValida = (f) => /^\d{4}-\d{2}-\d{2}$/.test(f || '') && !isNaN(new Date(f + 'T00:00:00').getTime());
+  /**
+   * Revisa los artículos de una venta (nueva o agregados a una compra): cantidad entera, precio, que no estén archivados y
+   * que el stock alcance sumando si el mismo artículo viene dos veces (lo apartado para otras clientas no cuenta).
+   * La pantalla ya lo mira, pero el motor no puede confiar en eso: dos aparatos, un doble toque o una pantalla vieja
+   * llegan acá con datos que ya no valen.
+   */
+  function controlarArticulos(items, clienteId) {
+    for (const it of items) {
+      if (!Number.isInteger(it.cantidad) || it.cantidad < 1) throw new Error('Revisá la cantidad de «' + it.descripcion + '».');
+      if (!Number.isInteger(it.precio) || !(it.precio > 0)) throw new Error('«' + it.descripcion + '» no tiene precio de venta.');
+      if (BG.producto(it.productoId).archivado) throw new Error('«' + it.descripcion + '» está archivado: no se puede vender.');
+    }
+    const pedidas = new Map();
+    items.forEach((it) => pedidas.set(it.productoId, (pedidas.get(it.productoId) || 0) + it.cantidad));
+    pedidas.forEach((n, pid) => {
+      const p = BG.producto(pid);
+      const quedan = BG.vendibles(p, clienteId);
+      if (quedan < n) throw new Error('De «' + p.descripcion + '» ' + (quedan === 1 ? 'queda 1' : 'quedan ' + Math.max(0, quedan)) + (BG.reservadas(p.id, clienteId) ? ' (el resto está apartado)' : '') + ': no alcanza para ' + n + '.');
+    });
+  }
+  /** Las formas de pago que entran a la caja: forma conocida y monto entero. Devuelve las que tienen monto. */
+  function controlarPartes(partes) {
+    const lista = (partes || []).filter((x) => x && x.monto != null && x.monto !== '' && !Number.isNaN(x.monto) && Number(x.monto) !== 0);
+    for (const x of lista) {
+      if (!BG.FORMAS_CORTAS[x.forma]) throw new Error('Elegí cómo paga.');
+      if (!Number.isInteger(x.monto) || x.monto < 0) throw new Error('Revisá el monto de ' + BG.FORMAS[x.forma].toLowerCase() + ': tiene que ser un monto entero en guaraníes.');
+    }
+    return lista.filter((x) => x.monto > 0);
+  }
+  const enteroNoNeg = (n) => n == null || n === '' || n === 0 || (Number.isInteger(n) && n >= 0);
+
   BG.registrarVenta = (d) => {
+    if (!BG.puede('registrarVentas')) throw new Error('Tu usuario no puede registrar ventas.');
     const cli = BG.cliente(d.clienteId);
+    if (!cli) throw new Error('Elegí la clienta de la venta.');
+    if (!fechaValida(d.fecha)) throw new Error('La fecha de la venta no es válida.');
+    if (d.fecha > BG.hoy()) throw new Error('La fecha de la venta no puede ser futura.');
+    if (!Array.isArray(d.items) || !d.items.length) throw new Error('Agregá al menos un artículo.');
     const quien = BG.usuario().nombre;
     const items = armarItems(d.items, quien);
+    controlarArticulos(items, d.clienteId);
     const fid = BG.configFidelidad();
     const conDescuento = !!(d.descuento && d.descuento.valor);
     // El regalo de cumpleaños es un beneficio del programa: se puede aplicar aunque no tenga precios especiales habilitados.
@@ -293,6 +342,19 @@
       throw new Error('Revisá el plan de cuotas: la primera cuota no puede vencer antes de la venta.');
     }
     const t = C.totalesVenta(items, d.descuento);
+    if (conDescuento) {
+      const dv = Number(d.descuento.valor);
+      if (!isFinite(dv) || !(dv > 0) || (d.descuento.tipo === 'porcentaje' ? dv > 100 : Math.round(dv) > t.subtotal)) throw new Error('Revisá el descuento: no puede ser negativo ni pasar del total de la venta.');
+    }
+    if (!(t.total > 0)) throw new Error('El total de la venta no puede quedar en ' + gs(0) + '.');
+    // Lo que entrega ahora: formas conocidas, montos enteros, saldo a favor que existe y nada de más sin decidir qué pasa con lo que sobra.
+    const partesOk = controlarPartes(d.partes);
+    if (!enteroNoNeg(d.usarCredito) || !enteroNoNeg(d.excedenteACredito)) throw new Error('Revisá lo que usa de su saldo a favor y lo que deja a su favor: tienen que ser montos enteros.');
+    if ((d.usarCredito || 0) > BG.creditoCliente(d.clienteId)) throw new Error('Quiere usar ' + gs(d.usarCredito) + ' de su saldo a favor y tiene ' + gs(BG.creditoCliente(d.clienteId)) + '.');
+    const enPlata = sum(partesOk, (x) => x.monto);
+    if ((d.excedenteACredito || 0) > enPlata) throw new Error('No se puede dejar a su favor más de lo que pagó en plata.');
+    const pagaAhora = enPlata + (d.usarCredito || 0) - (d.excedenteACredito || 0);
+    if (pagaAhora > t.total) throw new Error('Paga ' + gs(pagaAhora) + ' y la venta es de ' + gs(t.total) + ': decidí qué pasa con lo que sobra (vuelto o saldo a favor).');
     // Límite de crédito: lo que queda debiendo no puede pasar el límite ni venderse a cuenta con cuotas muy atrasadas,
     // salvo que el dueño lo autorice (él mismo, o con su PIN en el mostrador).
     const recibidoAhora = sum((d.partes || []).filter((x) => x.monto > 0), (x) => x.monto) + (d.usarCredito || 0) - (d.excedenteACredito || 0);
@@ -333,7 +395,7 @@
         + textoMotivo(v.descuento.motivo, v.descuento.nota) + textoMargen(t.total, costo) + ' en la venta' + (v.autorizadoPor ? ' · autorizó ' + v.autorizadoPor : ''));
     }
 
-    const partes = (d.partes || []).filter((x) => x.monto > 0).map((x) => ({ forma: x.forma, monto: x.monto }));
+    const partes = partesOk.map((x) => ({ forma: x.forma, monto: x.monto }));
     if (d.usarCredito > 0) {
       // Primero se usa lo que viene de puntos canjeados (se anota, porque esa parte no vuelve a sumar puntos).
       const deCanje = Math.min(d.usarCredito, BG.canjeDisponible(d.clienteId));
@@ -366,8 +428,24 @@
    * (anticipo que queda como saldo a favor). Las formas de pago se reparten en orden entre las ventas.
    */
   BG.registrarCobro = (d) => {
+    if (!BG.puede('registrarCobros')) throw new Error('Tu usuario no puede registrar cobros.');
     const cli = BG.cliente(d.clienteId);
-    const cola = (d.partes || []).filter((x) => x.monto > 0).map((x) => ({ forma: x.forma, monto: x.monto }));
+    if (!cli) throw new Error('Elegí la clienta.');
+    if (!fechaValida(d.fecha)) throw new Error('La fecha del cobro no es válida.');
+    if (d.fecha > BG.hoy()) throw new Error('La fecha del cobro no puede ser futura.');
+    if (d.destino !== 'todas' && d.destino !== 'sena') {
+      const destino = BG.venta(d.destino);
+      if (!destino || destino.anulada) throw new Error('Esa compra no existe o está anulada.');
+      if (destino.clienteId !== d.clienteId) throw new Error('Esa compra es de otra clienta.');
+    }
+    if (!enteroNoNeg(d.usarCredito) || !enteroNoNeg(d.excedenteACredito)) throw new Error('Revisá el saldo a favor: tiene que ser un monto entero.');
+    const cola = controlarPartes(d.partes).map((x) => ({ forma: x.forma, monto: x.monto }));
+    // Un cobro que no tiene a qué aplicarse no se pierde ni se anota a medias: se frena y se dice por qué (otro aparato ya lo cobró, doble toque...).
+    if (d.destino !== 'sena') {
+      const deuda = d.destino === 'todas' ? BG.saldoCliente(d.clienteId) : BG.saldoVenta(BG.venta(d.destino));
+      if (!(deuda > 0)) throw new Error(d.destino === 'todas' ? cli.nombre.split(' ')[0] + ' no debe nada: si es un adelanto, registralo como seña.' : 'Esa compra ya no debe nada (puede que otro aparato ya la haya cobrado). Si es un adelanto, registralo como seña.');
+    }
+    if ((d.excedenteACredito || 0) > sum(cola, (x) => x.monto)) throw new Error('No se puede dejar a su favor más de lo que pagó en plata.');
     // Saldo a favor usado para pagar la deuda: va primero y nunca más de lo que tiene ni de lo que debe.
     const usar = d.destino === 'sena' ? 0 : Math.min(Math.round(Number(d.usarCredito) || 0), BG.creditoCliente(d.clienteId),
       d.destino === 'todas' ? BG.saldoCliente(d.clienteId) : BG.saldoVenta(BG.venta(d.destino)));
@@ -496,23 +574,11 @@
     if (!lista.length) throw new Error('Elegí al menos un artículo para agregar.');
     const quien = BG.usuario().nombre;
     const items = armarItems(lista, quien);
-    for (const it of items) {
-      if (!Number.isInteger(it.cantidad) || it.cantidad < 1) throw new Error('Revisá la cantidad de «' + it.descripcion + '».');
-      if (!(it.precio > 0)) throw new Error('«' + it.descripcion + '» no tiene precio de venta.');
-    }
-    // El stock tiene que alcanzar (sumando si el mismo artículo viene dos veces).
-    const pedidas = new Map();
-    items.forEach((it) => pedidas.set(it.productoId, (pedidas.get(it.productoId) || 0) + it.cantidad));
-    pedidas.forEach((n, pid) => {
-      const p = BG.producto(pid);
-      const quedan = BG.vendibles(p, v.clienteId);
-      if (quedan < n) throw new Error('De «' + p.descripcion + '» ' + (quedan === 1 ? 'queda 1' : 'quedan ' + quedan) + (BG.reservadas(p.id, v.clienteId) ? ' (el resto está apartado)' : '') + ': no alcanza para ' + n + '.');
-    });
+    controlarArticulos(items, v.clienteId);   // cantidades, precios y stock: los mismos controles que al vender
     controlarPrecios(items, false);
     const t = BG.totalesDe(v, v.items.concat(items));
     const sube = t.total - v.total;
-    const partes = (d.partes || []).filter((x) => x.monto > 0).map((x) => ({ forma: x.forma, monto: Math.round(x.monto) }));
-    if (partes.some((x) => !BG.FORMAS_CORTAS[x.forma])) throw new Error('Elegí cómo paga.');
+    const partes = controlarPartes(d.partes).map((x) => ({ forma: x.forma, monto: x.monto }));
     const recibido = sum(partes, (x) => x.monto);
     const saldoNuevo = t.total - BG.pagadoVenta(v);
     if (recibido > saldoNuevo) throw new Error('Paga ' + gs(recibido) + ' y la compra quedaría debiendo ' + gs(saldoNuevo) + ': cobrá lo justo, o usá «Registrar cobro» para darle vuelto o dejarlo a su favor.');
@@ -880,6 +946,7 @@
 
   /** Anota que se le mandó un recordatorio de cobro por WhatsApp (quién, cuándo y cuánto debía). No mueve plata. */
   BG.registrarRecordatorio = (clienteId) => {
+    if (!BG.puede('registrarCobros')) throw new Error('Tu usuario no puede registrar cobros.');
     const c = BG.cliente(clienteId);
     if (!c) throw new Error('No encontramos a esa clienta.');
     const saldo = BG.saldoCliente(clienteId);
@@ -946,6 +1013,7 @@
   };
   /** Da más tiempo (o menos) a un apartado vivo. */
   BG.cambiarVenceApartado = (id, vence) => {
+    if (!BG.puede('registrarVentas')) throw new Error('Tu usuario no puede registrar ventas.');
     const r = BG.reserva(id);
     if (!r || r.estado !== 'activa') throw new Error('Ese apartado ya no está activo.');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(vence || '') || vence < BG.hoy()) throw new Error('La fecha límite no puede ser anterior a hoy.');
@@ -958,6 +1026,7 @@
   };
   /** Libera lo apartado (vuelve a poder venderse). La seña, si hubo, sigue siendo saldo a favor de la clienta. */
   BG.liberarApartado = (id, motivo) => {
+    if (!BG.puede('registrarVentas')) throw new Error('Tu usuario no puede registrar ventas.');
     const r = BG.reserva(id);
     if (!r || r.estado !== 'activa') throw new Error('Ese apartado ya no está activo.');
     const texto = limpiar(motivo);
@@ -989,6 +1058,7 @@
   };
   /** Marca que ya se le avisó que llegó (queda cuándo y quién). Sigue pendiente hasta cerrarlo. */
   BG.avisarDeseo = (id) => {
+    if (!BG.puede('registrarVentas') && !BG.puede('editarClientes')) throw new Error('Tu usuario no puede anotar pedidos.');
     const x = (BG.db.deseos || []).find((y) => y.id === id);
     if (!x || (x.estado !== 'pendiente' && x.estado !== 'avisada')) throw new Error('Ese pedido ya está cerrado.');
     x.estado = 'avisada';
@@ -999,6 +1069,7 @@
   };
   /** Cierra un pedido: 'resuelta' (lo compró o lo consiguió) o 'descartada' (ya no lo quiere). Nada se borra. */
   BG.cerrarDeseo = (id, resultado, nota) => {
+    if (!BG.puede('registrarVentas') && !BG.puede('editarClientes')) throw new Error('Tu usuario no puede anotar pedidos.');
     const x = (BG.db.deseos || []).find((y) => y.id === id);
     if (!x || (x.estado !== 'pendiente' && x.estado !== 'avisada')) throw new Error('Ese pedido ya está cerrado.');
     if (resultado !== 'resuelta' && resultado !== 'descartada') throw new Error('Elegí cómo se cierra.');
@@ -1028,17 +1099,25 @@
    * llevó y lo que ya pagó. Es una compra más para la plata (si quedó debiendo, lo debe), pero no mueve el
    * stock (no son artículos del stock), no tiene costo cargado y no entra en la caja, los reportes ni la
    * ganancia de ningún período. Tampoco suma puntos sola: si el dueño quiere, los suma aparte.
-   * d = { clienteId, fecha, items: [{ descripcion, cantidad, precio }], pagado, nota }
+   * Se puede anotar con el detalle (`items`) o, si no se sabe qué llevó pero sí cuánto, solo con el monto (`monto`): queda un solo
+   * renglón «Compra de antes del sistema» (`anterior.sinDetalle`) y lo que se le manda a la clienta no dice qué era.
+   * d = { clienteId, fecha, items: [{ descripcion, cantidad, precio }] | monto, pagado, nota }
    */
   BG.registrarCompraAnterior = (d) => {
     soloDuenio('cargar compras de antes del sistema');
     const cli = BG.cliente(d.clienteId);
     if (!cli) throw new Error('Elegí la clienta.');
     if (!d.fecha || d.fecha > BG.hoy()) throw new Error('La fecha no puede ser futura.');
-    const items = (d.items || []).map((x) => ({ descripcion: limpiar(x.descripcion), cantidad: Math.round(Number(x.cantidad)), precio: Math.round(Number(x.precio)) }))
+    let items = (d.items || []).map((x) => ({ descripcion: limpiar(x.descripcion), cantidad: Math.round(Number(x.cantidad)), precio: Math.round(Number(x.precio)) }))
       .filter((x) => x.descripcion || x.precio > 0);
-    if (!items.length) throw new Error('Anotá al menos un artículo que llevó.');
-    for (const x of items) {
+    let sinDetalle = false;
+    if (!items.length) {
+      const monto = Math.round(Number(d.monto));
+      if (!(monto > 0)) throw new Error('Anotá cuánto llevó (el monto total) o, si lo tenés, qué llevó con su precio.');
+      items = [{ descripcion: 'Compra de antes del sistema', cantidad: 1, precio: monto }];
+      sinDetalle = true;
+    }
+    for (const x of sinDetalle ? [] : items) {
       if (!x.descripcion) throw new Error('A un artículo le falta qué era (por ejemplo «Vestido floreado»).');
       if (!(x.cantidad >= 1)) throw new Error('Revisá la cantidad de «' + x.descripcion + '».');
       if (!(x.precio > 0)) throw new Error('Falta el precio de «' + x.descripcion + '».');
@@ -1056,7 +1135,7 @@
       items: items.map((x) => ({ productoId: null, descripcion: x.descripcion, cantidad: x.cantidad, precio: x.precio, costoUnitGs: null, margen: null, precioLista: null, especial: null })),
       descuento: { tipo: 'monto', valor: 0, monto: 0, motivo: null, nota: '' }, subtotal: t.subtotal, total: t.total,
       anulada: null, usuario: quien, autorizadoPor: null, ajustes: [], devoluciones: [], aFavor: 0, plan: null, fidelidad: null, creditoAutorizado: null,
-      anterior: { ts: BG.ahora(), usuario: quien, nota: limpiar(d.nota) },
+      anterior: Object.assign({ ts: BG.ahora(), usuario: quien, nota: limpiar(d.nota) }, sinDetalle ? { sinDetalle: true } : {}),
     };
     BG.db.ventas.push(v);
     let pago = null;
@@ -1066,7 +1145,7 @@
       pago.anterior = true;   // ya estaba pagado antes del sistema: no entra en la caja de ningún día
     }
     BG.auditar('ventas', 'Compra anterior al sistema', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · del ' + BG.fmtFecha(d.fecha) + ' · '
-      + items.map((x) => x.cantidad + ' × ' + x.descripcion).join(', ') + ' · total ' + gs(t.total) + ' · ya pagado ' + gs(pagado)
+      + (sinDetalle ? 'solo el monto (sin detalle de lo que llevó)' : items.map((x) => x.cantidad + ' × ' + x.descripcion).join(', ')) + ' · total ' + gs(t.total) + ' · ya pagado ' + gs(pagado)
       + (t.total > pagado ? ' · debe ' + gs(t.total - pagado) : ' · saldada') + (v.anterior.nota ? ' · ' + v.anterior.nota : ''));
     BG.guardar();
     return { venta: v, pago: pago };
@@ -1089,6 +1168,7 @@
     if (!BG.puede('devoluciones')) throw new Error(BG.nombreDuena() + ' no te habilitó las devoluciones y cambios.');
     const v = BG.venta(d.ventaId);
     if (!v || v.anulada) throw new Error('Esa venta está anulada.');
+    if (v.anterior) throw new Error('Es una compra de antes del sistema: no tiene artículos del stock para devolver. Si hay que cambiarla, corregí la compra.');
     const it = v.items[d.item];
     const quedan = it ? BG.cantidadViva(it) : 0;
     const n = Math.round(Number(d.cantidad));
@@ -1250,6 +1330,46 @@
     BG.auditar('fidelidad', 'Puntos de compras anteriores quitados', BG.cliente(v.clienteId).nombre + ' · compra ' + BG.fmtRecibo(v.recibo) + ' del ' + BG.fmtFecha(v.fecha) + ' · ' + n + ' puntos menos');
     BG.guardar();
     return n;
+  };
+  /**
+   * El dueño le da puntos a una clienta sin que haya comprado nada (de 10 en 10). Es una acción delicada: los puntos valen plata
+   * cuando se canjean. Solo el dueño, con el programa prendido, con un motivo de la lista (`BG.MOTIVOS_PUNTOS`; «Otro» pide
+   * contar qué pasó) y queda con su nombre, la fecha y el motivo, en la ficha, en el comprobante de puntos y en la auditoría.
+   * d = { clienteId, puntos, motivo, nota }
+   */
+  BG.darPuntos = (d) => {
+    soloDuenio('darle puntos a una clienta sin una compra');
+    const f = BG.configFidelidad();
+    if (!f.activo) throw new Error('El programa de puntos está apagado: se prende en Ajustes → Clientas frecuentes.');
+    const cli = BG.cliente(d.clienteId);
+    if (!cli) throw new Error('Elegí la clienta.');
+    const n = d.puntos;
+    if (!Number.isInteger(n) || n < BG.PUNTOS_PASO || n % BG.PUNTOS_PASO !== 0) throw new Error('Los puntos se dan de ' + BG.PUNTOS_PASO + ' en ' + BG.PUNTOS_PASO + ' (' + BG.PUNTOS_PASO + ', ' + (2 * BG.PUNTOS_PASO) + ', ' + (3 * BG.PUNTOS_PASO) + '…).');
+    if (n > BG.PUNTOS_MANUAL_MAX) throw new Error('De una vez se pueden dar hasta ' + BG.PUNTOS_MANUAL_MAX + ' puntos (' + gs(BG.PUNTOS_MANUAL_MAX * f.valorPunto) + '). Para más, hacelo en dos veces.');
+    if (BG.MOTIVOS_PUNTOS.indexOf(d.motivo) < 0) throw new Error('Elegí por qué se le dan los puntos.');
+    const nota = limpiar(d.nota);
+    if (d.motivo === 'Otro' && nota.length < 5) throw new Error('Contá por qué se le dan en «Detalle» (queda en el historial).');
+    const x = { id: BG.uid('pm'), clienteId: cli.id, puntos: n, fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, motivo: d.motivo, nota: nota, anulado: null };
+    (BG.db.puntosManuales || (BG.db.puntosManuales = [])).push(x);
+    BG.auditar('fidelidad', 'Puntos dados a mano', cli.nombre + ' · ' + n + ' puntos (valen ' + gs(n * f.valorPunto) + ') sin una compra · ' + d.motivo + (nota ? ' · ' + nota : ''));
+    BG.guardar();
+    return x;
+  };
+  /** Anula puntos dados a mano (nada se borra). No se puede si la clienta ya canjeó puntos que quedarían sin respaldo. */
+  BG.quitarPuntosManuales = (id, motivo) => {
+    soloDuenio('quitar puntos dados a mano');
+    const x = (BG.db.puntosManuales || []).find((y) => y.id === id);
+    if (!x || x.anulado) throw new Error('Esos puntos ya no están.');
+    const texto = limpiar(motivo);
+    if (texto.length < 3) throw new Error('Contá por qué se quitan (queda en el historial).');
+    const p = BG.puntosDe(x.clienteId);
+    if (p && p.ganados - x.puntos < p.canjeados) {
+      throw new Error('No se puede: ' + (p.puntos === 0 ? 'ya usó todos sus puntos' : 'le quedan ' + p.puntos + ' y estos son ' + x.puntos) + ' (los canjeó). Lo canjeado no se deshace.');
+    }
+    x.anulado = { fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, motivo: texto };
+    BG.auditar('fidelidad', 'Puntos dados a mano quitados', BG.cliente(x.clienteId).nombre + ' · ' + x.puntos + ' puntos del ' + BG.fmtFecha(x.fecha) + ' · ' + texto);
+    BG.guardar();
+    return x;
   };
   BG.guardarFidelidad = (datos) => {
     soloDuenio('cambiar el programa de clientas frecuentes');
@@ -1638,6 +1758,7 @@
   }
 
   BG.guardarProductos = (lista, origen) => {
+    if (!BG.esDuena() && !BG.puede('cargarProductos')) throw new Error(BG.nombreDuena() + ' no te habilitó cargar productos.');
     const fecha = BG.hoy();
     const ts = BG.ahora();
     const creados = [];
@@ -1693,6 +1814,7 @@
   };
 
   BG.actualizarPrecio = (pid, margen, precio, nota) => {
+    soloDuenio('cambiar precios');
     const p = BG.producto(pid);
     const antes = p.precioVenta;
     p.margen = margen;
@@ -1713,6 +1835,7 @@
   /* ── Parámetros ──────────────────────────────────────────────────────── */
 
   BG.cambiarCotizacion = (valor, repreciar) => {
+    soloDuenio('cambiar el dólar');
     const cfg = BG.db.config;
     const antes = cfg.cotizacion.valor;
     const reg = { valor: C.qToString(C.asQ(valor)), fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre };
@@ -1735,6 +1858,7 @@
   };
 
   BG.cambiarTarifa = (valor) => {
+    soloDuenio('cambiar la tarifa del courier');
     const cfg = BG.db.config;
     const antes = cfg.tarifa.valor;
     const reg = { valor: C.qToString(C.asQ(valor)), fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre };
@@ -1748,21 +1872,25 @@
   BG.MODOS_REDONDEO = MODOS;
   BG.textoRedondeo = (r) => (r.paso <= 1 ? 'sin redondeo' : 'a ' + C.groupThousands(r.paso) + ' ' + MODOS[r.modo]);
   BG.cambiarRedondeo = (paso, modo) => {
+    soloDuenio('cambiar el redondeo de los precios');
     BG.db.config.redondeo = { paso: paso, modo: modo };
     BG.auditar('parametros', 'Criterio de redondeo', BG.textoRedondeo(BG.db.config.redondeo));
     BG.guardar();
   };
   BG.cambiarMargenDefecto = (m) => {
+    soloDuenio('cambiar el margen preseleccionado');
     BG.db.config.margenDefecto = m;
     BG.auditar('parametros', 'Margen preseleccionado', m + ' %');
     BG.guardar();
   };
   BG.guardarTienda = (datos) => {
+    soloDuenio('cambiar los datos de la tienda');
     Object.assign(BG.db.config.tienda, datos);
     BG.auditar('parametros', 'Datos de la tienda', 'Nombre, contacto y mensaje del recibo');
     BG.guardar();
   };
   BG.guardarMarca = (datos) => {
+    soloDuenio('cambiar la identidad visual');
     Object.assign(BG.db.config.marca, datos);
     const que = [];
     if ('logo' in datos) que.push(datos.logo ? 'logo nuevo' : 'logo provisorio');
@@ -1776,6 +1904,9 @@
   /* ── Caja ────────────────────────────────────────────────────────────── */
 
   BG.cerrarCaja = (fecha, esperado, contado, nota) => {
+    if (!BG.puede('verCaja')) throw new Error('Tu usuario no puede cerrar la caja.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha || '') || isNaN(new Date(fecha + 'T00:00:00').getTime()) || fecha > BG.hoy()) throw new Error('La fecha del cierre no es válida: no se puede cerrar un día que todavía no pasó.');
+    if (!Number.isInteger(esperado) || !Number.isInteger(contado) || contado < 0) throw new Error('El efectivo contado tiene que ser un monto entero en guaraníes.');
     BG.db.cierres = BG.db.cierres.filter((c) => c.fecha !== fecha);
     BG.db.cierres.push({ fecha: fecha, ts: BG.ahora(), usuario: BG.usuario().nombre, efectivoEsperado: esperado, efectivoContado: contado, nota: nota || '' });
     const cfg = BG.db.config;
@@ -1862,6 +1993,7 @@
   };
 
   BG.guardarEnvio = (datos, id) => {
+    if (!BG.puede('prepararEnvios')) throw new Error('Tu usuario no puede preparar envíos.');
     let e;
     if (id) {
       e = BG.db.envios.find((x) => x.id === id);

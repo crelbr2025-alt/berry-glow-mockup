@@ -94,7 +94,7 @@
       compras: ventas.map((v) => {
         const ep = BG.estadoPlan(v);
         return {
-          numero: v.recibo, fecha: v.fecha, anulada: !!v.anulada, anterior: BG.esAnterior(v),
+          numero: v.recibo, fecha: v.fecha, anulada: !!v.anulada, anterior: BG.esAnterior(v), sinDetalle: !!(v.anterior && v.anterior.sinDetalle),
           // Si se corrigió: cuándo y cuánto era el total antes (lo único público de la corrección: nada de costos ni motivos internos).
           corregida: (v.correcciones || []).length || (v.traslados || []).length ? {
             fecha: (v.correcciones || []).concat(v.traslados || []).map((x) => x.fecha).sort().pop(),
@@ -186,7 +186,11 @@
       + '</section>'
       + (p.ganadas.length ? '<section class="r-section"><h2 class="r-sub">De dónde salieron</h2><table class="r-table"><thead><tr><th>Compra</th><th class="num">Importe</th><th class="num">Puntos</th></tr></thead><tbody>'
         + p.ganadas.map((x) => '<tr><td>' + BG.fmtFecha(x.fecha) + ' · ' + BG.fmtRecibo(x.recibo) + (x.parcial ? '<div class="r-forms">Con lo que ya pagaste de esta compra</div>' : '') + '</td><td class="num">' + gs(x.total) + '</td><td class="num">' + x.puntos + '</td></tr>').join('')
-        + '</tbody><tfoot><tr><td colspan="2">Puntos ganados</td><td class="num">' + p.ganados + '</td></tr></tfoot></table></section>' : '')
+        + '</tbody><tfoot><tr><td colspan="2">Puntos ganados</td><td class="num">' + (p.ganados - (p.deLaTienda || 0)) + '</td></tr></tfoot></table></section>' : '')
+      // Lo que le dio la tienda a mano: fecha y cantidad, sin el motivo interno.
+      + (p.manuales && p.manuales.length ? '<section class="r-section"><h2 class="r-sub">Puntos que te dio la tienda</h2><table class="r-table"><tbody>'
+        + p.manuales.map((x) => '<tr><td>' + BG.fmtFecha(x.fecha) + '</td><td class="num">' + x.puntos + '</td></tr>').join('')
+        + '</tbody><tfoot><tr><td>Total</td><td class="num">' + p.deLaTienda + '</td></tr></tfoot></table></section>' : '')
       + (p.canjes.length ? '<section class="r-section"><h2 class="r-sub">Puntos que ya usaste</h2><table class="r-table"><tbody>'
         + p.canjes.map((k) => '<tr><td>' + BG.fmtFecha(k.fecha) + ' · canje de ' + k.puntos + (k.puntos === 1 ? ' punto' : ' puntos') + '</td><td class="num">' + gs(k.monto) + '</td></tr>').join('')
         + '</tbody><tfoot><tr><td>Total usado</td><td class="num">' + p.canjeados + (p.canjeados === 1 ? ' punto' : ' puntos') + '</td></tr></tfoot></table></section>' : '')
@@ -256,8 +260,11 @@
     const compra = (c) => '<section class="r-section">'
       + '<h2>' + (c.anterior ? 'Compra de antes del sistema' : 'Detalle de la compra') + '<span>' + BG.fmtFecha(c.fecha) + ' · ' + BG.fmtRecibo(c.numero) + '</span></h2>'
       + (c.corregida ? '<p class="r-forms r-corregida">Comprobante corregido el ' + BG.fmtFecha(c.corregida.fecha) + (c.corregida.totalAntes !== c.total ? ' (el total era ' + gs(c.corregida.totalAntes) + ')' : '') + ': reemplaza al anterior.</p>' : '')
-      + '<table class="r-table"><thead><tr><th>Artículo</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Importe</th></tr></thead><tbody>'
-      + c.items.map((it) => '<tr><td>' + esc(it.descripcion) + '</td><td class="num">' + it.cantidad + '</td><td class="num">' + gs(it.precio) + '</td><td class="num">' + gs(it.precio * it.cantidad) + '</td></tr>').join('')
+      + (c.sinDetalle
+        // Solo el monto (no se sabe qué llevó): un renglón, sin cantidad ni precio.
+        ? '<table class="r-table"><thead><tr><th colspan="3">Concepto</th><th class="num">Importe</th></tr></thead><tbody><tr><td colspan="3">Compra de antes del sistema</td><td class="num">' + gs(c.total) + '</td></tr>'
+        : '<table class="r-table"><thead><tr><th>Artículo</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Importe</th></tr></thead><tbody>'
+        + c.items.map((it) => '<tr><td>' + esc(it.descripcion) + '</td><td class="num">' + it.cantidad + '</td><td class="num">' + gs(it.precio) + '</td><td class="num">' + gs(it.precio * it.cantidad) + '</td></tr>').join(''))
       + (c.agregados.length ? '<tr><td colspan="4" class="r-forms">' + c.agregados.map((a) => 'El ' + BG.fmtFecha(a.fecha) + ' se sumó a esta compra: ' + esc(a.texto)).join('<br>') + '</td></tr>' : '')
       + '</tbody><tfoot>'
       + (c.descuento ? '<tr><td colspan="3">Subtotal</td><td class="num">' + gs(c.subtotal) + '</td></tr><tr><td colspan="3">Descuento</td><td class="num">−' + gs(c.descuento) + '</td></tr>' : '')
@@ -281,7 +288,7 @@
       + '</section>';
     const legales = (d.terminos || []).filter((t) => !(terminosOff && terminosOff.has(t.id)));
     const filas = d.compras.reduce((a, c) => a + c.items.length + c.pagos.length + c.cuotas.length + c.devoluciones.length + 3, 0)
-      + (d.soloPuntos ? d.detallePuntos.ganadas.length + d.detallePuntos.canjes.length + 4 : 0);
+      + (d.soloPuntos ? d.detallePuntos.ganadas.length + d.detallePuntos.canjes.length + (d.detallePuntos.manuales.length ? d.detallePuntos.manuales.length + 3 : 0) + 4 : 0);
     const largo = filas > 16;
     const compacto = d.historial && !conDetalle;
     return '<article class="receipt' + (formato === 'ticket' ? ' is-ticket' : '') + (largo ? ' is-largo' : '')
