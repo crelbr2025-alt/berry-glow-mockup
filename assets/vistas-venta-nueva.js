@@ -69,6 +69,29 @@
     return out.filter((p) => p.monto > 0);
   }
 
+  /**
+   * Solo el dueño: elegir, pago por pago, si este pago suma sus puntos en el momento y si salen en el recibo de ese
+   * pago. `st` = { suma, recibo } con null = lo que dice Ajustes. `previstos` = puntos que daría (o null si no se sabe).
+   */
+  function htmlPuntosPago(st, previstos) {
+    const f = BG.configFidelidad();
+    if (!f.activo || !BG.esDuena()) return '';
+    const suma = st.suma == null ? !!f.porPago : st.suma;
+    const ver = st.recibo == null ? !!f.enRecibo : st.recibo;
+    return '<div class="puntos-pago"><label class="check-inline"><input type="checkbox" id="pp-suma"' + (suma ? ' checked' : '') + '> Sumar los puntos de este pago'
+      + (suma && previstos != null ? ' <span class="small muted">(' + (previstos ? 'unos ' + previstos + (previstos === 1 ? ' punto' : ' puntos') : 'con este monto todavía no llega a 1 punto') + ')</span>' : '') + '</label>'
+      + '<label class="check-inline"><input type="checkbox" id="pp-recibo"' + (ver ? ' checked' : '') + '> Mostrar los puntos en el recibo de este pago</label>'
+      + '<span class="hint">' + (suma ? 'Se suman ahora, sin esperar a que termine de pagar la compra; al terminar, la compra completa los suyos (no se cuentan dos veces).'
+        : 'Si no lo tildás, los puntos de la compra se suman al terminar de pagarla.') + '</span></div>';
+  }
+  /** Maneja los dos tildes de arriba. Devuelve true si el cambio era de ellos. */
+  function cambioPuntosPago(t, st) {
+    if (t.id === 'pp-suma') { st.suma = t.checked; return true; }
+    if (t.id === 'pp-recibo') { st.recibo = t.checked; return true; }
+    return false;
+  }
+  const opcionesPuntosPago = (st) => ({ sumarPuntos: st.suma == null ? undefined : st.suma, puntosEnRecibo: st.recibo == null ? undefined : st.recibo });
+
   function buscadorCliente(host, alElegir, volver) {
     host.innerHTML = '<div class="search"><label class="sr-only" for="q-cli">Buscar cliente</label><div class="search-box">' + icon('search')
       + '<input id="q-cli" class="search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Nombre, CI o teléfono" role="combobox" aria-expanded="false" aria-controls="q-cli-lista" aria-autocomplete="list"></div>'
@@ -152,6 +175,7 @@
       desc: { activo: false, tipo: 'monto', valor: '' },
       partes: [{ forma: 'efectivo', monto: 0 }],
       usarCredito: true,
+      pp: { suma: null, recibo: null },
       plan: { activo: false, n: 3, frecuencia: 'mensual', desde: BG.hoy(), primera: BG.primeraCuotaSugerida('mensual', BG.hoy()) },
     };
     const html = '<div class="page">'
@@ -172,6 +196,7 @@
       + '<div class="lines" id="s-pagos"></div>'
       + '<button type="button" class="btn-link" data-accion="agregar-forma">' + icon('plus', 'i-sm') + 'Dividir en otra forma de pago (pago mixto)</button>'
       + '<dl class="summary" id="s-resto"></dl>'
+      + '<div id="s-puntos"></div>'
       + '<div id="s-cred"></div>'
       + '<div id="s-plan" class="stack"></div>'
       + '<p class="error-text" id="err-venta" role="alert" hidden></p>'
@@ -320,6 +345,7 @@
       const ev = b.items.length && t.total > 0 && (duena || (puedeEspecial && conCambios)) ? BG.evaluarPrecio(t.total, sum(b.items, (it) => costoDe(it) * it.cantidad)) : null;
       $('#s-ganancia', root).innerHTML = ev ? '<p class="precio-info"><span class="muted">En toda la venta:</span> ' + BG.infoPrecio(ev) + '</p>' : '';
       pintarPlan(t.resto);
+      pintarPuntosPago(t);
       // Límite de crédito: aviso concreto cuando lo que queda debiendo no entra en su límite.
       const ec = b.clienteId && t.resto > 0 ? BG.estadoCredito(b.clienteId, t.resto) : null;
       const credAviso = ec && !ec.ok ? '<div class="aviso aviso-warn">' + icon('alert') + '<div>' + (duena
@@ -327,6 +353,20 @@
         : '<strong>No puede llevar a cuenta:</strong> ' + esc(BG.textoCredito(ec)) + '. Que pague todo, o al registrar se pide la autorización de ' + esc(BG.nombreDuena()) + '.') + '</div></div>' : '';
       const credHost2 = $('#s-cred', root);
       if (credHost2.innerHTML !== credAviso) credHost2.innerHTML = credAviso;
+    };
+    // Puntos de este pago (solo el dueño): cuántos daría con lo que se está cobrando, con la misma división de siempre.
+    const puntosPrevistos = (t) => {
+      const f = BG.configFidelidad();
+      if (!f.activo || !b.clienteId || b.fecha < f.desde) return 0;
+      const deCanje = Math.min(t.credito, BG.canjeDisponible(b.clienteId));
+      const plata = Math.max(0, Math.min(t.recibido, t.total - t.credito));
+      return Math.min(BG.puntosDeMonto(t.total - deCanje, f.cadaGs), BG.puntosDeMonto(plata, f.cadaGs));
+    };
+    const pintarPuntosPago = (t) => {
+      const host = $('#s-puntos', root);
+      if (!host) return;
+      const h = t.recibido > 0 && b.clienteId ? htmlPuntosPago(b.pp, puntosPrevistos(t)) : '';
+      if (host.innerHTML !== h) host.innerHTML = h;
     };
     // Cuotas al vender: aparece cuando queda algo debiendo. El editor se arma solo cuando cambia lo que se muestra
     // (así no se pierde el foco mientras se escriben los montos); la vista previa se actualiza siempre.
@@ -457,6 +497,7 @@
         res = BG.registrarVenta({
           clienteId: b.clienteId, fecha: b.fecha, descuento: descuento(), partes: partes, usarCredito: t.credito, excedenteACredito: aCredito, autorizadoPor: autorizadoPor,
           plan: conPlan ? { frecuencia: b.plan.frecuencia, n: b.plan.n, primera: b.plan.primera } : null, creditoAutorizadoPor: creditoAutorizadoPor,
+          sumarPuntos: opcionesPuntosPago(b.pp).sumarPuntos, puntosEnRecibo: opcionesPuntosPago(b.pp).puntosEnRecibo,
           items: b.items.map((it) => ({
             productoId: it.productoId, cantidad: it.cantidad, precio: it.precio, margen: it.margen,
             motivo: esEspecial(it) ? it.motivo : null, nota: esEspecial(it) ? it.nota : '',
@@ -505,6 +546,7 @@
             pintarTotales();
             return;
           }
+          if (cambioPuntosPago(t, b.pp)) { pintarTotales(); return; }
           if (t.id === 'usar-credito') { b.usarCredito = t.checked; pintarTotales(); return; }
           if (t.id === 'plan-activo') { b.plan.activo = t.checked; pintarTotales(); return; }
           if (t.id === 'd-activo') { b.desc.activo = t.checked; pintarDescuento(); pintarTotales(); return; }
@@ -612,7 +654,7 @@
     const pre = params.get('cliente');
     const e = {
       clienteId: pre && BG.cliente(pre) ? pre : null, destino: params.get('venta') || null, fecha: BG.hoy(),
-      partes: [{ forma: 'efectivo', monto: 0 }], usar: params.get('usar') === '1',
+      partes: [{ forma: 'efectivo', monto: 0 }], usar: params.get('usar') === '1', pp: { suma: null, recibo: null },
     };
     const html = '<div class="page">'
       + '<div class="page-head"><div><h1 class="page-title">Registrar cobro</h1><p class="page-sub">Pagos parciales, cuotas, de varias compras o mixtos (efectivo + transferencia + QR + tarjeta), y también con el saldo a favor.</p></div></div>'
@@ -626,7 +668,7 @@
       + '<div class="row"><span class="field-label grow">Paga</span><button type="button" class="chip" data-accion="completo">Todo el saldo</button></div>'
       + '<div class="lines" id="c-pagos"></div>'
       + '<button type="button" class="btn-link" data-accion="agregar-forma">' + icon('plus', 'i-sm') + 'Dividir en otra forma de pago (pago mixto)</button>'
-      + '<dl class="summary" id="c-resumen"></dl><p class="error-text" id="err-cobro" role="alert" hidden></p>'
+      + '<dl class="summary" id="c-resumen"></dl><div id="c-puntos"></div><p class="error-text" id="err-cobro" role="alert" hidden></p>'
       + '<button type="button" class="btn btn-primary btn-lg btn-block hide-sticky" data-accion="registrar">' + icon('check') + 'Registrar cobro</button>'
       + '</section></div></div>'
       + '<div class="sticky-submit"><div><span class="small muted">Recibido</span><div class="amount" id="cs-total">₲ 0</div></div>'
@@ -707,6 +749,30 @@
       } else if (e.destino === 'sena') h += '<dd class="span hint">Todo el monto queda como saldo a favor.</dd>';
       $('#c-resumen', root).innerHTML = h;
       $('#cs-total', root).textContent = gs(recibido);
+      pintarPuntos(recibido, u);
+    };
+    // Puntos de este cobro (solo el dueño): lo que sumaría repartido en las compras a las que se aplica, con la fórmula de siempre.
+    const puntosPrevistos = (recibido, u) => {
+      if (!BG.configFidelidad().activo || !e.clienteId || !e.destino || e.destino === 'sena') return null;
+      const ventas = e.destino === 'todas' ? BG.pendientesDe(e.clienteId) : [BG.venta(e.destino)].filter(Boolean);
+      let restante = recibido + u;
+      let deCanje = Math.min(u, BG.canjeDisponible(e.clienteId));
+      let n = 0;
+      for (const v of ventas) {
+        const aplicar = Math.min(restante, BG.saldoVenta(v));
+        if (aplicar <= 0) continue;
+        const dc = Math.min(deCanje, aplicar);
+        deCanje -= dc;
+        n += BG.puntosDePago(v, { total: aplicar, partes: [{ forma: 'efectivo', monto: aplicar, deCanje: dc }] });
+        restante -= aplicar;
+      }
+      return n;
+    };
+    const pintarPuntos = (recibido, u) => {
+      const host = $('#c-puntos', root);
+      if (!host) return;
+      const h = e.clienteId && e.destino && e.destino !== 'sena' && (recibido > 0 || u > 0) ? htmlPuntosPago(e.pp, puntosPrevistos(recibido, u)) : '';
+      if (host.innerHTML !== h) host.innerHTML = h;
     };
     const pintarTodo = () => { pintarCliente(); pintarDestino(); pintarFavor(); pintarCuota(); pintarResumen(); };
     const registrar = async () => {
@@ -731,7 +797,7 @@
       }
       let res;
       try {
-        res = BG.registrarCobro({ clienteId: e.clienteId, destino: e.destino, fecha: e.fecha, partes: partes, excedenteACredito: aCredito, usarCredito: u });
+        res = BG.registrarCobro(Object.assign({ clienteId: e.clienteId, destino: e.destino, fecha: e.fecha, partes: partes, excedenteACredito: aCredito, usarCredito: u }, opcionesPuntosPago(e.pp)));
       } catch (er) {
         return fallar(er.message);
       }
@@ -753,6 +819,7 @@
         root.addEventListener('change', (ev) => {
           const t = ev.target;
           if (t.name === 'destino') { e.destino = t.value; pintarFavor(); pintarCuota(); pintarResumen(); }
+          if (cambioPuntosPago(t, e.pp)) { pintarResumen(); return; }
           if (t.id === 'usar-favor') { e.usar = t.checked; pintarFavor(); pintarResumen(); }
           if (t.id === 'f-fecha') { e.fecha = t.value || BG.hoy(); $('#h-fecha', root).textContent = textoFecha(e.fecha); }
         });

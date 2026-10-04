@@ -80,7 +80,7 @@
     // Lo «pagado antes del sistema» se anula junto con la compra anterior (no pasa a saldo a favor).
     const pagadoAntes = v.anterior ? sum(BG.pagosDeVenta(v.id).filter((p) => p.anterior), (p) => p.total) : 0;
     const pagado = BG.pagadoVenta(v) - pagadoAntes;
-    const puntos = BG.puntosDeVenta(v);
+    const puntos = BG.puntosGanadosDeVenta(v);
     const unidades = v.anterior ? 0 : sum(v.items, (it) => BG.cantidadViva(it));
     const parcial = (v.items || []).length > 1;
     // Lo que va a pasar. Es igual con cualquier motivo (el sistema no tiene dos aritméticas), pero se lo
@@ -109,10 +109,12 @@
     if (problema) { BG.toast(problema, 'error'); return false; }
     if (BG.cajaCerrada(pg.fecha) && !(await BG.pedirPin('El pago es del ' + BG.fmtFecha(pg.fecha) + ' y la caja de ese día ya está cerrada.'))) return false;
     const v = pg.ventaId ? BG.venta(pg.ventaId) : null;
-    const puntos = v ? BG.puntosDeVenta(v) : 0;
+    // Los puntos que la compra deja de tener sin este pago (si estaba saldada, vuelven a quedar pendientes; si sumó con el pago, se pierden).
+    const puntos = v ? BG.puntosGanadosDeVenta(v) - BG.puntosGanadosSinPago(pg) : 0;
     const efecto = () => '<div class="callout callout-warn efecto">' + icon('info') + '<div><strong>Al anular este pago:</strong><ul class="efecto-lista">'
       + '<li>El saldo vuelve a subir <strong>' + gs(pg.total) + '</strong>' + (pg.excedente ? ' y se le quitan los ' + gs(pg.excedente) + ' que habían quedado a favor' : '') + '.</li>'
-      + (puntos && v && BG.saldoVenta(v) <= 0 ? '<li>La compra deja de estar saldada, así que los <strong>' + puntos + (puntos === 1 ? ' punto' : ' puntos') + '</strong> vuelven a quedar pendientes hasta que la termine de pagar.</li>' : '')
+      + (puntos > 0 ? '<li>' + (pg.puntos ? 'Pierde los <strong>' + puntos + (puntos === 1 ? ' punto' : ' puntos') + '</strong> que sumó con este pago; vuelven a quedar pendientes hasta que termine de pagar la compra.'
+        : 'La compra deja de estar saldada, así que los <strong>' + puntos + (puntos === 1 ? ' punto' : ' puntos') + '</strong> vuelven a quedar pendientes hasta que la termine de pagar.') + '</li>' : '')
       + '<li>El pago queda en el historial como anulado, con fecha, motivo y usuario.</li>'
       + '</ul></div></div>';
     const m = await BG.pedirMotivoAnulacion('pago', 'Anular el pago ' + BG.fmtRecibo(pg.recibo),
@@ -450,16 +452,126 @@
     return true;
   };
 
+  /* ── Corregir una compra ya hecha (solo el dueño) ────────────────────── */
+
+  /**
+   * Corrige lo que está mal de una compra: nombre, cantidad, precio y costo de cada artículo, descuento y fecha. Antes de
+   * guardar muestra qué pasaría (BG.revisarCorreccion, que prueba todo en una copia) y lo que no se puede dice por qué.
+   * El ticket anterior queda guardado en la compra; el recibo nuevo dice «corregido». Pide el PIN para confirmar.
+   */
+  BG.corregirCompraUI = async (v) => {
+    const cli = BG.cliente(v.clienteId);
+    const conDesc = !!(v.descuento && v.descuento.valor);
+    const st = {
+      items: v.items.map((it) => ({ descripcion: it.descripcion, cantidad: it.cantidad, precio: it.precio, costo: it.costoUnitGs == null ? '' : it.costoUnitGs })),
+      descTipo: conDesc ? v.descuento.tipo : 'monto', descValor: conDesc ? Number(v.descuento.valor) : 0, fecha: v.fecha, motivo: '', nota: '',
+    };
+    const armar = (paraVer) => ({
+      ventaId: v.id, fecha: st.fecha, motivo: paraVer ? (st.motivo || 'Precio mal puesto') : st.motivo, nota: st.nota,
+      items: st.items.map((x) => ({ descripcion: x.descripcion, cantidad: x.cantidad, precio: x.precio, costoUnitGs: x.costo === '' ? null : x.costo })),
+      descuento: { tipo: st.descTipo, valor: st.descValor },
+    });
+    const entero = (t) => { const n = parseInt(String(t).replace(/\D/g, ''), 10); return isNaN(n) ? '' : n; };
+    const linea = (it, i) => {
+      const x = st.items[i];
+      const viva = BG.cantidadViva(it);
+      return '<div class="corr-item"><p class="row-title">' + (i + 1) + ' · ' + esc(it.descripcion) + (it.devueltas ? ' <span class="t-devuelto">devolvió ' + it.devueltas + '</span>' : '') + '</p>'
+        + '<div class="field"><label for="co-d-' + i + '">Artículo</label><input id="co-d-' + i + '" class="input" maxlength="80" autocomplete="off" data-co="descripcion" data-i="' + i + '" value="' + esc(x.descripcion) + '"></div>'
+        + '<div class="corr-fila"><div class="field"><label for="co-c-' + i + '">Cantidad</label><input id="co-c-' + i + '" class="input" inputmode="numeric" autocomplete="off" data-co="cantidad" data-i="' + i + '" value="' + x.cantidad + '"></div>'
+        + '<div class="field"><label for="co-p-' + i + '">Precio c/u</label>' + BG.campoGs('co-p-' + i, x.precio, 'data-co="precio" data-i="' + i + '"') + '</div>'
+        + (v.anterior ? '' : '<div class="field"><label for="co-k-' + i + '">Costo c/u</label>' + BG.campoGs('co-k-' + i, x.costo, 'data-co="costo" data-i="' + i + '"') + '</div>') + '</div>'
+        + (viva !== it.cantidad ? '<p class="hint">Ya devolvió ' + it.devueltas + ': la cantidad no puede ser menos.</p>' : '') + '</div>';
+    };
+    const pintarDescuento = (form) => {
+      $('#co-dv-host', form).innerHTML = st.descTipo === 'monto' ? BG.campoGs('co-dv', st.descValor, 'aria-label="Descuento en guaraníes"')
+        : '<div class="suffix-wrap"><input id="co-dv" class="input" inputmode="decimal" autocomplete="off" value="' + esc(st.descValor ? BG.C.fmtNum(st.descValor, 0, 2) : '') + '" aria-label="Descuento en porcentaje"><span class="suffix">%</span></div>';
+      BG.enlazarCampos($('#co-dv-host', form));
+    };
+    const pintarInfo = (form) => {
+      const r = BG.revisarCorreccion(armar(true));
+      const sinCambios = r.errores.length === 1 && r.errores[0] === 'No cambiaste nada.';
+      let h = '';
+      if (r.antes && r.despues) {
+        const fila = (t, a, b) => '<dt>' + t + '</dt><dd>' + (a === b ? gs(a) : gs(a) + ' → ' + gs(b)) + '</dd>';
+        h = '<dl class="summary">' + fila('Total de la compra', r.antes.total, r.despues.total) + (v.anterior ? '' : fila('Costo', r.antes.costo, r.despues.costo) + fila('Ganancia', r.antes.ganancia, r.despues.ganancia))
+          + '<dt>Ya pagó</dt><dd>' + gs(r.antes.pagado) + '</dd><div class="sep"></div>'
+          + (r.aFavor ? '<dt><strong>Pasa a su favor</strong></dt><dd class="big t-favor">' + gs(r.aFavor) + '</dd>'
+            : '<dt><strong>Saldo</strong></dt><dd class="big ' + (r.despues.saldo > 0 ? 'due' : 'clear') + '">' + (r.antes.saldo === r.despues.saldo ? gs(r.despues.saldo) : gs(r.antes.saldo) + ' → ' + gs(r.despues.saldo)) + '</dd>') + '</dl>';
+      }
+      h += (r.efectos.length && !sinCambios ? '<div class="callout callout-warn efecto">' + icon('info') + '<div><strong>Si guardás:</strong><ul class="efecto-lista">' + r.efectos.map((e) => '<li>' + esc(e) + '</li>').join('') + '</ul></div></div>' : '');
+      h += sinCambios ? '<p class="hint">Todavía no cambiaste nada.</p>' : (!r.ok ? '<p class="error-text" role="alert">' + esc(r.errores[0]) + '</p>' : '');
+      $('#co-info', form).innerHTML = h;
+    };
+    const r = await BG.modal({
+      titulo: 'Corregir la compra ' + BG.fmtRecibo(v.recibo),
+      ancho: 'wide',
+      cuerpo: '<p class="small">Compra de <strong>' + esc(cli.nombre) + '</strong> del ' + BG.fmtFecha(v.fecha) + '. Cambiá lo que esté mal. <strong>El ticket anterior queda guardado</strong> en la compra, el recibo nuevo dice «corregido» '
+        + 'y solo se guarda si las cuentas, el stock y los puntos siguen cerrando.</p>'
+        + '<div class="stack-sm">' + v.items.map(linea).join('') + '</div>'
+        + '<div id="co-info" aria-live="polite"></div>'
+        + '<div class="field"><span class="field-label" id="co-desc-l">Descuento de la compra</span><div class="row"><div class="seg" role="radiogroup" aria-labelledby="co-desc-l">'
+        + '<label><input type="radio" name="co-dt" value="monto"' + (st.descTipo === 'monto' ? ' checked' : '') + '>En ₲</label>'
+        + '<label><input type="radio" name="co-dt" value="porcentaje"' + (st.descTipo === 'porcentaje' ? ' checked' : '') + '>En %</label></div>'
+        + '<div class="grow" id="co-dv-host"></div></div><span class="hint">Vacío o en cero = sin descuento.</span></div>'
+        + '<div class="field"><label for="co-f">Fecha de la compra</label><input id="co-f" class="input input-date" type="date" value="' + v.fecha + '" max="' + BG.hoy() + '"></div>'
+        + '<div class="field"><label for="co-m">¿Qué se corrige? <span class="req">*</span></label><select id="co-m" class="select"><option value="">Elegí el motivo</option>'
+        + BG.MOTIVOS_CORRECCION.map((m) => '<option value="' + esc(m) + '">' + esc(m) + '</option>').join('') + '</select></div>'
+        + '<div class="field"><label for="co-n">Detalle <span class="small muted">(obligatorio si el motivo es «Otro»)</span></label><input id="co-n" class="input" maxlength="140" autocomplete="off"></div>'
+        + '<p class="error-text" id="co-error" role="alert" hidden></p>',
+      acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Guardar la corrección', valor: 'ok', clase: 'btn-primary', submit: true }],
+      onMount: (dlg) => {
+        const form = $('form', dlg);
+        pintarDescuento(form);
+        pintarInfo(form);
+        form.addEventListener('input', (e) => {
+          const t = e.target;
+          const i = Number(t.dataset.i);
+          if (t.dataset.co === 'descripcion') st.items[i].descripcion = t.value;
+          else if (t.dataset.co === 'cantidad') st.items[i].cantidad = entero(t.value);
+          else if (t.dataset.co === 'precio') st.items[i].precio = BG.leerGs(t);
+          else if (t.dataset.co === 'costo') st.items[i].costo = t.value.trim() === '' ? '' : BG.leerGs(t);
+          else if (t.id === 'co-dv') st.descValor = st.descTipo === 'monto' ? BG.leerGs(t) : (Number(String(t.value).replace(',', '.')) || 0);
+          else if (t.id === 'co-f') st.fecha = t.value || v.fecha;
+          else if (t.id === 'co-n') st.nota = t.value;
+          else return;
+          pintarInfo(form);
+        });
+        form.addEventListener('change', (e) => {
+          if (e.target.name === 'co-dt') { st.descTipo = e.target.value; st.descValor = 0; pintarDescuento(form); pintarInfo(form); }
+          if (e.target.id === 'co-m') { st.motivo = e.target.value; pintarInfo(form); }
+        });
+      },
+      validar: (val, dlg) => {
+        const er = $('#co-error', dlg);
+        const rev = BG.revisarCorreccion(armar(false));
+        if (rev.ok) { er.hidden = true; return true; }
+        er.textContent = rev.errores[0];
+        er.hidden = false;
+        return false;
+      },
+    });
+    if (r !== 'ok') return false;
+    const rev = BG.revisarCorreccion(armar(false));
+    if (!(await BG.pedirPin('Corregir la compra ' + BG.fmtRecibo(v.recibo) + ' de ' + cli.nombre + (rev.antes ? ': total ' + gs(rev.antes.total) + ' → ' + gs(rev.despues.total) : '') + '.'))) return false;
+    const reg = BG.corregirVenta(armar(false));
+    BG.toast('Compra ' + BG.fmtRecibo(v.recibo) + ' corregida (total ' + gs(reg.totalDespues) + ').' + (reg.aFavor ? ' ' + gs(reg.aFavor) + ' quedan a favor de la clienta.' : '')
+      + ' Si ya le mandaste el recibo, mandale el nuevo: dice «corregido».');
+    return true;
+  };
+
   /** Puntos de una compra que no suma sola (dueño): sumarlos, o quitar los que se sumaron a mano. */
   BG.puntosCompraUI = async (v, accion) => {
     const cli = BG.cliente(v.clienteId);
     if (accion === 'quitar') {
-      const n = BG.puntosDeVenta(v);
-      const ok = await BG.modal({ titulo: 'Quitar los puntos de esta compra', cuerpo: '<p>Esta compra le sumó <strong>' + n + (n === 1 ? ' punto' : ' puntos') + '</strong> porque se eligió sumarlos a mano. Si los quitás, ' + esc(cli.nombre.split(' ')[0]) + ' tiene ' + n + ' menos. Lo que ya canjeó no se deshace.</p>',
+      const n = BG.puntosGanadosDeVenta(v);
+      const total = BG.puntosDeVenta(v);
+      const ok = await BG.modal({ titulo: 'Quitar los puntos de esta compra', cuerpo: n
+        ? '<p>Esta compra le sumó <strong>' + n + (n === 1 ? ' punto' : ' puntos') + '</strong> porque se eligió sumarlos a mano. Si los quitás, ' + esc(cli.nombre.split(' ')[0]) + ' tiene ' + n + ' menos. Lo que ya canjeó no se deshace.</p>'
+        : '<p>Esta compra va a sumar <strong>' + total + (total === 1 ? ' punto' : ' puntos') + '</strong> cuando termine de pagarla, porque se eligió sumarlos a mano. Si lo quitás, no suma ninguno.</p>',
         acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Quitar puntos', valor: 'ok', clase: 'btn-danger-solid' }] });
       if (ok !== 'ok') return false;
       BG.quitarPuntosAparte(v.id);
-      BG.toast('Se quitaron ' + n + (n === 1 ? ' punto' : ' puntos') + '. Ahora tiene ' + BG.puntosDe(cli.id).puntos + '.');
+      BG.toast(n ? 'Se quitaron ' + n + (n === 1 ? ' punto' : ' puntos') + '. Ahora tiene ' + BG.puntosDe(cli.id).puntos + '.' : 'Listo: esta compra ya no va a sumar puntos.');
       return true;
     }
     const n = BG.puntosDeVenta(v, true);
@@ -545,6 +657,7 @@
       + '<span class="sale-end">' + (BG.esAnterior(v) ? '<span class="pill pill-muted">' + icon('file') + 'Antes del sistema</span>' : '')
       + BG.estadoVenta(v) + (!v.anulada && BG.saldoVenta(v) > 0 ? (ep && ep.proxima ? BG.pillCuota(ep.proxima) : BG.edad(v.fecha)) : '')
       + ((v.agregados || []).length ? '<span class="pill pill-muted">' + icon('plus') + 'Con agregados</span>' : '')
+      + ((v.correcciones || []).length ? '<span class="pill pill-muted">' + icon('edit') + 'Corregida</span>' : '')
       + ((v.devoluciones || []).length ? '<span class="pill pill-muted">' + icon('undo') + ((v.devoluciones || []).some((d) => d.tipo !== 'devolucion') ? 'Con cambio' : 'Con devolución') + '</span>' : '') + '</span></a></li>';
   }
 
@@ -665,13 +778,30 @@
         : '<p class="small">Quedó a cuenta sin fechas. Acordá cuotas para ver qué vence esta semana y qué está atrasado.</p>')
       + '</section>' : '';
     const textoWa = BG.textosWa.compra(cli, v);
+    const corregidas = v.correcciones || [];
+    // Cada corrección con lo que cambió y el ticket anterior (con el costo: solo lo ve el dueño).
+    const cardCorrecciones = duena && corregidas.length ? '<section class="card stack" aria-labelledby="t-corr"><div class="card-head"><h2 id="t-corr">Correcciones</h2><span class="small muted">El ticket anterior queda guardado</span></div><ul class="lines">'
+      + corregidas.slice().reverse().map((c) => {
+        const yaEmitidos = BG.emisionesDe(v.recibo, v.clienteId).filter((e) => e.ts < c.ts).length;
+        return '<li class="line"><div class="row-title">' + BG.fmtFecha(c.fecha) + ' a las ' + BG.fmtHora(c.ts) + ' · por ' + esc(c.usuario) + '</div>'
+          + '<div class="row-sub"><strong>' + esc(c.motivo) + '</strong></div>'
+          + '<ul class="efecto-lista">' + c.cambios.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>'
+          + '<div class="row-sub">Total ' + gs(c.totalAntes) + ' → ' + gs(c.totalDespues) + (v.anterior ? '' : ' · costo ' + gs(c.costoAntes) + ' → ' + gs(c.costoDespues)) + (c.aFavor ? ' · ' + gs(c.aFavor) + ' pasaron a saldo a favor' : '') + '</div>'
+          + (yaEmitidos ? '<div class="row-sub t-devuelto">El recibo anterior ya se emitió ' + yaEmitidos + (yaEmitidos === 1 ? ' vez' : ' veces') + ': si se lo mandaste, mandale el nuevo.</div>' : '')
+          + '<details class="ticket-anterior"><summary>Ver el ticket anterior</summary><div class="table-wrap table-bare"><table class="table table-compact"><thead><tr><th>Artículo</th><th class="num">Cant.</th><th class="num">Precio</th>' + (v.anterior ? '' : '<th class="num">Costo</th>') + '</tr></thead><tbody>'
+          + c.antes.items.map((it) => '<tr><td>' + esc(it.descripcion) + '</td><td class="num">' + BG.cantidadViva(it) + '</td><td class="num">' + gs(it.precio) + '</td>' + (v.anterior ? '' : '<td class="num">' + gs(it.costoUnitGs || 0) + '</td>') + '</tr>').join('')
+          + '</tbody><tfoot>' + (c.antes.descuento && c.antes.descuento.monto ? '<tr><td colspan="' + (v.anterior ? 3 : 4) + '">Descuento −' + gs(c.antes.descuento.monto) + '</td></tr>' : '')
+          + '<tr><td colspan="' + (v.anterior ? 3 : 4) + '">Total ' + gs(c.antes.total) + ' · ' + BG.fmtFecha(c.antes.fecha) + '</td></tr></tfoot></table></div></details></li>';
+      }).join('') + '</ul></section>' : '';
     // Puntos de esta compra: cuántos suma (o por qué no) y, para el dueño, sumarlos o quitarlos a mano.
     const fid = BG.configFidelidad();
     const ptsSi = fid.activo && !v.anulada ? BG.puntosDeVenta(v) : 0;
+    const ptsYa = ptsSi ? BG.puntosGanadosDeVenta(v) : 0;
     const ptsDarian = fid.activo && !v.anulada && !BG.ventaSumaPuntos(v) ? BG.puntosDeVenta(v, true) : 0;
     const lineaPuntos = !fid.activo || v.anulada || (!ptsSi && !ptsDarian) ? ''
       : '<div class="callout callout-soft">' + icon('star') + '<div class="grow"><span class="small">'
-        + (ptsSi ? (saldo > 0 ? 'Suma <strong>' + ptsSi + ' puntos</strong> cuando termine de pagarla.' : 'Esta compra le sumó <strong>' + ptsSi + ' puntos</strong>.')
+        + (ptsSi ? (saldo > 0 ? (ptsYa ? 'Ya sumó <strong>' + ptsYa + (ptsYa === 1 ? ' punto' : ' puntos') + '</strong> con sus pagos y suma ' + (ptsSi - ptsYa) + ' más cuando termine de pagarla.'
+          : 'Suma <strong>' + ptsSi + ' puntos</strong> cuando termine de pagarla.') : 'Esta compra le sumó <strong>' + ptsSi + ' puntos</strong>.')
           + (v.puntosAparte ? ' Los sumó ' + esc(v.puntosAparte.usuario) + ' a mano el ' + BG.fmtFecha(v.puntosAparte.fecha) + '.' : '')
           : 'No suma puntos sola: es ' + (v.anterior ? 'de antes del sistema' : 'de antes del ' + BG.fmtFecha(fid.desde) + ', cuando empezó el programa') + '. Daría ' + ptsDarian + (ptsDarian === 1 ? ' punto.' : ' puntos.'))
         + '</span></div>'
@@ -696,11 +826,14 @@
       + (!v.anulada && !v.anterior && BG.puede('registrarVentas') ? '<button type="button" class="btn" data-accion="agregar">' + icon('plus') + 'Agregar artículos</button>' : '')
       + (!v.anulada && !v.anterior && hayVivos && BG.puede('devoluciones') ? '<button type="button" class="btn" data-accion="devolucion">' + icon('undo') + 'Devolución o cambio</button>' : '')
       + (!v.anulada && hayVivos && BG.puede('preciosEspeciales') ? '<button type="button" class="btn" data-accion="ajustar-precio">' + icon('tag') + 'Ajustar precio</button>' : '')
+      + (!v.anulada && duena ? '<button type="button" class="btn" data-accion="corregir">' + icon('edit') + 'Corregir compra</button>' : '')
       + (v.anulada || !BG.esDuena() ? '' : '<button type="button" class="btn btn-danger" data-accion="anular-venta">' + icon('ban') + 'Anular venta</button>')
       + '</div></div>'
       + (v.anterior ? '<div class="callout">' + icon('file') + '<div><strong>Compra de antes del sistema.</strong> Se anotó el ' + BG.fmtFecha(v.anterior.ts.slice(0, 10)) + ' por ' + esc(v.anterior.usuario)
         + (v.anterior.nota ? ' (' + esc(v.anterior.nota) + ')' : '') + '. No movió el stock ni entra en la caja ni en los reportes; lo que debe de acá se cobra como cualquier deuda.</div></div>' : '')
       + lineaPuntos
+      + (corregidas.length ? '<div class="callout callout-soft">' + icon('edit') + '<div class="grow"><span class="small">Esta compra se <strong>corrigió</strong> ' + (corregidas.length === 1 ? 'el ' + BG.fmtFecha(corregidas[0].fecha) : corregidas.length + ' veces (la última el ' + BG.fmtFecha(corregidas[corregidas.length - 1].fecha) + ')')
+        + (duena ? '. El ticket anterior está más abajo, en «Correcciones».' : '.') + '</span></div></div>' : '')
       + (v.anulada ? '<div class="callout callout-bad">' + icon('ban') + '<div><strong>Venta anulada el ' + BG.fmtFecha(v.anulada.fecha) + ' a las ' + BG.fmtHora(v.anulada.ts) + ' por ' + esc(v.anulada.usuario) + '.</strong> Motivo: ' + esc(v.anulada.motivo) + '</div></div>' : '')
       + (!v.anulada && saldo > 0 && favorCliente > 0 ? '<div class="favor-banner favor-banner-sm">' + '<span class="favor-ic">' + icon('wallet') + '</span><div class="grow"><strong>' + esc(cli.nombre.split(' ')[0]) + ' tiene ' + gs(favorCliente) + ' a favor.</strong> '
         + '<span class="small">Se puede usar para pagar esta venta.</span></div>'
@@ -722,7 +855,8 @@
         + '<div class="row-title' + (p.anulado ? ' strike' : '') + '">' + gs(p.total) + (p.excedente ? ' ' + BG.pillFavor(p.excedente) : '') + '</div>'
         + '<div class="row-sub">' + (p.anterior ? 'Pagado antes del sistema · anotado por ' + esc(p.usuario)
           : BG.fmtFecha(p.fecha) + ' ' + BG.fmtHora(p.ts) + ' · ' + BG.fmtRecibo(p.recibo) + (p.inicial ? ' · pago inicial' : '') + ' · por ' + esc(p.usuario)) + '</div>'
-        + (p.anterior ? '' : '<div class="row-sub">' + p.partes.map((x) => BG.FORMAS[x.forma] + ' ' + gs(x.monto) + (x.deCanje ? ' (' + gs(x.deCanje) + ' con puntos)' : '')).join(' + ') + '</div>')
+        + (p.anterior ? '' : '<div class="row-sub">' + p.partes.map((x) => BG.FORMAS[x.forma] + ' ' + gs(x.monto) + (x.deCanje ? ' (' + gs(x.deCanje) + ' con puntos)' : '')).join(' + ')
+          + (p.puntos ? ' · <span class="t-favor">sumó ' + p.puntos + (p.puntos === 1 ? ' punto' : ' puntos') + '</span>' : '') + '</div>')
         + (p.anulado ? '<div class="row-sub">Anulado el ' + BG.fmtFecha(p.anulado.fecha) + ': ' + esc(p.anulado.motivo) + '</div>' : '')
         + '</div>' + (p.anulado || v.anulada || !BG.esDuena() ? '' : '<button type="button" class="btn btn-sm btn-quiet" data-accion="anular-pago" data-id="' + p.id + '">Anular</button>')
         + '</div></li>').join('')
@@ -734,6 +868,7 @@
       + cardPlan
       + (devs.length ? '<section class="card stack"><div class="card-head"><h2>Devoluciones y cambios</h2><span class="small muted">Quedan en la auditoría</span></div>'
         + '<ul class="lines">' + devs.slice().reverse().map(lineaDevolucion).join('') + '</ul></section>' : '')
+      + cardCorrecciones
       + (cambios.length ? '<section class="card stack"><div class="card-head"><h2>Cambios de precio</h2>'
         + (v.autorizadoPor ? '<span class="pill pill-warn">Autorizó ' + esc(v.autorizadoPor) + ' con PIN</span>' : '<span class="small muted">Quedan en la auditoría</span>') + '</div>'
         + '<ul class="lines">' + cambios.map(lineaCambio).join('') + '</ul></section>' : '')
@@ -747,6 +882,7 @@
           try {
             if (b.dataset.accion === 'anular-venta' && (await BG.anularVentaUI(v))) BG.render();
             if (b.dataset.accion === 'ajustar-precio' && (await BG.ajustarPrecioUI(v))) BG.render();
+            if (b.dataset.accion === 'corregir' && (await BG.corregirCompraUI(v))) BG.render();
             if (b.dataset.accion === 'devolucion' && (await BG.devolucionUI(v))) BG.render();
             if (b.dataset.accion === 'plan' && (await BG.planUI(v))) BG.render();
             if (b.dataset.accion === 'agregar' && (await BG.agregarArticulosUI(v))) BG.render();

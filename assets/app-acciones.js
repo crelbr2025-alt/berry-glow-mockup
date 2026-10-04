@@ -149,6 +149,22 @@
     BG.db.pagos.push(pg);
     return pg;
   }
+  /**
+   * ¿Este pago suma sus puntos en el momento, sin esperar a que la compra termine de pagarse? Lo dice Ajustes
+   * (`fidelidad.porPago`) y el dueño lo puede elegir pago por pago (`d.sumarPuntos`); la vendedora usa lo de Ajustes.
+   */
+  function quiereSumarPuntos(d) {
+    if (!BG.configFidelidad().activo) return false;
+    return BG.esDuena() && typeof d.sumarPuntos === 'boolean' ? d.sumarPuntos : !!BG.configFidelidad().porPago;
+  }
+  /** Anota en el pago los puntos que suma al cobrarse y si salen en su recibo (`d.puntosEnRecibo`, solo el dueño lo elige). */
+  function puntosAlCobrar(v, pg, d) {
+    if (BG.esDuena() && typeof d.puntosEnRecibo === 'boolean') pg.puntosEnRecibo = d.puntosEnRecibo;
+    if (!quiereSumarPuntos(d)) return 0;
+    pg.puntos = BG.puntosDePago(v, pg);
+    return pg.puntos;
+  }
+  const textoPuntosPago = (n) => (n ? ' · suma ' + n + (n === 1 ? ' punto' : ' puntos') : '');
   function credito(clienteId, monto, motivo, extra) {
     BG.db.creditos.push(Object.assign({ id: BG.uid('cr'), clienteId: clienteId, fecha: BG.hoy(), ts: BG.ahora(), monto: monto, motivo: motivo }, extra || {}));
   }
@@ -321,7 +337,8 @@
     if (entregado > 0) {
       const excedente = d.excedenteACredito || 0;
       pago = nuevoPago({ ventaId: v.id, clienteId: d.clienteId, fecha: d.fecha, partes: partes, total: entregado - excedente, excedente: excedente, recibo: recibo, inicial: true });
-      BG.auditar('cobros', 'Pago inicial', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · ' + textoPartes(partes));
+      const ptsPago = puntosAlCobrar(v, pago, d);
+      BG.auditar('cobros', 'Pago inicial', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · ' + textoPartes(partes) + textoPuntosPago(ptsPago));
       if (excedente > 0) {
         credito(d.clienteId, excedente, 'Excedente del recibo ' + BG.fmtRecibo(recibo), { pagoId: pago.id });
         BG.auditar('cobros', 'Saldo a favor', cli.nombre + ' · ' + gs(excedente) + ' de excedente');
@@ -388,11 +405,13 @@
         cola.forEach((x) => partes.push({ forma: x.forma, monto: x.monto }));
         cola.length = 0;
       }
-      pagos.push(nuevoPago({ ventaId: v.id, clienteId: d.clienteId, fecha: d.fecha, partes: partes, total: aplicar, excedente: excedente, recibo: recibo, grupo: grupo }));
+      const pg = nuevoPago({ ventaId: v.id, clienteId: d.clienteId, fecha: d.fecha, partes: partes, total: aplicar, excedente: excedente, recibo: recibo, grupo: grupo });
+      puntosAlCobrar(v, pg, d);
+      pagos.push(pg);
     });
     const totalPartes = sum(pagos, (p) => sum(p.partes, (x) => x.monto));
     BG.auditar('cobros', 'Cobro registrado', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · ' + gs(totalPartes) + ' en ' + pagos.length + ' venta(s)'
-      + (usar > 0 ? ' · ' + gs(usar) + ' con su saldo a favor' : ''));
+      + (usar > 0 ? ' · ' + gs(usar) + ' con su saldo a favor' : '') + textoPuntosPago(sum(pagos, (p) => p.puntos || 0)));
     const exc = sum(pagos, (p) => p.excedente);
     if (exc > 0) {
       credito(d.clienteId, exc, 'Excedente del recibo ' + BG.fmtRecibo(recibo), { pagoId: pagos[pagos.length - 1].id });
@@ -517,6 +536,215 @@
     }
     BG.guardar();
     return { agregado: ag, pago: pago };
+  };
+
+  /* ── Corregir una compra ya hecha (solo el dueño) ──────────────────────── */
+
+  /**
+   * Cambia lo que está mal de una compra: nombre, cantidad, precio y costo de cada artículo, el descuento y la fecha.
+   * No se pisa nada: el ticket anterior queda guardado dentro de la compra (`v.correcciones`, con quién, cuándo y por
+   * qué) y el recibo que se emita después sale con lo corregido y dice «corregido». Es la misma compra (mismo número) y
+   * la plata y el stock se acomodan con las reglas de siempre:
+   *  · lo que ya pagó de más pasa a saldo a favor (igual que en una devolución); lo que falte sigue como deuda;
+   *  · las unidades que sobran vuelven al stock y las que faltan salen (tiene que haber);
+   *  · los puntos, la ganancia, la comisión y las cuotas salen de lo nuevo.
+   * Solo se guarda si todo cierra: los dos cuadres, el stock, los puntos que ya canjeó y las cuotas. `revisarCorreccion`
+   * hace todo en una COPIA y no guarda nada: sirve para mostrar qué pasaría antes de confirmar (y es lo mismo que corre
+   * `corregirVenta`, así lo que se ve es lo que pasa).
+   * d = { ventaId, items: [{ descripcion, cantidad, precio, costoUnitGs }] (uno por artículo, en el mismo orden),
+   *       descuento: { tipo, valor } | null (null lo saca; sin la clave no se toca), fecha, motivo, nota }
+   */
+  const textoMotivoCorreccion = (motivo, nota) => (motivo === 'Otro' ? nota : motivo + (nota ? ' · ' + nota : ''));
+
+  /** Lee y valida lo que mandó la pantalla (sin tocar nada). Devuelve { error } o los datos ya limpios. */
+  function leerCorreccion(v, d) {
+    const entero = (x) => (x === '' || x == null || !isFinite(Number(x)) ? NaN : Math.round(Number(x)));
+    if (!Array.isArray(d.items) || d.items.length !== v.items.length) return { error: 'La lista de artículos no coincide con la de la compra: volvé a abrir la corrección.' };
+    const items = [];
+    for (let i = 0; i < v.items.length; i++) {
+      const it = v.items[i];
+      const n = d.items[i];
+      const descripcion = limpiar(n.descripcion);
+      const cantidad = entero(n.cantidad);
+      const precio = entero(n.precio);
+      const costo = v.anterior || n.costoUnitGs == null || n.costoUnitGs === '' ? null : entero(n.costoUnitGs);
+      if (!descripcion) return { error: 'Falta el nombre del artículo ' + (i + 1) + '.' };
+      if (!(cantidad >= 0) || cantidad < (it.devueltas || 0)) {
+        return { error: it.devueltas ? 'De «' + it.descripcion + '» ya devolvió ' + it.devueltas + ': la cantidad no puede ser menos.' : 'Escribí la cantidad de «' + it.descripcion + '».' };
+      }
+      const vivo = cantidad - (it.devueltas || 0) > 0;
+      if (!(precio >= 0) || (vivo && !(precio > 0))) return { error: 'Escribí el precio de «' + it.descripcion + '».' };
+      if (costo != null && !(costo >= 0)) return { error: 'El costo de «' + it.descripcion + '» tiene que ser un monto (o dejalo como estaba).' };
+      items.push({ descripcion: descripcion, cantidad: cantidad, precio: precio, costo: costo });
+    }
+    let descuento;   // undefined = no se toca
+    if (d.descuento !== undefined) {
+      if (d.descuento === null || !(Number(d.descuento.valor) > 0)) descuento = null;
+      else {
+        const tipo = d.descuento.tipo === 'porcentaje' ? 'porcentaje' : 'monto';
+        const valor = Number(d.descuento.valor);
+        if (tipo === 'porcentaje' && valor > 100) return { error: 'El descuento no puede pasar del 100 %.' };
+        descuento = { tipo: tipo, valor: tipo === 'monto' ? Math.round(valor) : valor };
+      }
+    }
+    const fecha = d.fecha || v.fecha;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha) || isNaN(new Date(fecha + 'T00:00:00').getTime())) return { error: 'La fecha de la compra no es válida.' };
+    if (fecha > BG.hoy()) return { error: 'La fecha de la compra no puede ser futura.' };
+    if (!BG.MOTIVOS_CORRECCION.includes(d.motivo)) return { error: 'Elegí el motivo de la corrección.' };
+    const nota = limpiar(d.nota);
+    if (d.motivo === 'Otro' && nota.length < 5) return { error: 'Contá qué se corrige en «Detalle» (queda en el historial).' };
+    return { items: items, descuento: descuento, fecha: fecha, motivo: d.motivo, nota: nota };
+  }
+
+  const fotoDeCompra = (v) => ({ total: v.total, costo: BG.costoVenta(v), ganancia: BG.gananciaVenta(v), pagado: BG.pagadoVenta(v), saldo: BG.saldoVenta(v) });
+  /** Unidades que la clienta se queda de cada producto de la compra (para mover el stock y avisar). */
+  const unidadesPorProducto = (v) => {
+    const m = new Map();
+    v.items.forEach((it) => { if (it.productoId) m.set(it.productoId, (m.get(it.productoId) || 0) + BG.cantidadViva(it)); });
+    return m;
+  };
+
+  /** Hace la corrección sobre la compra `v` de BG.db (la real, o la copia de una revisión). Devuelve el registro que queda en la compra. */
+  function aplicarCorreccion(v, l) {
+    const quien = BG.usuario().nombre;
+    const antes = { items: JSON.parse(JSON.stringify(v.items)), descuento: Object.assign({}, v.descuento), subtotal: v.subtotal, total: v.total, fecha: v.fecha };
+    const costoAntes = BG.costoVenta(v);
+    const pagado = BG.pagadoVenta(v);
+    const cambios = [];
+    v.items.forEach((it, i) => {
+      const n = l.items[i];
+      const nombre = '«' + it.descripcion + '»';
+      if (it.descripcion !== n.descripcion) { cambios.push('Artículo ' + nombre + ' → «' + n.descripcion + '»'); it.descripcion = n.descripcion; }
+      if (it.cantidad !== n.cantidad) { cambios.push(nombre + ': cantidad ' + it.cantidad + ' → ' + n.cantidad); it.cantidad = n.cantidad; }
+      if (it.precio !== n.precio) {
+        cambios.push(nombre + ': precio ' + gs(it.precio) + ' → ' + gs(n.precio));
+        if (it.precioLista == null) it.precioLista = it.precio;
+        it.precio = n.precio;
+        it.margen = null;
+      }
+      // Un precio distinto del de lista queda como especial (así se ve en los reportes); si volvió a la lista, ya no lo es.
+      if (it.precioLista != null && it.precio === it.precioLista) it.especial = null;
+      else if (it.precioLista != null && !it.especial) it.especial = { motivo: 'Corrección', nota: l.motivo, usuario: quien };
+      if (n.costo != null && it.costoUnitGs !== n.costo) { cambios.push(nombre + ': costo ' + gs(it.costoUnitGs || 0) + ' → ' + gs(n.costo) + ' c/u'); it.costoUnitGs = n.costo; }
+    });
+    if (l.descuento !== undefined) {
+      const era = v.descuento && v.descuento.valor ? v.descuento : null;
+      const igual = l.descuento ? era && era.tipo === l.descuento.tipo && Number(era.valor) === l.descuento.valor : !era;
+      if (!igual) {
+        cambios.push('Descuento: ' + (era ? (era.tipo === 'porcentaje' ? C.fmtNum(era.valor, 0, 2) + ' %' : gs(era.valor)) : 'ninguno') + ' → '
+          + (l.descuento ? (l.descuento.tipo === 'porcentaje' ? C.fmtNum(l.descuento.valor, 0, 2) + ' %' : gs(l.descuento.valor)) : 'ninguno'));
+        v.descuento = l.descuento ? Object.assign({}, v.descuento, { tipo: l.descuento.tipo, valor: l.descuento.valor })
+          : { tipo: 'monto', valor: 0, monto: 0, motivo: null, nota: '' };
+      }
+    }
+    if (l.fecha !== v.fecha) { cambios.push('Fecha ' + BG.fmtFecha(v.fecha) + ' → ' + BG.fmtFecha(l.fecha)); v.fecha = l.fecha; }
+    const t = BG.totalesDe(v);
+    v.subtotal = t.subtotal;
+    v.descuento.monto = t.descuento;
+    v.total = t.total;
+    const reg = {
+      id: BG.uid('co'), fecha: BG.hoy(), ts: BG.ahora(), usuario: quien, motivo: textoMotivoCorreccion(l.motivo, l.nota), nota: l.nota, cambios: cambios, antes: antes,
+      totalAntes: antes.total, totalDespues: t.total, costoAntes: costoAntes, costoDespues: BG.costoVenta(v), aFavor: 0,
+    };
+    // Si ya había pagado más que el total nuevo, lo que sobra pasa a su favor (igual que en una devolución).
+    const sobra = pagado - t.total;
+    if (sobra > 0) {
+      v.aFavor = (v.aFavor || 0) + sobra;
+      reg.aFavor = sobra;
+      credito(v.clienteId, sobra, 'Corrección de la compra ' + BG.fmtRecibo(v.recibo), { ventaId: v.id, correccionId: reg.id });
+    }
+    (v.correcciones || (v.correcciones = [])).push(reg);
+    return reg;
+  }
+
+  /**
+   * Qué pasaría con esta corrección, sin guardar nada: { ok, errores, efectos, antes, despues, aFavor, cambios }.
+   * Todo se prueba en una copia de los datos; si algo no cierra, `ok` es false y `errores` dice por qué.
+   */
+  BG.revisarCorreccion = (d) => {
+    const r = { ok: false, errores: [], efectos: [], cambios: [] };
+    const v = BG.venta(d.ventaId);
+    if (!v) { r.errores.push('No encontramos esa compra.'); return r; }
+    if (!BG.esDuena()) { r.errores.push('Corregir una compra lo hace ' + BG.nombreDuena() + '.'); return r; }
+    if (v.anulada) { r.errores.push('La compra está anulada: no se corrige.'); return r; }
+    const l = leerCorreccion(v, d);
+    if (l.error) { r.errores.push(l.error); return r; }
+    const antes = fotoDeCompra(v);
+    const ptsAntes = BG.puntosDe(v.clienteId);
+    const uniAntes = unidadesPorProducto(v);
+    const falla = (m) => r.errores.push(m);
+    const real = BG.db;
+    BG.db = JSON.parse(JSON.stringify(real));
+    try {
+      const vc = BG.venta(v.id);
+      const reg = aplicarCorreccion(vc, l);
+      const despues = fotoDeCompra(vc);
+      r.antes = antes;
+      r.despues = despues;
+      r.aFavor = reg.aFavor;
+      r.cambios = reg.cambios;
+      if (!reg.cambios.length) falla('No cambiaste nada.');
+      if (!vc.items.some((it) => BG.cantidadViva(it) > 0) || !(vc.total > 0)) falla('La compra no puede quedar en ' + gs(0) + ' ni sin artículos: si no se llevó nada, anulala.');
+      if (vc.anterior && vc.total < antes.pagado) falla('Es una compra de antes del sistema: no puede quedar por debajo de lo que ya figura pagado (' + gs(antes.pagado) + ').');
+      if (l.fecha !== v.fecha && (BG.cajaCerrada(v.fecha) || BG.cajaCerrada(l.fecha))) falla('La fecha vieja o la nueva está en un día con la caja cerrada: reabrí la caja antes de cambiarla.');
+      if (vc.plan && l.fecha !== v.fecha && vc.plan.cuotas.length && vc.plan.cuotas[0].vence < vc.fecha) falla('La primera cuota vence antes de la nueva fecha de la compra: cambiá las cuotas primero.');
+      // Stock: lo que sobra vuelve y lo que falta tiene que haber (se mira en los datos de verdad, no en la copia).
+      const uniDesp = unidadesPorProducto(vc);
+      for (const [pid, n] of uniDesp) {
+        const dif = n - (uniAntes.get(pid) || 0);
+        const p = real.productos.find((x) => x.id === pid);
+        if (!dif || !p) continue;
+        // BG.disponibles lee BG.db (la copia, que ya tiene lo nuevo): si quedó negativo, no alcanzaba.
+        const sobraStock = BG.disponibles(BG.producto(pid));
+        if (dif > 0 && sobraStock < 0) falla('No alcanza el stock de «' + p.descripcion + '»: hacen falta ' + dif + ' más y solo hay ' + (sobraStock + dif) + '.');
+        r.efectos.push(dif > 0 ? 'Salen del stock ' + dif + ' × ' + p.descripcion + '.' : 'Vuelven al stock ' + (-dif) + ' × ' + p.descripcion + '.');
+      }
+      // Puntos: no pueden quedar menos de los que ya canjeó.
+      const ptsDesp = BG.puntosDe(vc.clienteId);
+      if (ptsAntes && ptsDesp) {
+        if (ptsDesp.ganados < ptsDesp.canjeados && ptsDesp.ganados < ptsAntes.ganados) {
+          falla('Con ese cambio ' + BG.cliente(vc.clienteId).nombre.split(' ')[0] + ' quedaría con ' + ptsDesp.ganados + ' puntos ganados y ya canjeó ' + ptsDesp.canjeados + ': no se puede.');
+        }
+        const dg = ptsDesp.ganados - ptsAntes.ganados;
+        const dp = ptsDesp.pendientes - ptsAntes.pendientes;
+        if (dg) r.efectos.push(dg > 0 ? 'Suma ' + dg + (dg === 1 ? ' punto' : ' puntos') + ' a la clienta.' : 'La clienta pierde ' + (-dg) + (dg === -1 ? ' punto' : ' puntos') + '.');
+        if (dp) r.efectos.push(dp > 0 ? 'Quedan ' + dp + ' puntos más para cuando termine de pagar.' : 'Quedan ' + (-dp) + ' puntos menos para cuando termine de pagar.');
+      }
+      // Las dos cuentas tienen que cerrar.
+      const cu = BG.cuadre();
+      const cf = BG.cuadreFavor();
+      if (!cu.ok || !cf.ok) falla('Con esos cambios las cuentas no cierran: no se guarda nada.');
+      if (despues.total !== antes.total) r.efectos.push('El total de la compra pasa de ' + gs(antes.total) + ' a ' + gs(despues.total) + '.');
+      if (reg.aFavor) r.efectos.push('Lo que ya pagó de más (' + gs(reg.aFavor) + ') pasa a saldo a favor de la clienta.');
+      else if (despues.saldo !== antes.saldo) r.efectos.push(despues.saldo > 0 ? 'Debe ' + gs(despues.saldo) + ' de esta compra.' : 'La compra queda saldada.');
+      if (despues.costo !== antes.costo || despues.total !== antes.total) r.efectos.push('La ganancia de esta compra pasa de ' + gs(antes.ganancia) + ' a ' + gs(despues.ganancia) + '.');
+    } catch (e) {
+      falla(e.message);
+    } finally {
+      BG.db = real;
+    }
+    r.ok = !r.errores.length;
+    return r;
+  };
+
+  BG.corregirVenta = (d) => {
+    soloDuenio('corregir compras ya hechas');
+    const r = BG.revisarCorreccion(d);
+    if (!r.ok) throw new Error(r.errores[0]);
+    const v = BG.venta(d.ventaId);
+    const l = leerCorreccion(v, d);
+    const respaldo = JSON.parse(JSON.stringify(BG.db));
+    const reg = aplicarCorreccion(v, l);
+    // Segunda barrera: la revisión ya lo probó en una copia, pero si por algo las cuentas no cierran no se guarda nada.
+    if (!BG.cuadre().ok || !BG.cuadreFavor().ok) {
+      BG.db = respaldo;
+      throw new Error('No se guardó nada: después del cambio las cuentas no cerraban. Contale esto a quien hizo el sistema.');
+    }
+    BG.auditar('ventas', 'Compra corregida', 'Recibo ' + BG.fmtRecibo(v.recibo) + ' · ' + BG.cliente(v.clienteId).nombre + ' · ' + reg.motivo + ' · ' + reg.cambios.join('; ')
+      + ' · total ' + gs(reg.totalAntes) + ' → ' + gs(reg.totalDespues) + ' · costo ' + gs(reg.costoAntes) + ' → ' + gs(reg.costoDespues)
+      + (reg.aFavor ? ' · ' + gs(reg.aFavor) + ' pasan a saldo a favor' : ''));
+    BG.guardar();
+    return reg;
   };
 
   /* ── Compras de antes del sistema (la libreta de lo que llevó antes) ─── */
@@ -739,9 +967,9 @@
     soloDuenio('quitar puntos de compras anteriores');
     const v = BG.venta(ventaId);
     if (!v || !v.puntosAparte) throw new Error('Esa compra no tiene puntos sumados a mano.');
-    const n = BG.puntosDeVenta(v);
+    const n = BG.puntosGanadosDeVenta(v);
     const p = BG.puntosDe(v.clienteId);
-    if (BG.saldoVenta(v) <= 0 && p && p.ganados - n < p.canjeados) {
+    if (n > 0 && p && p.ganados - n < p.canjeados) {
       throw new Error('No se puede: ' + (p.puntos === 0 ? 'ya usó todos sus puntos' : 'le quedan ' + p.puntos + ' y esta compra dio ' + n) + ' (los canjeó). Lo canjeado no se deshace.');
     }
     v.puntosAparte = null;
@@ -759,13 +987,75 @@
         if (!v.fidelidad && !v.anulada && v.fecha >= antes.desde) v.fidelidad = { cadaGs: antes.cadaGs, valorPunto: antes.valorPunto };
       });
     }
+    // Si las condiciones siguen siendo el texto sugerido del modo anterior, pasan al del modo nuevo (las que escribió él no se tocan).
+    if ('porPago' in datos && !!datos.porPago !== !!antes.porPago && !('terminos' in datos) && (antes.terminos === BG.terminosPuntosSugeridos(antes.porPago) || BG.TERMINOS_PUNTOS_VIEJOS.indexOf(antes.terminos) >= 0)) {
+      datos = Object.assign({}, datos, { terminos: BG.terminosPuntosSugeridos(!!datos.porPago) });
+    }
     const f = Object.assign(BG.configFidelidad(), datos);
     if (datos.cumple) f.cumple = Object.assign({}, BG.configFidelidad().cumple, datos.cumple);
     BG.db.config.fidelidad = f;
     BG.auditar('fidelidad', 'Programa de clientas frecuentes', f.activo ? '1 punto cada ' + gs(f.cadaGs) + ' · cada punto ' + gs(f.valorPunto) + ' · canje desde ' + f.minimo + ' puntos'
       + (f.cumple.activo ? ' · cumpleaños ' + f.cumple.porcentaje + ' %' : ' · sin regalo de cumpleaños')
+      + (f.porPago ? ' · los puntos se suman con cada pago' : ' · los puntos se suman al terminar de pagar la compra')
       + (f.enRecibo ? ' · los puntos se imprimen en el recibo' : ' · los puntos NO se imprimen en el recibo') : 'Desactivado');
     BG.guardar();
+  };
+  /* ── Términos y condiciones de los comprobantes (los edita el dueño) ── */
+
+  const MAX_TERMINO = 1200;
+  /** Agrega o cambia un término. d = { id?, titulo, texto, activo, donde }. Queda en la auditoría con el texto. */
+  BG.guardarTermino = (d) => {
+    soloDuenio('editar los términos y condiciones');
+    const titulo = limpiar(d.titulo);
+    const texto = String(d.texto == null ? '' : d.texto).trim().replace(/[ \t]+/g, ' ');
+    if (titulo.length < 3) throw new Error('Escribí el título (por ejemplo «Cambios y devoluciones»).');
+    if (titulo.length > 60) throw new Error('El título es muy largo: hasta 60 letras.');
+    if (texto.length < 10) throw new Error('Escribí el texto: es lo que va a leer la clienta en el comprobante.');
+    if (texto.length > MAX_TERMINO) throw new Error('El texto es muy largo (' + texto.length + ' letras): hasta ' + MAX_TERMINO + ' para que el comprobante no se haga enorme.');
+    if (!BG.DONDE_TERMINOS[d.donde]) throw new Error('Elegí en qué comprobantes sale.');
+    const lista = (BG.db.config.terminos || (BG.db.config.terminos = []));
+    let t = d.id ? lista.find((x) => x.id === d.id) : null;
+    if (d.id && !t) throw new Error('No encontramos ese texto: puede que ya lo hayas quitado.');
+    if (!t) { t = { id: BG.uid('tc') }; lista.push(t); }
+    const era = t.titulo ? Object.assign({}, t) : null;
+    Object.assign(t, { titulo: titulo, texto: texto, donde: d.donde, activo: !!d.activo });
+    BG.auditar('parametros', era ? 'Términos y condiciones cambiados' : 'Términos y condiciones agregados', '«' + titulo + '» · ' + (t.activo ? 'sale' : 'no sale') + ' · ' + BG.DONDE_TERMINOS[t.donde].toLowerCase()
+      + ' · ' + texto + (era && era.texto !== texto ? ' (antes: ' + era.texto + ')' : ''));
+    BG.guardar();
+    return t;
+  };
+  BG.quitarTermino = (id) => {
+    soloDuenio('quitar términos y condiciones');
+    const lista = BG.db.config.terminos || [];
+    const i = lista.findIndex((x) => x.id === id);
+    if (i < 0) throw new Error('Ese texto ya no está.');
+    const [t] = lista.splice(i, 1);
+    BG.auditar('parametros', 'Términos y condiciones quitados', '«' + t.titulo + '» · ' + t.texto);
+    BG.guardar();
+    return t;
+  };
+  /** Sube (−1) o baja (+1) un término en el orden en que salen. */
+  BG.moverTermino = (id, delta) => {
+    soloDuenio('ordenar los términos y condiciones');
+    const lista = BG.db.config.terminos || [];
+    const i = lista.findIndex((x) => x.id === id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= lista.length) return false;
+    [lista[i], lista[j]] = [lista[j], lista[i]];
+    BG.guardar();
+    return true;
+  };
+  /** El tamaño estándar de los comprobantes de un formato ('a4' o 'ticket'), en porcentaje. Solo el dueño. */
+  BG.guardarTamanoRecibo = (formato, porcentaje) => {
+    soloDuenio('dejar el tamaño estándar de los comprobantes');
+    if (formato !== 'a4' && formato !== 'ticket') throw new Error('Elegí si es para la hoja A4 o para el ticket.');
+    const n = Math.round(Number(porcentaje));
+    if (!(n >= BG.TAMANO_MIN && n <= BG.TAMANO_MAX)) throw new Error('El tamaño tiene que estar entre ' + BG.TAMANO_MIN + ' y ' + BG.TAMANO_MAX + ' %.');
+    const antes = BG.tamanoRecibo(formato);
+    BG.db.config.recibo = Object.assign({}, BG.db.config.recibo, { tamano: Object.assign({}, (BG.db.config.recibo || {}).tamano, { [formato]: n }) });
+    BG.auditar('parametros', 'Tamaño de los comprobantes', (formato === 'ticket' ? 'Ticket 80 mm' : 'Hoja A4') + ': ' + antes + ' % → ' + n + ' %');
+    BG.guardar();
+    return n;
   };
   /** Mostrar u ocultar de las listas lo anulado y lo cancelado (nada se borra: sigue en el historial y en la auditoría). */
   BG.cambiarVerAnulados = (si) => {
@@ -966,7 +1256,7 @@
     soloDuenio('anular ventas');
     const v = BG.venta(id);
     const cli = BG.cliente(v.clienteId);
-    const puntos = BG.puntosDeVenta(v);
+    const puntos = BG.puntosGanadosDeVenta(v);
     // Una compra anterior al sistema anotada por error: lo que figuraba «pagado antes del sistema» es parte de
     // esa misma anotación, no plata que entró. Se anula con ella (si no, aparecería como saldo a favor).
     if (v.anterior) {
@@ -1011,6 +1301,14 @@
     const vuelve = sum(pg.partes.filter((x) => x.forma === 'saldo'), (x) => x.monto);
     if (r.excedente + r.deDevolucion > 0 && BG.creditoCliente(pg.clienteId) + vuelve < r.excedente + r.deDevolucion) {
       return 'El saldo a favor que generó este pago ya se usó en otra compra (o se devolvió): anularlo dejaría el saldo a favor en negativo.';
+    }
+    // Un pago que sumó sus puntos en el momento: si la clienta ya los canjeó, anularlo dejaría puntos usados sin respaldo.
+    if (pg.puntos > 0 && v && BG.configFidelidad().activo) {
+      const p = BG.puntosDe(pg.clienteId);
+      const pierde = BG.puntosGanadosDeVenta(v) - BG.puntosGanadosSinPago(pg);
+      if (p && pierde > 0 && p.ganados - pierde < p.canjeados) {
+        return 'Con este pago sumó ' + pg.puntos + (pg.puntos === 1 ? ' punto' : ' puntos') + ' y ya los canjeó: anularlo dejaría puntos usados sin respaldo.';
+      }
     }
     return null;
   };

@@ -390,6 +390,9 @@
           ts: a.ts, fecha: a.fecha, delta: a.totalDespues - a.totalAntes,
           concepto: 'Agregado a la compra ' + num + ' · ' + a.items.map((i) => v.items[i].cantidad + ' × ' + v.items[i].descripcion).join(', '),
         })))
+        .concat((v.correcciones || []).filter((c) => c.totalDespues !== c.totalAntes).map((c) => ({
+          ts: c.ts, fecha: c.fecha, delta: c.totalDespues - c.totalAntes, concepto: 'Compra ' + num + ' corregida',
+        })))
         .concat((v.devoluciones || []).filter((d) => d.totalDespues !== d.totalAntes).map((d) => ({
           ts: d.ts, fecha: d.fecha, delta: d.totalDespues - d.totalAntes,
           concepto: (d.tipo === 'cambio' ? 'Cambio' : 'Devolución') + ' en la compra ' + num + ' · ' + d.cantidad + ' × ' + d.descripcion + (d.productoNuevo ? ' por ' + d.productoNuevo : ''),
@@ -404,6 +407,7 @@
       if (v.anulada) continue;
       cambios.forEach((x) => mov.push({ ts: x.ts, fecha: x.fecha, ventaId: v.id, concepto: x.concepto, cargo: x.delta > 0 ? x.delta : 0, abono: x.delta < 0 ? -x.delta : 0 }));
       (v.devoluciones || []).filter((d) => d.aFavor).forEach((d) => mov.push({ ts: d.ts + ':01', fecha: d.fecha, ventaId: v.id, concepto: 'Lo pagado de más pasó a saldo a favor' + (d.reintegro ? ' (se le devolvió' + (d.reintegro < d.aFavor ? ' ' + gs(d.reintegro) : '') + ' en ' + BG.FORMAS[d.forma].toLowerCase() + ')' : ''), cargo: d.aFavor }));
+      (v.correcciones || []).filter((c) => c.aFavor).forEach((c) => mov.push({ ts: c.ts + ':01', fecha: c.fecha, ventaId: v.id, concepto: 'Lo pagado de más pasó a saldo a favor', cargo: c.aFavor }));
     }
     for (const p of BG.db.pagos.filter((x) => x.clienteId === cid && x.ventaId)) {
       const v = BG.venta(p.ventaId);
@@ -703,16 +707,69 @@
 
   /** Condiciones del programa de puntos, tal como se le muestran a la clienta (el dueño las edita en Ajustes). */
   BG.TERMINOS_PUNTOS = 'Los puntos son un beneficio de la tienda. Se suman cuando la compra queda pagada del todo '
-    + '(si es en cuotas, al pagar la última). Lo que pagues con puntos no suma puntos y no se devuelve en plata. '
+    + '(si es en cuotas, al pagar la última); la tienda puede acreditarlos antes, con un pago parcial. '
+    + 'Lo que pagues con puntos no suma puntos y no se devuelve en plata. '
     + 'Los puntos no son dinero, no se cambian por efectivo y se usan como descuento en una próxima compra. '
     + 'La tienda puede cambiar o terminar el programa avisando por sus redes.';
+  /** El texto sugerido de antes de existir «con cada pago»: quien lo guardó así lo tiene igual en sus datos (pasa al nuevo si cambia de modo). */
+  BG.TERMINOS_PUNTOS_VIEJOS = ['Los puntos son un beneficio de la tienda. Se suman cuando la compra queda pagada del todo '
+    + '(si es en cuotas, al pagar la última). Lo que pagues con puntos no suma puntos y no se devuelve en plata. '
+    + 'Los puntos no son dinero, no se cambian por efectivo y se usan como descuento en una próxima compra. '
+    + 'La tienda puede cambiar o terminar el programa avisando por sus redes.'];
+  /** Si los puntos se suman con cada pago (en proporción a lo que se paga) en vez de al terminar de pagar la compra. */
+  BG.TERMINOS_PUNTOS_POR_PAGO = 'Los puntos son un beneficio de la tienda. Se suman con cada pago que hacés, en proporción a lo que pagás, '
+    + 'sin esperar a terminar de pagar la compra. Lo que pagues con puntos no suma puntos y no se devuelve en plata. '
+    + 'Los puntos no son dinero, no se cambian por efectivo y se usan como descuento en una próxima compra. '
+    + 'La tienda puede cambiar o terminar el programa avisando por sus redes.';
+  BG.terminosPuntosSugeridos = (porPago) => (porPago ? BG.TERMINOS_PUNTOS_POR_PAGO : BG.TERMINOS_PUNTOS);
   BG.configFidelidad = () => {
-    const f = Object.assign({ activo: false, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: '0000-00-00', enRecibo: true }, BG.db.config.fidelidad);
+    // porPago: false = los puntos se suman al terminar de pagar la compra (como siempre); true = con cada pago.
+    const f = Object.assign({ activo: false, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: '0000-00-00', enRecibo: true, porPago: false }, BG.db.config.fidelidad);
     f.cumple = Object.assign({ activo: false, porcentaje: 10 }, f.cumple);
-    if (!f.terminos || !String(f.terminos).trim()) f.terminos = BG.TERMINOS_PUNTOS;
+    if (!f.terminos || !String(f.terminos).trim()) f.terminos = BG.terminosPuntosSugeridos(f.porPago);
     if (f.enRecibo === undefined) f.enRecibo = true;
     return f;
   };
+  /* ── Términos y condiciones de los comprobantes ──
+   * Además de las condiciones del programa de puntos (que van con los puntos), el dueño puede tener otros textos fijos
+   * al pie de los comprobantes: cambios y devoluciones, pagos a cuenta, envíos… Cada uno tiene título, texto, si está
+   * activo y en qué comprobantes sale. Los escribe él: no son una regla de plata y no entran en ningún cálculo.
+   */
+  BG.DONDE_TERMINOS = {
+    todos: 'En todos los comprobantes',
+    compra: 'Solo en el recibo de una compra o de un pago',
+    cuenta: 'Solo en el estado de cuenta y el comprobante de puntos',
+  };
+  /** Textos de ejemplo para arrancar. Son solo un modelo: se leen y se cambian para que digan lo que de verdad hace la tienda. */
+  BG.TERMINOS_MODELOS = [
+    { id: 'cambios', titulo: 'Cambios y devoluciones', donde: 'compra',
+      texto: 'Los cambios se hacen dentro de los 7 días de la compra, con este comprobante y con la prenda sin uso, con su etiqueta y en buen estado. No se devuelve plata: el valor queda como saldo a favor para otra compra.' },
+    { id: 'cuenta', titulo: 'Compras a cuenta y cuotas', donde: 'todos',
+      texto: 'Las compras a cuenta se pagan en las fechas acordadas. Con una cuota atrasada, la tienda puede no vender a cuenta hasta que se ponga al día. Guardá cada recibo de pago para cualquier consulta.' },
+    { id: 'envios', titulo: 'Envíos', donde: 'compra',
+      texto: 'Los envíos salen de Coronel Oviedo con la empresa que acordamos. El flete lo paga quien recibe, salvo que se haya acordado otra cosa. Revisá el paquete al recibirlo y avisanos enseguida si llega con algún problema.' },
+    { id: 'senas', titulo: 'Señas y reservas', donde: 'compra',
+      texto: 'La seña reserva el artículo por el tiempo acordado. Si pasa ese tiempo sin completar el pago, el artículo puede volver a la venta y la seña queda como saldo a favor.' },
+  ];
+  /* ── Tamaño de los comprobantes ──
+   * El comprobante se achica con `zoom` (todo proporcional: letra, espacios, logo): más chico = entra más en una hoja
+   * o en un ticket. Cada formato tiene su tamaño; el dueño deja uno estándar para la tienda (Ajustes, o desde un
+   * comprobante) y cada aparato puede elegir otro para sus impresiones.
+   */
+  BG.TAMANOS_RECIBO = [[100, 'Normal'], [88, 'Chica'], [76, 'Muy chica'], [64, 'Mínima']];
+  BG.TAMANO_MIN = 50;
+  BG.TAMANO_MAX = 110;
+  BG.TAMANO_DEFECTO = { a4: 85, ticket: 80 };
+  /** Porcentaje que dejó el dueño para un formato ('a4' o 'ticket'), o el de fábrica si no eligió ninguno. */
+  BG.tamanoRecibo = (formato) => {
+    const c = BG.db.config.recibo;
+    const v = c && c.tamano ? Number(c.tamano[formato]) : NaN;
+    return v >= BG.TAMANO_MIN && v <= BG.TAMANO_MAX ? Math.round(v) : BG.TAMANO_DEFECTO[formato] || 100;
+  };
+  /** Todos los términos cargados, en el orden en que salen. */
+  BG.listaTerminos = () => (BG.db.config.terminos || []).slice();
+  /** Los que salen en un comprobante: `grupo` es 'compra' (recibo de una compra o de un pago) o 'cuenta' (estado de cuenta, de antes, de puntos). */
+  BG.terminosDeRecibo = (grupo) => BG.listaTerminos().filter((t) => t.activo && (t.donde === 'todos' || t.donde === grupo));
   /** ¿Se imprimen los puntos en los recibos? (el dueño lo prende y apaga en Ajustes; en cada recibo se puede cambiar solo para ese). */
   BG.puntosEnRecibo = () => { const f = BG.configFidelidad(); return !!(f.activo && f.enRecibo); };
   /** Parte de los pagos vivos de una venta que se hizo con saldo a favor que venía de puntos canjeados. */
@@ -726,9 +783,11 @@
     return Math.max(0, Math.min(BG.creditoCliente(cid), canjeado - usado));
   };
   /**
-   * Puntos: cada compra suma recién cuando queda pagada del todo (en contado al momento, en cuotas al pagar la última),
-   * 1 punto cada `cadaGs` de su total, sin contar lo que se pagó con puntos. Los pagos parciales no suman nada.
-   * Si la compra se anula no suma; si una devolución baja el total, suma sobre el total nuevo.
+   * Puntos: cada compra suma 1 punto cada `cadaGs` de su total, sin contar lo que se pagó con puntos. Por defecto
+   * suma recién cuando queda pagada del todo (en contado al momento, en cuotas al pagar la última) y los pagos
+   * parciales no suman nada. Si el dueño lo elige (Ajustes, o pago por pago al cobrar), un pago también suma
+   * sus puntos en el momento (`p.puntos`), sin esperar a que termine de pagar; al terminar, la compra completa su
+   * total (BG.puntosGanadosDeVenta). Si la compra se anula no suma; si una devolución baja el total, suma sobre el total nuevo.
    * Devuelve { puntos (disponibles), valor, canjeable, ganados, canjeados, pendientes (de compras sin terminar de pagar), porGanar }.
    */
   BG.puntosDe = (cid) => {
@@ -742,8 +801,9 @@
       // arreglar una dejara la otra mal (y los puntos de la clienta cambiaban solos).
       const pts = BG.puntosDeVenta(v);
       if (!pts) continue;
-      if (BG.saldoVenta(v) <= 0) ganados += pts;
-      else { pendientes += pts; porGanar.push({ v: v, puntos: pts }); }
+      const ya = BG.puntosGanadosDeVenta(v);
+      ganados += ya;
+      if (ya < pts) { pendientes += pts - ya; porGanar.push({ v: v, puntos: pts - ya, total: pts }); }
     }
     const canjeados = sum((BG.db.canjes || []).filter((k) => k.clienteId === cid), (k) => k.puntos);
     const puntos = Math.max(0, ganados - canjeados);
@@ -766,7 +826,42 @@
     // Con la regla que tenía la venta cuando se hizo (o cuando el dueño eligió que sume); las viejas, sin regla
     // guardada, usan la de hoy.
     const cada = v.fidelidad && v.fidelidad.cadaGs > 0 ? v.fidelidad.cadaGs : f.cadaGs;
-    return Math.floor(Math.max(0, v.total - BG.canjeAplicado(v)) / cada);
+    return BG.puntosDeMonto(v.total - BG.canjeAplicado(v), cada);
+  };
+  /** La única división de los puntos: 1 punto cada `cada` guaraníes (lo que sobra no suma). Compra, pago y avisos usan esta. */
+  BG.puntosDeMonto = (monto, cada) => Math.floor(Math.max(0, monto) / cada);
+  /** Puntos que ya sumaron los pagos vivos de la compra (los que se acreditaron en el momento, sin esperar a terminar de pagar). */
+  BG.puntosPorPagos = (v) => sum(BG.pagosDeVenta(v.id), (p) => p.puntos || 0);
+  /**
+   * Puntos que la compra ya le dio a la clienta: todos (BG.puntosDeVenta) si está pagada del todo; si todavía debe,
+   * solo los que sumaron sus pagos (nunca más que los de la compra). Es lo único que cuenta como «ganado».
+   */
+  BG.puntosGanadosDeVenta = (v) => {
+    const pts = BG.puntosDeVenta(v);
+    if (!pts) return 0;
+    return BG.saldoVenta(v) <= 0 ? pts : Math.min(pts, BG.puntosPorPagos(v));
+  };
+  /**
+   * Puntos que daría un pago de esta compra: 1 cada `cadaGs` de lo que se paga en plata (lo pagado con puntos no
+   * suma), sin pasar de lo que a la compra le falta por sumar. `pg` = { total, partes, id? } (el pago ya guardado, o
+   * uno por guardar). La misma fórmula para el cobro, el aviso antes de cobrar y lo que muestra el recibo.
+   */
+  BG.puntosDePago = (v, pg) => {
+    const f = BG.configFidelidad();
+    if (!f.activo || v.anulada || !BG.ventaSumaPuntos(v)) return 0;
+    const cada = v.fidelidad && v.fidelidad.cadaGs > 0 ? v.fidelidad.cadaGs : f.cadaGs;
+    const plata = Math.max(0, pg.total - sum(pg.partes, (x) => x.deCanje || 0));
+    const yaDados = sum(BG.pagosDeVenta(v.id).filter((p) => p.id !== pg.id), (p) => p.puntos || 0);
+    const tope = Math.max(0, BG.puntosDeVenta(v) - yaDados);
+    return Math.min(tope, BG.puntosDeMonto(plata, cada));
+  };
+  /** Lo que ganaría la clienta con esta compra si el pago `pg` se anulara (para avisar antes de anular). */
+  BG.puntosGanadosSinPago = (pg) => {
+    const v = pg.ventaId ? BG.venta(pg.ventaId) : null;
+    if (!v) return 0;
+    const antes = pg.anulado;
+    pg.anulado = { simulado: true };
+    try { return BG.puntosGanadosDeVenta(v); } finally { pg.anulado = antes; }
   };
   /** Compras vivas de la clienta que hoy no suman puntos y darían al menos uno si el dueño elige que sumen. */
   BG.comprasSinPuntos = (cid) => {
@@ -815,9 +910,9 @@
     const p = BG.puntosDe(cid);
     if (!p) return null;
     const ganadas = BG.ventasDeCliente(cid)
-      .filter((v) => !v.anulada && BG.saldoVenta(v) <= 0 && BG.puntosDeVenta(v) > 0)
+      .filter((v) => !v.anulada && BG.puntosGanadosDeVenta(v) > 0)
       .sort((a, b) => String(b.ts).localeCompare(String(a.ts)))
-      .map((v) => ({ recibo: v.recibo, fecha: v.fecha, total: v.total, puntos: BG.puntosDeVenta(v) }));
+      .map((v) => ({ recibo: v.recibo, fecha: v.fecha, total: v.total, puntos: BG.puntosGanadosDeVenta(v), parcial: BG.saldoVenta(v) > 0 }));
     return Object.assign({}, p, {
       minimo: f.minimo, valorPunto: f.valorPunto, cadaGs: f.cadaGs, terminos: f.terminos,
       ganadas: ganadas, canjes: BG.canjesDe(cid),
@@ -1008,6 +1103,8 @@
   };
   /* Precios especiales: el margen se mide sobre el costo congelado, igual que los sugeridos (50, 80, 100 y 120 %). */
   BG.MOTIVOS_PRECIO = ['Promoción', 'Cliente frecuente', 'Cumpleaños', 'Detalle en la prenda', 'Liquidación', 'Otro'];
+  /** Por qué el dueño corrige una compra ya hecha (queda en la compra y en la auditoría). «Otro» pide contar más. */
+  BG.MOTIVOS_CORRECCION = ['Precio mal puesto', 'Cantidad mal anotada', 'Costo mal cargado', 'Artículo mal anotado', 'Fecha mal puesta', 'Descuento mal aplicado', 'Otro'];
   /** Precio que la vendedora cobra por encima del de lista: no es promoción ni descuento. */
   BG.MOTIVO_ACORDADO = 'Precio acordado';
 

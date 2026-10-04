@@ -289,7 +289,7 @@
           + tile('Cumpleaños en 30 días', String(cumples.filter((x) => x.k.dias >= 0).length), cumples.filter((x) => x.k.enSemana).length + ' en la semana del regalo')
           + tile('Puntos para canjear', gs(sum(canjeables, (x) => x.pts.valor)), canjeables.length + ' clientas ya pueden canjear')
           + tile('Canjeado este mes', gs(sum(canjesMes, (k) => k.monto)), canjesMes.length + ' canjes') + '</div>'
-          + (fid.activo ? '<p class="callout">' + icon('star') + '<span>Programa: cuando una compra queda pagada del todo, suma 1 punto cada ' + gs(fid.cadaGs) + ' de su total (cada punto vale ' + gs(fid.valorPunto) + ', canje desde ' + fid.minimo + ' puntos); las compras en cuotas suman al pagar la última'
+          + (fid.activo ? '<p class="callout">' + icon('star') + '<span>Programa: ' + (fid.porPago ? 'con cada pago, ' : 'cuando una compra queda pagada del todo, ') + 'suma 1 punto cada ' + gs(fid.cadaGs) + ' de su total (cada punto vale ' + gs(fid.valorPunto) + ', canje desde ' + fid.minimo + ' puntos)' + (fid.porPago ? '; cada pago suma sus puntos en el momento' : '; las compras en cuotas suman al pagar la última')
             + (fid.cumple.activo ? ' y ' + fid.cumple.porcentaje + ' % de regalo en la semana de su cumpleaños' : '') + '. Jazmín solo ve el aviso al venderle. <a href="#/ajustes">Cambiar</a></span></p>'
             : '<p class="callout callout-warn">' + icon('info') + '<span>El programa de clientas frecuentes está apagado. <a href="#/ajustes">Activarlo en Ajustes</a></span></p>')
           + '<section class="card stack"><div class="card-head"><h2>' + icon('gift') + 'Cumpleaños próximos</h2></div>'
@@ -528,7 +528,16 @@
         ? '<div class="field"><span class="field-label">1 punto cada</span>' + seg('fi-cada', [5000, 10000, 20000], f.cadaGs, gs) + '</div>'
           + '<div class="field"><span class="field-label">Cada punto vale</span>' + seg('fi-valor', [100, 200, 300, 500], f.valorPunto, gs) + '</div>'
           + '<div class="field"><span class="field-label">Se canjea desde</span>' + seg('fi-min', [20, 50, 100], f.minimo, (v) => v + ' puntos') + '</div>'
-          + '<p class="callout">' + icon('info') + '<span>Los puntos se suman recién cuando la compra queda pagada del todo: al contado, en el momento; en cuotas, al pagar la última (los pagos parciales no suman). Devuelve el ' + String(Math.round(pct * 10) / 10).replace('.', ',') + ' %: una compra de ' + gs(300000) + ' pagada suma ' + Math.floor(300000 / f.cadaGs) + ' puntos = ' + gs(Math.floor(300000 / f.cadaGs) * f.valorPunto) + '. Lo que se paga con puntos no suma puntos. '
+          + '<div class="field"><span class="field-label" id="fi-cuando-l">Los puntos de una compra se suman</span><div class="seg" role="radiogroup" aria-labelledby="fi-cuando-l">'
+          + '<label><input type="radio" name="fi-cuando" value="completa"' + (f.porPago ? '' : ' checked') + '>Al terminar de pagarla</label>'
+          + '<label><input type="radio" name="fi-cuando" value="pago"' + (f.porPago ? ' checked' : '') + '>Con cada pago</label></div>'
+          + '<span class="hint">' + (f.porPago
+            ? 'Cada pago suma sus puntos en el momento, en proporción a lo que se paga (1 punto cada ' + gs(f.cadaGs) + ' en plata). Al cobrar, vos podés destildar «Sumar los puntos de este pago» en un pago puntual.'
+            : 'Como hasta ahora: una compra a cuenta suma recién al pagar la última cuota. Igual, al cobrar vos podés tildar «Sumar los puntos de este pago» en un pago puntual (Jazmín sigue lo que elegís acá).') + '</span></div>'
+          + '<p class="callout">' + icon('info') + '<span>' + (f.porPago
+            ? 'Cada pago suma sus puntos en el momento y, al terminar de pagar, la compra completa los suyos (nunca se cuentan dos veces). '
+            : 'Los puntos se suman cuando la compra queda pagada del todo: al contado, en el momento; en cuotas, al pagar la última (un pago parcial no suma, salvo que lo tildes al cobrar). ')
+            + 'Devuelve el ' + String(Math.round(pct * 10) / 10).replace('.', ',') + ' %: una compra de ' + gs(300000) + ' pagada suma ' + Math.floor(300000 / f.cadaGs) + ' puntos = ' + gs(Math.floor(300000 / f.cadaGs) * f.valorPunto) + '. Lo que se paga con puntos no suma puntos. '
             + 'Al canjear, pasa a su saldo a favor y en la ganancia neta cuenta como gasto de beneficios.</span></p>'
         : '')
       + (f.activo
@@ -548,6 +557,32 @@
       + '<label class="check-inline"><input type="checkbox" id="fi-cumple"' + (f.activo && f.cumple.activo ? ' checked' : '') + (f.activo ? '' : ' disabled') + '> Regalo de cumpleaños</label>'
       + (f.activo && f.cumple.activo ? '<div class="field"><span class="field-label">Descuento en la semana de su cumpleaños</span>' + seg('fi-pct', [5, 10, 15, 20], f.cumple.porcentaje, (v) => v + ' %') + '</div>' : '')
       + '<p class="hint">Jazmín no ve esta configuración: al elegir la clienta le aparece el aviso con un botón para aplicar el beneficio.</p>';
+  }
+
+  /** Términos y condiciones de los comprobantes: textos fijos que edita el dueño (los de los puntos van en «Clientas frecuentes»). */
+  function htmlTerminos(abierto) {
+    const lista = BG.listaTerminos();
+    const opciones = (sel) => Object.keys(BG.DONDE_TERMINOS).map((k) => '<option value="' + k + '"' + (sel === k ? ' selected' : '') + '>' + esc(BG.DONDE_TERMINOS[k]) + '</option>').join('');
+    const uno = (t, i) => '<details class="termino" data-id="' + esc(t.id) + '"' + (abierto === t.id ? ' open' : '') + '><summary><span class="row-title">' + esc(t.titulo) + '</span> '
+      + '<span class="pill ' + (t.activo ? 'pill-good' : 'pill-muted') + '">' + (t.activo ? 'Sale en los comprobantes' : 'No sale') + '</span></summary>'
+      + '<div class="stack-sm"><div class="field"><label for="tc-t-' + esc(t.id) + '">Título</label><input id="tc-t-' + esc(t.id) + '" class="input" maxlength="60" value="' + esc(t.titulo) + '"></div>'
+      + '<div class="field"><label for="tc-x-' + esc(t.id) + '">Texto <span class="small muted">(lo lee la clienta)</span></label><textarea id="tc-x-' + esc(t.id) + '" class="textarea" rows="4" maxlength="1200">' + esc(t.texto) + '</textarea></div>'
+      + '<div class="field"><label for="tc-d-' + esc(t.id) + '">Dónde sale</label><select id="tc-d-' + esc(t.id) + '" class="select">' + opciones(t.donde) + '</select></div>'
+      + '<label class="check-inline"><input type="checkbox" id="tc-a-' + esc(t.id) + '"' + (t.activo ? ' checked' : '') + '> Mostrarlo en los comprobantes</label>'
+      + '<div class="row"><button type="button" class="btn btn-sm btn-primary" data-accion="termino-guardar" data-id="' + esc(t.id) + '">Guardar</button>'
+      + '<button type="button" class="btn btn-sm btn-quiet" data-accion="termino-subir" data-id="' + esc(t.id) + '"' + (i === 0 ? ' disabled' : '') + ' aria-label="Subir">↑ Subir</button>'
+      + '<button type="button" class="btn btn-sm btn-quiet" data-accion="termino-bajar" data-id="' + esc(t.id) + '"' + (i === lista.length - 1 ? ' disabled' : '') + ' aria-label="Bajar">↓ Bajar</button>'
+      + '<button type="button" class="btn btn-sm btn-danger" data-accion="termino-quitar" data-id="' + esc(t.id) + '">' + icon('trash', 'i-sm') + 'Quitar</button></div></div></details>';
+    return '<div class="card-head"><h2>' + icon('file') + 'Términos y condiciones</h2></div>'
+      + '<p class="small">Textos fijos que salen al pie de los comprobantes: cambios y devoluciones, pagos a cuenta, envíos… Los lee la clienta, así que escribilos como se los dirías. '
+      + 'Las condiciones de los puntos no van acá: están en «Clientas frecuentes».</p>'
+      + (lista.length ? '<div class="terminos-lista">' + lista.map(uno).join('') + '</div>'
+        : '<p class="hint">Todavía no cargaste ninguno. Agregá uno propio o empezá desde un modelo.</p>')
+      + '<div class="field"><label for="tc-modelo">Agregar un texto</label><div class="row row-nowrap"><select id="tc-modelo" class="select"><option value="">En blanco (lo escribo yo)</option>'
+      + BG.TERMINOS_MODELOS.map((m) => '<option value="' + m.id + '">Modelo: ' + esc(m.titulo) + '</option>').join('') + '</select>'
+      + '<button type="button" class="btn" data-accion="termino-agregar">' + icon('plus', 'i-sm') + 'Agregar</button></div>'
+      + '<span class="hint">Los modelos son ejemplos: leelos y cambialos para que digan lo que de verdad hace la tienda. Quedan sin mostrarse hasta que los actives.</span></div>'
+      + '<p class="hint">En cada recibo se puede sacar un texto solo para esa vez.</p>';
   }
 
   /** Dónde están los datos (nube o este aparato), la copia de seguridad y empezar de cero. */
@@ -620,6 +655,11 @@
       + '<div class="field"><span class="field-label" id="aj-esc-l">Tamaño del logo</span><div class="seg" role="radiogroup" aria-labelledby="aj-esc-l">'
       + [[0.8, 'Chico'], [1, 'Normal'], [1.4, 'Grande'], [1.8, 'Muy grande']].map((x) => '<label><input type="radio" name="aj-escala" value="' + x[0] + '"' + (BG.escalaLogo() === x[0] ? ' checked' : '') + '>' + x[1] + '</label>').join('')
       + '</div><span class="hint">Se aplica al recibo y a la etiqueta del envío. Si tu logo se ve chico, subí el tamaño acá.</span></div>'
+      + '<div class="field"><span class="field-label">Tamaño de todo el comprobante</span>'
+      + [['a4', 'Hoja A4'], ['ticket', 'Ticket 80 mm']].map((x) => '<div class="r-tamano"><label for="aj-tam-' + x[0] + '" class="small">' + x[1] + '</label>'
+        + '<input type="range" id="aj-tam-' + x[0] + '" min="' + BG.TAMANO_MIN + '" max="' + BG.TAMANO_MAX + '" step="1" value="' + BG.tamanoRecibo(x[0]) + '">'
+        + '<output id="aj-tam-' + x[0] + '-n" for="aj-tam-' + x[0] + '">' + BG.tamanoRecibo(x[0]) + ' %</output></div>').join('')
+      + '<span class="hint">Más chico = entran más cosas en una sola hoja o ticket (100 % es el tamaño normal). Es el que sale por defecto; en cada comprobante se puede cambiar solo para esa vez y cada aparato puede elegir otro.</span></div>'
       + '<label class="check-inline"><input type="checkbox" id="aj-fondo"' + (marcaCfg.fondoCabecera === false ? '' : ' checked') + '> Fondo de color en el encabezado</label>'
       + '<p class="hint">' + (marcaCfg.fondoCabecera === false
         ? 'Encabezado blanco (lo más barato de imprimir).'
@@ -649,6 +689,7 @@
       + BG.db.usuarios.filter((u) => u.rol === 'vendedor').map((u) => '<section class="card stack" id="com-' + u.id + '">' + htmlComision(u) + '</section>').join('')
       + '<section class="card stack" id="aj-credito">' + htmlCredito() + '</section>'
       + '<section class="card stack" id="aj-fidelidad">' + htmlFidelidad() + '</section>'
+      + '<section class="card stack" id="aj-terminos">' + htmlTerminos() + '</section>'
       + '<section class="card stack"><div class="card-head"><h2>Envíos</h2></div>'
       + '<p class="small">Salen de <strong>' + esc(cfg.envios.origen.ciudad) + ' (' + esc(cfg.envios.origen.departamento) + ')</strong>. Empresas con las que mandan (aparecen al preparar un envío):</p>'
       + '<ul class="list" id="aj-empresas">' + cfg.envios.empresas.map((x, i) => '<li class="list-row"><span class="row-main"><span class="row-title">' + esc(x.nombre) + '</span><span class="row-sub">' + esc(x.servicio) + '</span></span>'
@@ -680,6 +721,10 @@
           if (host && u) { host.innerHTML = htmlComision(u); BG.enlazarCampos(host); }
         };
         const repintar = (id, fn) => { const host = $('#' + id, root); if (host) { host.innerHTML = fn(); BG.enlazarCampos(host); } };
+        root.addEventListener('input', (e) => {
+          const o = e.target.id && e.target.id.indexOf('aj-tam-') === 0 ? $('#' + e.target.id + '-n', root) : null;
+          if (o) o.textContent = e.target.value + ' %';
+        });
         root.addEventListener('change', async (e) => {
           const t = e.target;
           if (t.id === 'aj-restaurar') {
@@ -718,6 +763,12 @@
             repintar('aj-fidelidad', htmlFidelidad);
             return;
           }
+          if (t.name === 'fi-cuando') {
+            BG.guardarFidelidad({ porPago: t.value === 'pago' });
+            BG.toast(t.value === 'pago' ? 'Los puntos se suman con cada pago.' : 'Los puntos se suman al terminar de pagar la compra.');
+            repintar('aj-fidelidad', htmlFidelidad);
+            return;
+          }
           if (t.name === 'fi-pct') { BG.guardarFidelidad({ cumple: { porcentaje: Number(t.value) } }); BG.toast('Regalo de cumpleaños: ' + t.value + ' %.'); return; }
           if (t.id === 'fi-recibo') {
             BG.guardarFidelidad({ enRecibo: t.checked });
@@ -746,6 +797,10 @@
             BG.toast((t.checked ? 'Habilitado para ' : 'Quitado a ') + u.nombre + ': ' + BG.PERMISOS.find((p) => p[0] === t.dataset.permiso)[1].toLowerCase() + '.');
           }
           if (t.id === 'aj-c1' || t.id === 'aj-c2') { BG.guardarMarca(t.id === 'aj-c1' ? { principal: t.value } : { acento: t.value }); BG.toast('Color guardado: se ve en el recibo.'); }
+          if (t.id === 'aj-tam-a4' || t.id === 'aj-tam-ticket') {
+            try { const n = BG.guardarTamanoRecibo(t.id === 'aj-tam-a4' ? 'a4' : 'ticket', t.value); BG.toast((t.id === 'aj-tam-a4' ? 'Hoja A4' : 'Ticket') + ': ' + n + ' % para todos.'); } catch (err) { BG.toast(err.message, 'error'); }
+            return;
+          }
           if (t.name === 'aj-escala') { BG.guardarMarca({ logoEscala: Number(t.value) }); BG.toast('Tamaño del logo guardado.'); }
           if (t.id === 'aj-fondo') { BG.guardarMarca({ fondoCabecera: t.checked }); BG.toast(t.checked ? 'Encabezado con color.' : 'Encabezado en blanco.'); BG.render(); return; }
           if (t.id === 'aj-anulados') { BG.cambiarVerAnulados(t.checked); BG.toast(t.checked ? 'Se muestran los anulados.' : 'Los anulados quedan fuera de las listas.'); BG.render(); return; }
@@ -772,10 +827,40 @@
           if (!b) return;
           if (b.dataset.accion === 'guardar-terminos' || b.dataset.accion === 'terminos-defecto') {
             const campo = $('#fi-terminos', root);
-            const texto = b.dataset.accion === 'terminos-defecto' ? BG.TERMINOS_PUNTOS : (campo ? campo.value.trim() : '');
-            BG.guardarFidelidad({ terminos: texto || BG.TERMINOS_PUNTOS });
+            const sugerido = BG.terminosPuntosSugeridos(BG.configFidelidad().porPago);
+            const texto = b.dataset.accion === 'terminos-defecto' ? sugerido : (campo ? campo.value.trim() : '');
+            BG.guardarFidelidad({ terminos: texto || sugerido });
             BG.toast('Condiciones guardadas: salen en el recibo y al canjear puntos.');
             repintar('aj-fidelidad', htmlFidelidad);
+            return;
+          }
+          if (b.dataset.accion && b.dataset.accion.indexOf('termino-') === 0) {
+            const id = b.dataset.id;
+            try {
+              if (b.dataset.accion === 'termino-guardar') {
+                const t = BG.guardarTermino({ id: id, titulo: $('#tc-t-' + id, root).value, texto: $('#tc-x-' + id, root).value, donde: $('#tc-d-' + id, root).value, activo: $('#tc-a-' + id, root).checked });
+                BG.toast('Guardado: «' + t.titulo + '»' + (t.activo ? ' sale en los comprobantes.' : ' (no sale: está apagado).'));
+                repintar('aj-terminos', () => htmlTerminos(id));
+              } else if (b.dataset.accion === 'termino-subir' || b.dataset.accion === 'termino-bajar') {
+                BG.moverTermino(id, b.dataset.accion === 'termino-subir' ? -1 : 1);
+                repintar('aj-terminos', () => htmlTerminos(id));
+              } else if (b.dataset.accion === 'termino-quitar') {
+                const t = BG.listaTerminos().find((x) => x.id === id);
+                const ok = await BG.modal({ titulo: 'Quitar «' + (t ? t.titulo : '') + '»', cuerpo: '<p>Deja de salir en los comprobantes y se borra de la lista. El texto queda escrito en la auditoría, por si lo querés recuperar.</p>',
+                  acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Quitar', valor: 'ok', clase: 'btn-danger-solid' }] });
+                if (ok !== 'ok') return;
+                BG.quitarTermino(id);
+                BG.toast('Quitado: «' + t.titulo + '».');
+                repintar('aj-terminos', htmlTerminos);
+              } else if (b.dataset.accion === 'termino-agregar') {
+                const m = BG.TERMINOS_MODELOS.find((x) => x.id === $('#tc-modelo', root).value);
+                // Un modelo queda apagado hasta que el dueño lo lee y lo activa; uno en blanco arranca con un texto para pisar.
+                const t = BG.guardarTermino(m ? { titulo: m.titulo, texto: m.texto, donde: m.donde, activo: false }
+                  : { titulo: 'Texto nuevo', texto: 'Escribí acá lo que querés que lea la clienta.', donde: 'todos', activo: false });
+                BG.toast(m ? 'Agregado el modelo «' + t.titulo + '». Leelo, cambialo si hace falta y activalo.' : 'Agregado. Escribí el título y el texto y activalo.');
+                repintar('aj-terminos', () => htmlTerminos(t.id));
+              }
+            } catch (err) { BG.toast(err.message, 'error'); }
             return;
           }
           if (b.dataset.accion === 'guardar-limite') {
