@@ -39,7 +39,6 @@
           + '<button class="btn btn-primary btn-lg btn-block" type="submit" id="n-entrar">Entrar</button></form>'
           + '<p class="hint">Se escribe una sola vez en cada celular o computadora: después quedás adentro. Lo que cargue cada una se ve en todos los aparatos.</p>'
           + '<p class="small muted">¿Todavía no tenés cuenta, o te quedaste sin internet? <button type="button" class="linkish" id="n-local">Entrar solo en este aparato</button></p>'
-          + '<p class="small muted">¿Querés practicar sin tocar lo de la tienda? <button type="button" class="linkish" data-action="modo-ejemplo">Entrar con datos de ejemplo</button></p>'
         : BG.modoDatos === 'mios'
         ? '<h1>¿Quién está usando el sistema?</h1>'
           + '<div class="stack">' + perfil(duenio, 'Dueño · ve y cambia todo') + perfil(vendedora, 'Vendedora · vende, cobra y emite recibos') + '</div>'
@@ -49,7 +48,6 @@
             : nube.falla
               ? '<div class="callout callout-warn">' + icon('alert') + '<span>' + esc(nube.falla) + ' Por ahora podés entrar acá y trabajar en este aparato. <button type="button" class="linkish" id="n-reintentar">Probar de nuevo</button></span></div>'
               : '')
-          + '<p class="small muted">¿Querés practicar sin tocar lo tuyo? <button type="button" class="linkish" data-action="modo-ejemplo">Entrar con datos de ejemplo</button></p>'
         : '<h1>Sistema de gestión · ingreso</h1>'
           + '<form id="login-form" class="stack" novalidate>'
           + '<div class="field"><label for="usuario">Usuario</label><input id="usuario" class="input" autocomplete="off" autocapitalize="none" spellcheck="false"></div>'
@@ -298,9 +296,11 @@
         cierre ? cierre.mes.charAt(0).toUpperCase() + cierre.mes.slice(1) + ' cerró en <span class="nowrap">' + gs(cierre.neta) + '</span>'
           : 'bruta ' + gs(resMes.bruta) + ' − gastos ' + gs(resMes.totalGastos), resMes.neta < 0 ? 'tile-bad' : '') : '')
       + '</section>'
+      + BG.htmlResumenInicio()
       + '<div class="grid-2">' + cardCuotas() + cardFavor() + '</div>'
       + '<div class="grid-2">'
-      + '<section class="card card-flush" aria-labelledby="t-deben"><div class="card-head pad"><h2 id="t-deben">Clientes que deben</h2><a class="small" href="#/clientes?filtro=deben">Ver los ' + deudores.length + '</a></div>'
+      + '<section class="card card-flush" aria-labelledby="t-deben"><div class="card-head pad"><h2 id="t-deben">Clientes que deben</h2>'
+      + (BG.puede('registrarCobros') && deudores.length ? '<a class="small" href="#/cobranza">Cobrar a todas</a> · ' : '') + '<a class="small" href="#/clientes?filtro=deben">Ver los ' + deudores.length + '</a></div>'
       + (deudores.length ? '<ul class="list list-plain">' + deudores.slice(0, 6).map((d) => '<li><a class="list-row" href="#/clientes/' + d.c.id + '">' + BG.filaCliente(d.c) + '</a></li>').join('') + '</ul>'
         : '<p class="empty">Nadie debe nada.</p>')
       + '</section>'
@@ -332,6 +332,7 @@
         return '<a class="callout callout-link" href="#/pedidos/' + p.id + '">' + icon('box2') + '<div><strong>Pedido en camino: ' + esc(p.proveedor) + '</strong> '
           + (dias == null ? '' : dias > 0 ? 'llega en ' + dias + (dias === 1 ? ' día' : ' días') + ' (' + BG.fmtFecha(p.llegaEstimada) + ')' : dias === 0 ? 'llega hoy' : 'tendría que haber llegado el ' + BG.fmtFecha(p.llegaEstimada))
           + '. Cuando llegue, «Llegó: cargar al stock».</div></a>'; }).join('')
+      + BG.htmlAvisosOperacion()
       + (conteoViejo ? '<a class="callout callout-link" href="#/productos/conteo">' + icon('count') + '<div><strong>Conteo de inventario:</strong> ' + conteoViejo + '</div></a>' : '')
       + (duena ? '<a class="callout callout-link" href="#/resumen">' + icon('pie') + '<div><strong>Resumen gráfico</strong> Ventas y cobros por semana, meta y comisión de ' + esc((BG.db.usuarios.find((x) => x.rol === 'vendedor') || { nombre: 'la vendedora' }).nombre) + ', precios especiales, devoluciones, deudas por antigüedad y lo que hizo cada usuario.</div></a>' : '')
       + '</div></div>'
@@ -853,6 +854,7 @@
       + (c.notas ? '<div class="callout">' + icon('info') + '<div>' + esc(c.notas) + '</div></div>' : '')
       + cardPuntos(c)
       + cardAnteriores(c)
+      + BG.htmlOperacionCliente(c)
       + (BG.esDuena() ? cardCreditoBeneficios(c) : '')
       + (cuotas.length ? '<section class="card card-flush" aria-labelledby="t-cc"><div class="card-head pad"><h2 id="t-cc">Cuotas acordadas</h2><a class="small" href="#/cuotas">Todas las cuotas</a></div>'
         + '<ul class="list list-plain">' + cuotas.map((x) => '<li class="list-row"><span class="avatar">' + icon('calendar', 'i-sm') + '</span>'
@@ -899,6 +901,8 @@
             else if (b.dataset.accion === 'canjear-puntos' && (await BG.canjeUI(c.id))) BG.render();
             else if (b.dataset.accion === 'puntos-aparte' && (await BG.puntosAparteUI(c))) BG.render();
             else if (b.dataset.accion === 'compra-anterior' && (await BG.compraAnteriorUI(c))) BG.render();
+            else if (b.dataset.accion === 'apartar' && (await BG.apartarUI({ clienteId: c.id }))) BG.render();
+            else if (b.dataset.accion === 'anotar-deseo' && (await BG.deseoUI({ clienteId: c.id }))) BG.render();
             else if (b.dataset.accion === 'borrar-cliente') await BG.borrarClienteUI(c);
           } catch (err) { BG.toast(err.message, 'error'); }
         });

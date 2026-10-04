@@ -27,7 +27,6 @@
   const ICONO = { preparando: 'box2', listo: 'tag', despachado: 'truck', entregado: 'check', cancelado: 'ban' };
   BG.pillEnvio = (e) => '<span class="pill ' + PILL[e.estado] + '">' + icon(ICONO[e.estado]) + BG.ESTADOS_ENVIO[e.estado] + '</span>';
   const envio = (id) => BG.db.envios.find((x) => x.id === id);
-  BG.envioDeVenta = (vid) => BG.db.envios.find((x) => x.ventaId === vid && x.estado !== 'cancelado');
   const PAGA = { destinatario: 'Paga el destinatario al retirar', tienda: 'Lo paga la tienda' };
 
   /* ── Listado ─────────────────────────────────────────────────────────── */

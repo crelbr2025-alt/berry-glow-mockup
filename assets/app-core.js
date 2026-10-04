@@ -83,6 +83,8 @@
     if (d.version !== VERSION_DB) return null;
     // Opcionales que se agregaron sin cambiar la versión (ver arriba): la libreta de la cuenta de ahorro.
     if (!Array.isArray(d.ahorro)) d.ahorro = [];
+    // Y los de la ronda del 04/10: avisos de cobranza, apartados con seña y lo que las clientas pidieron.
+    ['recordatorios', 'reservas', 'deseos'].forEach((k) => { if (!Array.isArray(d[k])) d[k] = []; });
     return d;
   };
   /** Vuelve a los datos de ejemplo del día de hoy. No toca los datos de la tienda. */
@@ -417,6 +419,13 @@
           : 'Pago ' + BG.fmtRecibo(p.recibo) + ' · ' + p.partes.map((x) => BG.FORMAS[x.forma]).join(' + ') + (conPuntos ? ' (' + gs(conPuntos) + ' con puntos)' : '')),
         abono: p.anulado || v.anulada ? 0 : p.total, anulado: p.anulado ? 'Anulado: ' + p.anulado.motivo : (v.anulada ? 'Pasó a saldo a favor' : '') });
       if (p.anulado && p.anulado.aFavorRevertido && !v.anulada) mov.push({ ts: p.anulado.ts + ':01', fecha: p.anulado.fecha, ventaId: v.id, concepto: 'Sin ese pago, la devolución ya no deja saldo a favor', abono: p.anulado.aFavorRevertido });
+    }
+    // Una compra que pasó de una clienta a otra: queda anotado en la cuenta de las dos (sin plata: la deuda se mudó con ella).
+    for (const v of BG.db.ventas) {
+      for (const t of v.traslados || []) {
+        if (t.de === cid) mov.push({ ts: t.ts, fecha: t.fecha, ventaId: v.id, concepto: 'Compra ' + BG.fmtRecibo(v.recibo) + ' pasó a ' + t.aNombre + ' (' + t.motivo + ')', cargo: 0, abono: 0 });
+        else if (t.a === cid && v.clienteId === cid) mov.push({ ts: t.ts, fecha: t.fecha, ventaId: v.id, concepto: 'Compra ' + BG.fmtRecibo(v.recibo) + ' pasó de ' + t.deNombre + ' a esta cuenta', cargo: 0, abono: 0 });
+      }
     }
     mov.sort((a, b) => a.ts.localeCompare(b.ts));
     let saldo = 0;
@@ -982,6 +991,113 @@
     };
   };
 
+  /** El envío vivo (no cancelado) de una compra, si lo tiene. Vive acá porque las reglas (pasar una compra a otra clienta) lo consultan. */
+  BG.envioDeVenta = (vid) => BG.db.envios.find((x) => x.ventaId === vid && x.estado !== 'cancelado');
+
+  /* ── Cobranza: a quién recordarle lo que debe ─────────────────────────────
+   * Una lista de las clientas con saldo, lo más urgente primero, con el mensaje de WhatsApp ya armado. Cada aviso
+   * que se manda queda anotado (`db.recordatorios`: quién, cuándo y cuánto debía) para no insistir de más ni
+   * olvidarse de nadie. No mueve plata: los números salen de las mismas funciones de siempre (saldoCliente, cuotas).
+   */
+  BG.recordatoriosDe = (cid) => (BG.db.recordatorios || []).filter((r) => r.clienteId === cid).sort((a, b) => a.ts.localeCompare(b.ts));
+  BG.ultimoRecordatorio = (cid) => { const l = BG.recordatoriosDe(cid); return l.length ? l[l.length - 1] : null; };
+  BG.cobranza = () => {
+    const cuotas = BG.cuotasPendientes();
+    return BG.listaDeudores().map((d) => {
+      const suyas = cuotas.filter((x) => x.cliente.id === d.c.id);
+      const vencidas = suyas.filter((x) => x.cuota.estado === 'vencida');
+      const sig = suyas.find((x) => x.cuota.estado !== 'vencida');
+      const ult = BG.ultimoRecordatorio(d.c.id);
+      const dias = d.desde ? BG.diasEntre(d.desde, hoy()) : 0;
+      return {
+        c: d.c, saldo: d.saldo, desde: d.desde, dias: dias, compras: BG.pendientesDe(d.c.id).length,
+        cuotasAtrasadas: vencidas.length, atrasado: sum(vencidas, (x) => x.cuota.falta), proxima: sig ? sig.cuota : null,
+        ultima: ult ? ult.ts : null, diasDesdeAviso: ult ? BG.diasEntre(ult.ts.slice(0, 10), hoy()) : null,
+        telefono: soloDigitos(d.c.telefono).length >= 6,
+        // 0 = con cuota atrasada, 1 = debe hace 30 días o más, 2 = el resto
+        urgencia: vencidas.length ? 0 : dias >= 30 ? 1 : 2,
+      };
+    }).sort((a, b) => a.urgencia - b.urgencia || b.saldo - a.saldo || a.c.nombre.localeCompare(b.c.nombre, 'es'));
+  };
+
+  /* ── Apartados: un artículo guardado para una clienta, con seña y fecha límite ──
+   * El apartado no mueve plata (la seña es una seña común: saldo a favor de la clienta) pero sí «aparta» stock: lo
+   * apartado no se le puede vender a otra (BG.vendibles). Sigue guardado aunque pase la fecha límite, hasta que alguien
+   * decida: venderlo, darle más tiempo o liberarlo. El stock físico (conteo de inventario) no cambia: sigue en el local.
+   */
+  BG.reserva = (id) => (BG.db.reservas || []).find((r) => r.id === id);
+  BG.reservasActivas = () => (BG.db.reservas || []).filter((r) => r.estado === 'activa');
+  /** Unidades apartadas (activas) de un producto; `exceptoClienteId`: sin las de esa clienta (para venderle a ella lo que apartó). */
+  BG.reservadas = (pid, exceptoClienteId) => sum(BG.reservasActivas().filter((r) => !exceptoClienteId || r.clienteId !== exceptoClienteId),
+    (r) => sum(r.items.filter((it) => it.productoId === pid), (it) => it.cantidad));
+  /** Lo que se le puede vender: lo que hay menos lo apartado para otras (a la clienta `clienteId` no le cuentan las suyas). */
+  BG.vendibles = (p, clienteId) => BG.disponibles(p) - BG.reservadas(p.id, clienteId);
+  BG.estadoReserva = (r) => (r.estado === 'activa' && r.vence < hoy() ? 'vencida' : r.estado);
+  BG.TEXTO_ESTADO_RESERVA = { activa: 'Apartado', vencida: 'Vencido', retirada: 'Retirado', liberada: 'Liberado' };
+
+  /* ── Lo que las clientas pidieron y no había ── */
+  BG.deseosPendientes = () => (BG.db.deseos || []).filter((d) => d.estado === 'pendiente' || d.estado === 'avisada');
+  /** Productos con stock que parecen ser lo que pidió (por lo que se escribió; el talle y el color se miran a ojo). */
+  BG.coincidenciasDeseo = (d) => BG.buscarProductos(d.texto, 3, (p) => p.precioVenta > 0 && BG.vendibles(p) > 0);
+  /** Lo que más se pidió y no había, para saber qué conviene traer: [{ texto, n }] de mayor a menor. */
+  BG.masPedido = () => {
+    const m = new Map();
+    for (const d of BG.deseosPendientes()) {
+      const k = norm(d.texto).replace(/\s+/g, ' ').trim();
+      const x = m.get(k) || { texto: d.texto, n: 0 };
+      x.n++;
+      m.set(k, x);
+    }
+    return Array.from(m.values()).sort((a, b) => b.n - a.n || a.texto.localeCompare(b.texto, 'es'));
+  };
+
+  /* ── Stock bajo y resumen del día ── */
+  BG.UMBRAL_STOCK_BAJO = 2;
+  /** Solo avisa de lo que se vendió hace poco: cada prenda importada suele ser única y se «agota» al venderla; eso no es una alarma. */
+  BG.DIAS_STOCK_RECIENTE = 14;
+  /** Lo que se vendió hace poco y se está acabando (o se acabó). Cuenta lo que se puede vender: lo apartado no. */
+  BG.stockBajo = () => {
+    const out = { agotados: [], bajos: [] };
+    for (const p of BG.productosVivos()) {
+      const ult = BG.ultimaVentaDe(p.id);
+      if (!(p.precioVenta > 0) || !ult || diasEntre(ult, hoy()) > BG.DIAS_STOCK_RECIENTE) continue;
+      const q = BG.vendibles(p);
+      if (q <= 0) out.agotados.push({ p: p, q: q });
+      else if (q <= BG.UMBRAL_STOCK_BAJO) out.bajos.push({ p: p, q: q });
+    }
+    const masVendido = (x, y) => BG.vendidas(y.p.id) - BG.vendidas(x.p.id) || x.p.descripcion.localeCompare(y.p.descripcion, 'es');
+    out.agotados.sort(masVendido);
+    out.bajos.sort(masVendido);
+    return out;
+  };
+  /** WhatsApp donde le llega el resumen al dueño: el que puso en Ajustes o, si no, el de la tienda. */
+  BG.telefonoResumen = () => String((BG.db.config.resumen && BG.db.config.resumen.telefono) || (BG.db.config.tienda && BG.db.config.tienda.whatsapp) || '').trim();
+  /**
+   * Todo lo de un día para el resumen del dueño: lo vendido, lo cobrado (por forma), lo que quedó a deber de lo de ese día,
+   * lo que se debe en total, las cuotas atrasadas, el stock bajo y lo que espera una decisión. Mismas funciones que Inicio y
+   * la caja: una compra de antes del sistema no es de ningún día.
+   */
+  BG.resumenDelDia = (fecha) => {
+    const f = fecha || hoy();
+    const ventas = BG.db.ventas.filter((v) => v.fecha === f && BG.ventaDelSistema(v));
+    const porForma = BG.totalesPorForma(BG.db.pagos.filter((p) => p.fecha === f && BG.pagoDelSistema(p)));
+    const aCuenta = ventas.filter((v) => BG.saldoVenta(v) > 0).map((v) => ({ v: v, c: BG.cliente(v.clienteId), saldo: BG.saldoVenta(v) }));
+    const deudores = BG.listaDeudores();
+    const atrasadas = BG.cuotasPendientes().filter((x) => x.cuota.estado === 'vencida');
+    return {
+      fecha: f, ventas: ventas.length, vendido: sum(ventas, (v) => v.total), porForma: porForma,
+      cobrado: porForma.efectivo + porForma.transferencia + porForma.qr + porForma.tarjeta,
+      devuelto: sum((BG.db.egresos || []).filter((e) => e.fecha === f), (e) => e.monto),
+      gastos: sum(BG.gastosVivos().filter((g) => g.fecha === f), (g) => g.monto),
+      aCuenta: aCuenta, aCuentaTotal: sum(aCuenta, (x) => x.saldo),
+      deben: { n: deudores.length, total: sum(deudores, (d) => d.saldo) },
+      atrasadas: { cuotas: atrasadas.length, monto: sum(atrasadas, (x) => x.cuota.falta), clientas: new Set(atrasadas.map((x) => x.cliente.id)).size },
+      stock: BG.stockBajo(),
+      apartadosPorVencer: BG.reservasActivas().filter((r) => r.vence <= BG.sumarDias(f, 2)).length,
+      deseos: BG.deseosPendientes().length,
+    };
+  };
+
   /* ── Cuenta de ahorro para las compras (solo dueño) ───────────────────
    * Una libreta: lo que había al empezar, cada depósito y cada retiro, y lo que sale al pagar un pedido al
    * proveedor. No es plata de la caja ni de las clientas: no entra en los cuadres ni en la ganancia (lo que se
@@ -1137,6 +1253,12 @@
       { id: 'error', texto: 'Se cargó por error', detalle: 'Ese movimiento no existió.' },
       { id: 'duplicado', texto: 'Está cargado dos veces', detalle: 'El mismo movimiento quedó cargado más de una vez.' },
       { id: 'monto', texto: 'El monto o la fecha estaban mal', detalle: 'Se anula y se carga de nuevo como corresponde.' },
+      { id: 'otro', texto: 'Otro motivo', detalle: 'Contalo abajo.', pide: 'nota' },
+    ],
+    apartado: [
+      { id: 'desistio', texto: 'La clienta ya no lo quiere', detalle: 'Se arrepintió: el artículo vuelve a estar a la venta.' },
+      { id: 'vencio', texto: 'Venció y no lo retiró', detalle: 'Pasó la fecha límite y no apareció.' },
+      { id: 'error', texto: 'Se cargó por error', detalle: 'Ese apartado no tenía que existir.' },
       { id: 'otro', texto: 'Otro motivo', detalle: 'Contalo abajo.', pide: 'nota' },
     ],
     envio: [
@@ -1423,6 +1545,14 @@
   BG.pillSaldo = (saldo) => (saldo > 0 ? '<span class="amount">' + gs(saldo) + '</span>' : '<span class="pill pill-good">' + icon('check') + 'Al día</span>');
 
   /** WhatsApp: los clientes de ejemplo no tienen número real, así que se abre sin destinatario. */
+  /** Link de WhatsApp a un número suelto (el del resumen del día): con o sin 0 adelante y con o sin 595. Sin número, se elige el chat. */
+  BG.waLinkTel = (tel, texto) => {
+    const t = encodeURIComponent(texto);
+    let d = soloDigitos(tel);
+    if (d.length < 6) return 'https://wa.me/?text=' + t;
+    if (!d.startsWith('595')) d = '595' + d.replace(/^0/, '');
+    return 'https://wa.me/' + d + '?text=' + t;
+  };
   BG.waLink = (c, texto) => {
     const t = encodeURIComponent(texto);
     if (!c || c.demo) return 'https://wa.me/?text=' + t;
@@ -1619,6 +1749,9 @@
     [/^\/ventas\/nueva$/, 'ventaNueva', 'registrarVentas'],
     [/^\/ventas\/([\w-]+)$/, 'venta'],
     [/^\/cuotas$/, 'cuotas'],
+    [/^\/cobranza$/, 'cobranza', 'registrarCobros'],
+    [/^\/apartados$/, 'apartados', 'registrarVentas'],
+    [/^\/lo-que-piden$/, 'deseos'],
     [/^\/cobros\/nuevo$/, 'cobro', 'registrarCobros'],
     [/^\/productos$/, 'productos', 'verPrecios'],
     [/^\/productos\/nuevo$/, 'productoNuevo', 'cargarProductos'],
@@ -1662,6 +1795,9 @@
       ['clientes', 'Clientes', 'users'],
       ['ventas', 'Ventas', 'bag'],
       ['cuotas', 'Cuotas', 'calendar'],
+      BG.puede('registrarCobros') && ['cobranza', 'Cobranza', 'chat'],
+      BG.puede('registrarVentas') && ['apartados', 'Apartados', 'pause'],
+      ['lo-que-piden', 'Lo que piden', 'star'],
       BG.puede('registrarCobros') && ['cobros/nuevo', 'Cobrar', 'cash'],
       BG.puede('prepararEnvios') && ['envios', 'Envíos', 'truck'],
       BG.puede('verCaja') && ['caja', 'Caja del día', 'register'],
@@ -1816,6 +1952,9 @@
     sheet.innerHTML = '<div class="sheet-grip"></div><div class="sheet-list">'
       + item('#/ventas', 'bag', 'Ventas')
       + item('#/cuotas', 'calendar', 'Cuotas')
+      + (BG.puede('registrarCobros') ? item('#/cobranza', 'chat', 'Cobranza') : '')
+      + (BG.puede('registrarVentas') ? item('#/apartados', 'pause', 'Apartados') : '')
+      + item('#/lo-que-piden', 'star', 'Lo que piden')
       + (BG.puede('prepararEnvios') ? item('#/envios', 'truck', 'Envíos') : '')
       + (BG.puede('verPrecios') ? item('#/productos', 'box', d ? 'Productos' : 'Lista de precios') : '')
       + (BG.puede('verCaja') ? item('#/caja', 'register', 'Caja del día') : '')
@@ -1823,9 +1962,9 @@
         + item('#/resumen', 'pie', 'Resumen') + item('#/reportes', 'chart', 'Reportes') + item('#/auditoria', 'audit', 'Auditoría') + item('#/ajustes', 'sliders', 'Ajustes') : '')
       + '<div class="sheet-sep"></div>'
       + '<div class="sheet-tema"><span class="small muted">Tema</span>' + BG.selectorTema() + '</div>'
-      + (BG.modoDatos === 'mios' ? '<button type="button" class="sheet-item" data-action="modo-ejemplo" data-cerrar-hoja>' + icon('refresh') + 'Ver los datos de ejemplo</button>'
-        : '<button type="button" class="sheet-item" data-action="guia" data-cerrar-hoja>' + icon('guide') + 'Guía de prueba</button>')
-      + '<button type="button" class="sheet-item" data-action="rol" data-rol="' + (d ? 'vendedor' : 'admin') + '" data-cerrar-hoja>' + icon('eye') + 'Ver como ' + esc(otro.nombre) + (d ? ' (vendedora)' : ' (dueño)') + '</button>'
+      // Los datos de ejemplo y la guía de prueba ya no están a la vista: se entra por Ajustes → «Practicar» (solo el dueño).
+      + (BG.modoDatos === 'mios' ? '' : '<button type="button" class="sheet-item" data-action="guia" data-cerrar-hoja>' + icon('guide') + 'Guía de prueba</button>')
+      + (BG.enLaNube() ? '' : '<button type="button" class="sheet-item" data-action="rol" data-rol="' + (d ? 'vendedor' : 'admin') + '" data-cerrar-hoja>' + icon('eye') + 'Ver como ' + esc(otro.nombre) + (d ? ' (vendedora)' : ' (dueño)') + '</button>')
       + '<button type="button" class="sheet-item" data-action="salir" data-cerrar-hoja>' + icon('logout') + 'Cerrar sesión</button></div>';
     sheet.onclick = (e) => { if (e.target === sheet || e.target.closest('[data-cerrar-hoja]')) sheet.close(); };
     sheet.showModal();

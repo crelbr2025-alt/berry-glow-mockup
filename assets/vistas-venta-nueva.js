@@ -177,7 +177,12 @@
       usarCredito: true,
       pp: { suma: null, recibo: null },
       plan: { activo: false, n: 3, frecuencia: 'mensual', desde: BG.hoy(), primera: BG.primeraCuotaSugerida('mensual', BG.hoy()) },
+      // Si se llega desde «Vender» de un apartado: lo apartado se carga solo y el apartado se marca como retirado al registrar.
+      reserva: (() => { const r = params.get('reserva') ? BG.reserva(params.get('reserva')) : null; return r && r.estado === 'activa' && r.clienteId === pre ? r : null; })(),
     };
+    /** Lo que se le puede vender a esta clienta: lo que hay menos lo apartado para otras (lo que apartó ella sí cuenta). */
+    const quedan = (p) => BG.vendibles(p, b.clienteId);
+    const etiquetaQuedan = (p) => 'quedan ' + quedan(p) + (BG.reservadas(p.id, b.clienteId) ? ' (' + BG.reservadas(p.id, b.clienteId) + ' apartadas para otras)' : '');
     const html = '<div class="page">'
       + '<div class="page-head"><div><h1 class="page-title">Nueva venta</h1><p class="page-sub">Cliente, artículos y cobro en una sola pantalla. Al registrar, el precio y el saldo quedan congelados.</p></div></div>'
       + '<div class="grid-form has-sticky"><div class="stack">'
@@ -290,7 +295,7 @@
           + '<p class="precio-info" id="pi-' + i + '">' + infoItem(it) + '</p></div>';
       }
       return '<div class="line"><div class="line-top"><div class="grow"><div class="row-title">' + esc(p.descripcion) + '</div>'
-        + '<div class="row-sub">' + esc(p.categoria) + ' · quedan ' + BG.disponibles(p) + '</div></div>'
+        + '<div class="row-sub">' + esc(p.categoria) + ' · ' + etiquetaQuedan(p) + '</div></div>'
         + '<button type="button" class="btn-icon" data-accion="quitar-item" data-i="' + i + '" aria-label="Quitar ' + esc(p.descripcion) + '">' + icon('trash') + '</button></div>'
         + precio
         + '<div class="line-bottom"><div class="stepper"><button type="button" data-accion="menos" data-i="' + i + '" aria-label="Una unidad menos">−</button>'
@@ -383,11 +388,11 @@
     };
 
     /** Productos con stock, del último cargado al primero (es lo que más se busca al vender). */
-    const disponibles = () => BG.db.productos.filter((p) => p.precioVenta && !p.archivado && BG.disponibles(p) > 0)
+    const disponibles = () => BG.db.productos.filter((p) => p.precioVenta && !p.archivado && quedan(p) > 0)
       .sort((a, b2) => String(b2.ts || b2.fechaCarga || '').localeCompare(String(a.ts || a.fechaCarga || '')));
     const fila = (p) => '<button type="button" class="hay-item" data-accion="agregar-prod" data-id="' + esc(p.id) + '">'
       + '<span class="grow"><span class="row-title">' + esc(p.descripcion) + '</span>'
-      + '<span class="row-sub">' + esc(p.categoria) + ' · quedan ' + BG.disponibles(p) + '</span></span>'
+      + '<span class="row-sub">' + esc(p.categoria) + ' · ' + etiquetaQuedan(p) + '</span></span>'
       + '<span class="amount">' + gs(p.precioVenta) + '</span></button>';
     const pintarHay = () => {
       const host = $('#s-hay', root);
@@ -411,7 +416,7 @@
       if (!p.precioVenta) { BG.toast('«' + p.descripcion + '» no tiene precio de venta: asignáselo en Productos antes de venderlo.', 'error'); return; }
       const ya = b.items.find((it) => it.productoId === p.id);
       const enVenta = ya ? ya.cantidad : 0;
-      if (BG.disponibles(p) - enVenta <= 0) { BG.toast('No quedan unidades de «' + p.descripcion + '».', 'error'); return; }
+      if (quedan(p) - enVenta <= 0) { BG.toast('No quedan unidades de «' + p.descripcion + '» para vender' + (BG.reservadas(p.id, b.clienteId) ? ' (están apartadas para otras clientas)' : '') + '.', 'error'); return; }
       if (ya) ya.cantidad++;
       else {
         const op = opcionesDe(p).find((o) => o.precio === p.precioVenta);
@@ -431,7 +436,7 @@
       if (sinPrecio) return fallar('Falta el precio de «' + BG.producto(sinPrecio.productoId).descripcion + '».');
       for (const it of b.items) {
         const p = BG.producto(it.productoId);
-        if (it.cantidad > BG.disponibles(p)) return fallar('Solo quedan ' + BG.disponibles(p) + ' de «' + p.descripcion + '».');
+        if (it.cantidad > quedan(p)) return fallar('Solo quedan ' + quedan(p) + ' de «' + p.descripcion + '»' + (BG.reservadas(p.id, b.clienteId) ? ' (el resto está apartado para otras clientas)' : '') + '.');
       }
       if (b.fecha > BG.hoy()) return fallar('La fecha de la venta no puede ser futura.');
       if (b.desc.activo && b.desc.tipo === 'porcentaje' && b.desc.valor && C.cmp(C.asQ(b.desc.valor), C.Q(100n)) > 0) return fallar('El descuento no puede pasar del 100 %.');
@@ -496,6 +501,7 @@
       try {
         res = BG.registrarVenta({
           clienteId: b.clienteId, fecha: b.fecha, descuento: descuento(), partes: partes, usarCredito: t.credito, excedenteACredito: aCredito, autorizadoPor: autorizadoPor,
+          reservaId: b.reserva && b.reserva.clienteId === b.clienteId ? b.reserva.id : undefined,
           plan: conPlan ? { frecuencia: b.plan.frecuencia, n: b.plan.n, primera: b.plan.primera } : null, creditoAutorizadoPor: creditoAutorizadoPor,
           sumarPuntos: opcionesPuntosPago(b.pp).sumarPuntos, puntosEnRecibo: opcionesPuntosPago(b.pp).puntosEnRecibo,
           items: b.items.map((it) => ({
@@ -515,6 +521,11 @@
         root = r;
         pintarCliente();
         $('#s-fecha', root).innerHTML = campoFecha(b.fecha);
+        if (b.reserva) {
+          for (const x of b.reserva.items) { const p = BG.producto(x.productoId); for (let k = 0; k < x.cantidad && p; k++) agregar(p); }
+          $('.page-head', root).insertAdjacentHTML('afterend', '<div class="callout callout-good">' + icon('check') + '<div><strong>Vendiendo lo que apartó ' + esc(BG.cliente(b.clienteId).nombre.split(' ')[0]) + ' el ' + BG.fmtFecha(b.reserva.fecha) + '.</strong> '
+            + (b.reserva.sena ? 'La seña de ' + gs(b.reserva.sena.monto) + ' ya está a su favor y se descuenta sola. ' : 'No dejó seña. ') + 'Si cambia de clienta, el apartado queda como estaba.</div></div>');
+        }
         pintarItems();
         pintarHay();
         pintarPagos();
@@ -525,7 +536,7 @@
           vacio: () => 'No hay artículos con stock y precio para vender.',
           pintar: (it, q) => {
             const p = it.p;
-            const disp = BG.disponibles(p);
+            const disp = quedan(p);
             return '<span class="avatar">' + icon('tag', 'i-sm') + '</span><span class="row-main"><span class="row-title">' + BG.resaltar(p.descripcion, q) + '</span>'
               + '<span class="row-sub">' + esc(p.categoria) + ' · ' + (disp > 0 ? 'quedan ' + disp : 'agotado') + '</span></span>'
               + '<span class="row-end"><span class="amount">' + (p.precioVenta ? gs(p.precioVenta) : 'Sin precio') + '</span></span>';
@@ -566,7 +577,7 @@
           }
           if (t.dataset && t.dataset.cant) {
             const it = b.items[Number(t.dataset.i)];
-            const max = BG.disponibles(BG.producto(it.productoId));
+            const max = quedan(BG.producto(it.productoId));
             it.cantidad = Math.min(Math.max(C.parseEntero(t.value) || 1, 1), max);
             pintarItems();
             pintarTotales();
@@ -621,7 +632,7 @@
           }
           else if (a === 'mas' || a === 'menos') {
             const it = b.items[i];
-            const max = BG.disponibles(BG.producto(it.productoId));
+            const max = quedan(BG.producto(it.productoId));
             if (a === 'mas' && it.cantidad >= max) BG.toast('Solo quedan ' + max + ' unidades.', 'error');
             it.cantidad = Math.min(Math.max(it.cantidad + (a === 'mas' ? 1 : -1), 1), max);
             pintarItems();

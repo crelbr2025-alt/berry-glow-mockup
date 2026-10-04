@@ -323,7 +323,7 @@
 
   /* ── Construcción de la base nueva ── */
 
-  const COLECCIONES = ['clientes', 'productos', 'pedidos', 'ventas', 'pagos', 'creditos', 'cierres', 'auditoria', 'emisiones', 'envios', 'egresos', 'gastos', 'canjes', 'conteos', 'ajustesStock', 'ahorro'];
+  const COLECCIONES = ['clientes', 'productos', 'pedidos', 'ventas', 'pagos', 'creditos', 'cierres', 'auditoria', 'emisiones', 'envios', 'egresos', 'gastos', 'canjes', 'conteos', 'ajustesStock', 'ahorro', 'recordatorios', 'reservas', 'deseos'];
   const usd = (x) => (x ? (Math.round(x * 100) / 100).toFixed(2) : '0');
   const redondearMil = (n) => Math.round(n / 1000) * 1000;
 

@@ -301,6 +301,9 @@
     if (!credito0.ok && !BG.esDuena() && !d.creditoAutorizadoPor) {
       throw new Error('No puede llevar a cuenta: ' + BG.textoCredito(credito0) + '. Que pague todo, o pedí la autorización de ' + BG.nombreDuena() + '.');
     }
+    // Vender lo apartado: el apartado tiene que seguir vivo y ser de la misma clienta.
+    const apartado = d.reservaId ? BG.reserva(d.reservaId) : null;
+    if (d.reservaId && (!apartado || apartado.estado !== 'activa' || apartado.clienteId !== d.clienteId)) throw new Error('Ese apartado ya no está activo o es de otra clienta.');
     const recibo = BG.nuevoRecibo();
     const v = {
       id: BG.uid('v'), recibo: recibo, clienteId: d.clienteId, fecha: d.fecha, ts: BG.ahora(), items: items,
@@ -316,6 +319,11 @@
     };
     BG.db.ventas.push(v);
     BG.auditar('ventas', 'Venta registrada', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · ' + items.length + ' artículo(s) · ' + gs(v.total));
+    if (apartado) {
+      apartado.estado = 'retirada';
+      apartado.cerrada = { fecha: BG.hoy(), ts: BG.ahora(), usuario: quien, ventaId: v.id };
+      BG.auditar('apartados', 'Apartado retirado', cli.nombre + ' · se vendió en el recibo ' + BG.fmtRecibo(recibo));
+    }
     if (v.creditoAutorizado) BG.auditar('seguridad', 'Venta a cuenta fuera del límite', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · ' + v.creditoAutorizado.motivo + ' · autorizó ' + v.creditoAutorizado.por);
     items.filter((it) => it.especial).forEach((it) => BG.auditar('precios', 'Precio especial', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + it.descripcion + ': lista ' + gs(it.precioLista) + ' → ' + gs(it.precio)
       + textoMotivo(it.especial.motivo, it.especial.nota) + textoMargen(it.precio, it.costoUnitGs) + (v.autorizadoPor ? ' · autorizó ' + v.autorizadoPor : '')));
@@ -497,8 +505,8 @@
     items.forEach((it) => pedidas.set(it.productoId, (pedidas.get(it.productoId) || 0) + it.cantidad));
     pedidas.forEach((n, pid) => {
       const p = BG.producto(pid);
-      const quedan = BG.disponibles(p);
-      if (quedan < n) throw new Error('De «' + p.descripcion + '» ' + (quedan === 1 ? 'queda 1' : 'quedan ' + quedan) + ': no alcanza para ' + n + '.');
+      const quedan = BG.vendibles(p, v.clienteId);
+      if (quedan < n) throw new Error('De «' + p.descripcion + '» ' + (quedan === 1 ? 'queda 1' : 'quedan ' + quedan) + (BG.reservadas(p.id, v.clienteId) ? ' (el resto está apartado)' : '') + ': no alcanza para ' + n + '.');
     });
     controlarPrecios(items, false);
     const t = BG.totalesDe(v, v.items.concat(items));
@@ -575,7 +583,18 @@
       const vivo = cantidad - (it.devueltas || 0) > 0;
       if (!(precio >= 0) || (vivo && !(precio > 0))) return { error: 'Escribí el precio de «' + it.descripcion + '».' };
       if (costo != null && !(costo >= 0)) return { error: 'El costo de «' + it.descripcion + '» tiene que ser un monto (o dejalo como estaba).' };
-      items.push({ descripcion: descripcion, cantidad: cantidad, precio: precio, costo: costo });
+      // Cambiar el artículo de la línea por otro del stock (se cargó «el rojo» y era «el azul»): mueve el stock de uno al otro.
+      let productoId = null;
+      if (n.productoId && n.productoId !== it.productoId) {
+        const np = BG.producto(n.productoId);
+        if (v.anterior || !it.productoId) return { error: 'Una compra de antes del sistema no tiene artículos del stock: no se puede cambiar el artículo.' };
+        if (it.devueltas || it.cambioDe || (v.devoluciones || []).some((x) => x.item === i || x.nuevoItem === i)) {
+          return { error: '«' + it.descripcion + '» ya tuvo una devolución o un cambio: para cambiarlo por otro usá «Devolución o cambio».' };
+        }
+        if (!np || np.archivado) return { error: 'Elegí un artículo del stock para cambiarlo.' };
+        productoId = np.id;
+      }
+      items.push({ descripcion: descripcion, cantidad: cantidad, precio: precio, costo: costo, productoId: productoId });
     }
     let descuento;   // undefined = no se toca
     if (d.descuento !== undefined) {
@@ -613,6 +632,12 @@
     const cambios = [];
     v.items.forEach((it, i) => {
       const n = l.items[i];
+      if (n.productoId) {
+        const np = BG.producto(n.productoId);
+        cambios.push('Artículo «' + it.descripcion + '» → «' + np.descripcion + '» (otro artículo del stock)');
+        // Lo de este artículo es del producto nuevo: nombre, precio de lista y costo de hoy (el costo se puede cambiar abajo).
+        Object.assign(it, { productoId: np.id, descripcion: np.descripcion, precioLista: np.precioVenta, costoUnitGs: np.costoTotalGs, margen: null, especial: null });
+      }
       const nombre = '«' + it.descripcion + '»';
       if (it.descripcion !== n.descripcion) { cambios.push('Artículo ' + nombre + ' → «' + n.descripcion + '»'); it.descripcion = n.descripcion; }
       if (it.cantidad !== n.cantidad) { cambios.push(nombre + ': cantidad ' + it.cantidad + ' → ' + n.cantidad); it.cantidad = n.cantidad; }
@@ -690,12 +715,13 @@
       if (vc.plan && l.fecha !== v.fecha && vc.plan.cuotas.length && vc.plan.cuotas[0].vence < vc.fecha) falla('La primera cuota vence antes de la nueva fecha de la compra: cambiá las cuotas primero.');
       // Stock: lo que sobra vuelve y lo que falta tiene que haber (se mira en los datos de verdad, no en la copia).
       const uniDesp = unidadesPorProducto(vc);
-      for (const [pid, n] of uniDesp) {
-        const dif = n - (uniAntes.get(pid) || 0);
+      // Los productos de antes y de después: si se cambió el artículo de una línea, el viejo vuelve al stock y el nuevo sale.
+      for (const pid of new Set(Array.from(uniAntes.keys()).concat(Array.from(uniDesp.keys())))) {
+        const dif = (uniDesp.get(pid) || 0) - (uniAntes.get(pid) || 0);
         const p = real.productos.find((x) => x.id === pid);
         if (!dif || !p) continue;
-        // BG.disponibles lee BG.db (la copia, que ya tiene lo nuevo): si quedó negativo, no alcanzaba.
-        const sobraStock = BG.disponibles(BG.producto(pid));
+        // BG.vendibles lee BG.db (la copia, que ya tiene lo nuevo): si quedó negativo, no alcanzaba (lo apartado para otras no se toca).
+        const sobraStock = BG.vendibles(BG.producto(pid), vc.clienteId);
         if (dif > 0 && sobraStock < 0) falla('No alcanza el stock de «' + p.descripcion + '»: hacen falta ' + dif + ' más y solo hay ' + (sobraStock + dif) + '.');
         r.efectos.push(dif > 0 ? 'Salen del stock ' + dif + ' × ' + p.descripcion + '.' : 'Vuelven al stock ' + (-dif) + ' × ' + p.descripcion + '.');
       }
@@ -745,6 +771,254 @@
       + (reg.aFavor ? ' · ' + gs(reg.aFavor) + ' pasan a saldo a favor' : ''));
     BG.guardar();
     return reg;
+  };
+
+  /* ── Pasar una compra a otra clienta (solo el dueño) ───────────────────── */
+
+  /**
+   * Una compra cargada a la clienta equivocada pasa a la correcta, con sus pagos y su fecha: queda anotado en la compra
+   * (`v.traslados`: de quién a quién, cuándo, por qué y quién) y en la cuenta de las dos. La deuda y los puntos se mudan
+   * con ella (son derivados). Solo se pasa lo «limpio»: si la compra tiene pagos hechos con saldo a favor o con puntos, un
+   * saldo a favor que generó o un envío preparado, esas cosas son de la clienta de antes y no se mudan solas. Igual que
+   * corregir: `revisarTraspaso` ensaya todo en una copia y `pasarCompraDeClienta` solo guarda si los dos cuadres cierran.
+   * d = { ventaId, clienteId (la nueva), motivo (BG.MOTIVOS_TRASPASO), nota }
+   */
+  BG.MOTIVOS_TRASPASO = ['Se cargó a la clienta equivocada', 'Otro'];
+
+  function leerTraspaso(v, d) {
+    const nueva = BG.cliente(d.clienteId);
+    if (!nueva) return { error: 'Elegí a qué clienta se pasa la compra.' };
+    if (nueva.id === v.clienteId) return { error: 'Esa compra ya es de ' + nueva.nombre + '.' };
+    if (!BG.MOTIVOS_TRASPASO.includes(d.motivo)) return { error: 'Elegí el motivo.' };
+    const nota = limpiar(d.nota);
+    if (d.motivo === 'Otro' && nota.length < 5) return { error: 'Contá qué pasó en «Detalle» (queda en el historial).' };
+    return { hasta: nueva.id, motivo: d.motivo, nota: nota };
+  }
+
+  /** Hace el traspaso de `v` en BG.db (la real o la copia de una revisión): la compra y todos sus pagos pasan a la otra clienta. */
+  function aplicarTraspaso(v, l) {
+    const de = BG.cliente(v.clienteId);
+    const a = BG.cliente(l.hasta);
+    const reg = {
+      id: BG.uid('tr'), fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, de: de.id, a: a.id, deNombre: de.nombre, aNombre: a.nombre,
+      motivo: textoMotivoCorreccion(l.motivo, l.nota), nota: l.nota,
+    };
+    v.clienteId = a.id;
+    BG.db.pagos.filter((p) => p.ventaId === v.id).forEach((p) => { p.clienteId = a.id; });
+    (v.traslados || (v.traslados = [])).push(reg);
+    return reg;
+  }
+
+  /** Qué pasaría con este traspaso, sin guardar nada: { ok, errores, efectos }. */
+  BG.revisarTraspaso = (d) => {
+    const r = { ok: false, errores: [], efectos: [] };
+    const v = BG.venta(d.ventaId);
+    if (!v) { r.errores.push('No encontramos esa compra.'); return r; }
+    if (!BG.esDuena()) { r.errores.push('Pasar una compra a otra clienta lo hace ' + BG.nombreDuena() + '.'); return r; }
+    if (v.anulada) { r.errores.push('La compra está anulada: no se pasa.'); return r; }
+    const l = leerTraspaso(v, d);
+    if (l.error) { r.errores.push(l.error); return r; }
+    const de = BG.cliente(v.clienteId);
+    const a = BG.cliente(l.hasta);
+    const falla = (m) => r.errores.push(m);
+    // Lo que es de la clienta de ahora y no se muda solo.
+    const vivos = BG.db.pagos.filter((p) => p.ventaId === v.id && !p.anulado);
+    if (vivos.some((p) => p.partes.some((x) => x.forma === 'saldo'))) falla('Parte de esta compra se pagó con saldo a favor (o con puntos) de ' + de.nombre + ': ese saldo es suyo y no se pasa solo.');
+    if (vivos.some((p) => p.excedente > 0)) falla('Un pago de esta compra dejó saldo a favor de ' + de.nombre + ': ese saldo es suyo y no se pasa solo.');
+    if ((v.aFavor || 0) > 0 || BG.db.creditos.some((c) => c.ventaId === v.id)) falla('Esta compra tuvo una devolución o un ajuste que movió saldo a favor de ' + de.nombre + ': eso es suyo y no se pasa solo.');
+    const envio = BG.envioDeVenta(v.id);
+    if (envio) falla('Tiene un envío preparado (' + envio.numero + ') con el nombre de ' + de.nombre + ': cancelalo primero.');
+    const antes = { de: BG.saldoCliente(de.id), a: BG.saldoCliente(a.id), pDe: BG.puntosDe(de.id), pA: BG.puntosDe(a.id) };
+    const real = BG.db;
+    BG.db = JSON.parse(JSON.stringify(real));
+    try {
+      const vc = BG.venta(v.id);
+      aplicarTraspaso(vc, l);
+      if (!BG.cuadre().ok || !BG.cuadreFavor().ok) falla('Con ese cambio las cuentas no cierran: no se guarda nada.');
+      const pDe = BG.puntosDe(de.id);
+      const pA = BG.puntosDe(a.id);
+      if (antes.pDe && pDe && pDe.ganados < pDe.canjeados && pDe.ganados < antes.pDe.ganados) {
+        falla(de.nombre.split(' ')[0] + ' quedaría con ' + pDe.ganados + ' puntos ganados y ya canjeó ' + pDe.canjeados + ': no se puede.');
+      }
+      const nDe = BG.saldoCliente(de.id);
+      const nA = BG.saldoCliente(a.id);
+      if (nDe !== antes.de) r.efectos.push(de.nombre + ' pasa de deber ' + gs(antes.de) + ' a ' + gs(nDe) + '.');
+      if (nA !== antes.a) r.efectos.push(a.nombre + ' pasa de deber ' + gs(antes.a) + ' a ' + gs(nA) + '.');
+      if (antes.pDe && pDe && pDe.ganados !== antes.pDe.ganados) r.efectos.push(de.nombre.split(' ')[0] + ' pierde ' + (antes.pDe.ganados - pDe.ganados) + ' puntos.');
+      if (antes.pA && pA && pA.ganados !== antes.pA.ganados) r.efectos.push(a.nombre.split(' ')[0] + ' suma ' + (pA.ganados - antes.pA.ganados) + ' puntos.');
+      if (antes.pA && pA && pA.pendientes !== antes.pA.pendientes) r.efectos.push(a.nombre.split(' ')[0] + ' suma ' + (pA.pendientes - antes.pA.pendientes) + ' puntos para cuando termine de pagar.');
+      const ec = BG.estadoCredito(a.id, 0);
+      if (!ec.ok) r.efectos.push('Ojo: con esta compra ' + a.nombre.split(' ')[0] + ' queda fuera de su límite de crédito (' + BG.textoCredito(ec) + '). Podés pasarla igual.');
+    } catch (e) {
+      falla(e.message);
+    } finally {
+      BG.db = real;
+    }
+    r.ok = !r.errores.length;
+    return r;
+  };
+
+  BG.pasarCompraDeClienta = (d) => {
+    soloDuenio('pasar una compra a otra clienta');
+    const r = BG.revisarTraspaso(d);
+    if (!r.ok) throw new Error(r.errores[0]);
+    const v = BG.venta(d.ventaId);
+    const l = leerTraspaso(v, d);
+    const respaldo = JSON.parse(JSON.stringify(BG.db));
+    const reg = aplicarTraspaso(v, l);
+    if (!BG.cuadre().ok || !BG.cuadreFavor().ok) {
+      BG.db = respaldo;
+      throw new Error('No se guardó nada: después del cambio las cuentas no cerraban. Contale esto a quien hizo el sistema.');
+    }
+    BG.auditar('ventas', 'Compra pasada a otra clienta', 'Recibo ' + BG.fmtRecibo(v.recibo) + ' · de ' + reg.deNombre + ' a ' + reg.aNombre + ' · ' + reg.motivo + ' · total ' + gs(v.total)
+      + ' · debe ' + gs(BG.saldoVenta(v)));
+    BG.guardar();
+    return reg;
+  };
+
+  /* ── Cobranza: avisar lo que debe ──────────────────────────────────────── */
+
+  /** Anota que se le mandó un recordatorio de cobro por WhatsApp (quién, cuándo y cuánto debía). No mueve plata. */
+  BG.registrarRecordatorio = (clienteId) => {
+    const c = BG.cliente(clienteId);
+    if (!c) throw new Error('No encontramos a esa clienta.');
+    const saldo = BG.saldoCliente(clienteId);
+    if (!(saldo > 0)) throw new Error(c.nombre.split(' ')[0] + ' no debe nada: no hace falta recordarle.');
+    const r = { id: BG.uid('rc'), clienteId: clienteId, fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, monto: saldo, medio: 'WhatsApp' };
+    (BG.db.recordatorios || (BG.db.recordatorios = [])).push(r);
+    BG.auditar('cobranza', 'Recordatorio de cobro', c.nombre + ' · debía ' + gs(saldo) + ' · por WhatsApp');
+    BG.guardar();
+    return r;
+  };
+
+  /* ── Apartados: guardarle un artículo a una clienta con seña y fecha límite ── */
+
+  const MAX_DIAS_APARTADO = 120;
+  /**
+   * Aparta artículos para una clienta. No mueve plata por sí solo: la seña (si hay) es una seña común, que queda como saldo a
+   * favor de la clienta y se usa sola cuando se le vende lo apartado. Lo apartado no se le puede vender a otra (BG.vendibles).
+   * d = { clienteId, items: [{ productoId, cantidad }], vence (fecha límite), sena: { forma, monto } | null, nota }
+   */
+  BG.apartar = (d) => {
+    if (!BG.puede('registrarVentas')) throw new Error('Tu usuario no puede apartar artículos.');
+    const cli = BG.cliente(d.clienteId);
+    if (!cli) throw new Error('Elegí la clienta.');
+    const lista = (d.items || []).filter((x) => x && x.productoId);
+    if (!lista.length) throw new Error('Elegí al menos un artículo para apartar.');
+    const pedidas = new Map();
+    const items = lista.map((x) => {
+      const p = BG.producto(x.productoId);
+      const n = Math.round(Number(x.cantidad));
+      if (!p || p.archivado) throw new Error('No encontramos uno de los artículos: volvé a elegirlo.');
+      if (!(n >= 1)) throw new Error('Revisá la cantidad de «' + p.descripcion + '».');
+      pedidas.set(p.id, (pedidas.get(p.id) || 0) + n);
+      return { productoId: p.id, descripcion: p.descripcion, cantidad: n };
+    });
+    pedidas.forEach((n, pid) => {
+      const p = BG.producto(pid);
+      const q = BG.vendibles(p);
+      if (q < n) throw new Error('De «' + p.descripcion + '» ' + (q <= 0 ? 'no queda nada para apartar' : q === 1 ? 'queda 1' : 'quedan ' + q) + (BG.reservadas(pid) ? ' (' + BG.reservadas(pid) + ' ya están apartadas)' : '') + ': no alcanza para ' + n + '.');
+    });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d.vence || '')) throw new Error('Elegí hasta cuándo se lo guardás.');
+    if (d.vence < BG.hoy()) throw new Error('La fecha límite no puede ser anterior a hoy.');
+    if (d.vence > BG.sumarDias(BG.hoy(), MAX_DIAS_APARTADO)) throw new Error('Un apartado no puede durar más de ' + MAX_DIAS_APARTADO + ' días: si hace falta más, se renueva.');
+    const monto = d.sena ? Math.round(Number(d.sena.monto)) : 0;
+    if (d.sena && d.sena.monto !== '' && d.sena.monto != null && !(monto >= 0)) throw new Error('Revisá el monto de la seña.');
+    if (monto > 0) {
+      if (!BG.puede('registrarCobros')) throw new Error('Tu usuario no puede cobrar: anotá el apartado sin seña y que la cobre quien pueda.');
+      if (!BG.FORMAS[d.sena.forma] || d.sena.forma === 'saldo') throw new Error('Elegí cómo pagó la seña.');
+    }
+    const r = { id: BG.uid('rs'), clienteId: cli.id, fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, vence: d.vence, items: items, sena: null, nota: limpiar(d.nota), estado: 'activa', cerrada: null };
+    (BG.db.reservas || (BG.db.reservas = [])).push(r);
+    if (monto > 0) {
+      try {
+        const cobro = BG.registrarCobro({ clienteId: cli.id, destino: 'sena', fecha: BG.hoy(), partes: [{ forma: d.sena.forma, monto: monto }] });
+        r.sena = { pagoId: cobro.pagos[0].id, monto: monto, recibo: cobro.recibo };
+      } catch (e) {
+        BG.db.reservas.pop();   // si la seña no se pudo cobrar, no queda un apartado a medias
+        throw e;
+      }
+    }
+    BG.auditar('apartados', 'Artículo apartado', cli.nombre + ' · ' + items.map((x) => x.cantidad + ' × ' + x.descripcion).join(', ') + ' · hasta el ' + BG.fmtFecha(r.vence)
+      + (r.sena ? ' · seña ' + gs(r.sena.monto) : ' · sin seña'));
+    BG.guardar();
+    return r;
+  };
+  /** Da más tiempo (o menos) a un apartado vivo. */
+  BG.cambiarVenceApartado = (id, vence) => {
+    const r = BG.reserva(id);
+    if (!r || r.estado !== 'activa') throw new Error('Ese apartado ya no está activo.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(vence || '') || vence < BG.hoy()) throw new Error('La fecha límite no puede ser anterior a hoy.');
+    if (vence > BG.sumarDias(BG.hoy(), MAX_DIAS_APARTADO)) throw new Error('Un apartado no puede durar más de ' + MAX_DIAS_APARTADO + ' días desde hoy.');
+    const antes = r.vence;
+    r.vence = vence;
+    BG.auditar('apartados', 'Apartado: nueva fecha límite', BG.cliente(r.clienteId).nombre + ' · ' + BG.fmtFecha(antes) + ' → ' + BG.fmtFecha(vence));
+    BG.guardar();
+    return r;
+  };
+  /** Libera lo apartado (vuelve a poder venderse). La seña, si hubo, sigue siendo saldo a favor de la clienta. */
+  BG.liberarApartado = (id, motivo) => {
+    const r = BG.reserva(id);
+    if (!r || r.estado !== 'activa') throw new Error('Ese apartado ya no está activo.');
+    const texto = limpiar(motivo);
+    if (texto.length < 3) throw new Error('Contá por qué se libera (queda en el historial).');
+    r.estado = 'liberada';
+    r.cerrada = { fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, motivo: texto };
+    BG.auditar('apartados', 'Apartado liberado', BG.cliente(r.clienteId).nombre + ' · ' + r.items.map((x) => x.cantidad + ' × ' + x.descripcion).join(', ') + ' · ' + texto
+      + (r.sena ? ' · la seña de ' + gs(r.sena.monto) + ' queda a favor de la clienta' : ''));
+    BG.guardar();
+    return r;
+  };
+
+  /* ── Lo que las clientas pidieron y no había ─────────────────────────────── */
+
+  /** Anota un pedido: «busca botas negras, talle 38». Con una clienta de la lista o solo con un nombre. */
+  BG.anotarDeseo = (d) => {
+    if (!BG.puede('registrarVentas') && !BG.puede('editarClientes')) throw new Error('Tu usuario no puede anotar pedidos.');
+    const cli = d.clienteId ? BG.cliente(d.clienteId) : null;
+    if (d.clienteId && !cli) throw new Error('No encontramos a esa clienta.');
+    const nombre = cli ? cli.nombre : limpiar(d.nombre);
+    if (!cli && nombre.length < 2) throw new Error('Escribí el nombre de quien lo pidió (o elegí una clienta).');
+    const texto = limpiar(d.texto);
+    if (texto.length < 3) throw new Error('Escribí qué buscaba (por ejemplo «botas negras»).');
+    const x = { id: BG.uid('ds'), clienteId: cli ? cli.id : null, nombre: nombre, texto: texto, detalle: limpiar(d.detalle), fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, estado: 'pendiente', avisada: null, cerrada: null };
+    (BG.db.deseos || (BG.db.deseos = [])).push(x);
+    BG.auditar('deseos', 'Pedido anotado', nombre + ' · ' + texto + (x.detalle ? ' (' + x.detalle + ')' : ''));
+    BG.guardar();
+    return x;
+  };
+  /** Marca que ya se le avisó que llegó (queda cuándo y quién). Sigue pendiente hasta cerrarlo. */
+  BG.avisarDeseo = (id) => {
+    const x = (BG.db.deseos || []).find((y) => y.id === id);
+    if (!x || (x.estado !== 'pendiente' && x.estado !== 'avisada')) throw new Error('Ese pedido ya está cerrado.');
+    x.estado = 'avisada';
+    x.avisada = { fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre };
+    BG.auditar('deseos', 'Pedido: se le avisó', x.nombre + ' · ' + x.texto);
+    BG.guardar();
+    return x;
+  };
+  /** Cierra un pedido: 'resuelta' (lo compró o lo consiguió) o 'descartada' (ya no lo quiere). Nada se borra. */
+  BG.cerrarDeseo = (id, resultado, nota) => {
+    const x = (BG.db.deseos || []).find((y) => y.id === id);
+    if (!x || (x.estado !== 'pendiente' && x.estado !== 'avisada')) throw new Error('Ese pedido ya está cerrado.');
+    if (resultado !== 'resuelta' && resultado !== 'descartada') throw new Error('Elegí cómo se cierra.');
+    x.estado = resultado;
+    x.cerrada = { fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, nota: limpiar(nota) };
+    BG.auditar('deseos', resultado === 'resuelta' ? 'Pedido resuelto' : 'Pedido descartado', x.nombre + ' · ' + x.texto + (x.cerrada.nota ? ' · ' + x.cerrada.nota : ''));
+    BG.guardar();
+    return x;
+  };
+
+  /* ── Resumen del día: a qué WhatsApp le llega al dueño ─────────────────── */
+
+  BG.guardarResumenConfig = (d) => {
+    soloDuenio('elegir el WhatsApp del resumen del día');
+    const tel = limpiar(d.telefono);
+    if (tel && BG.soloDigitos(tel).length < 6) throw new Error('Escribí el número completo, por ejemplo 0981 123 456.');
+    BG.db.config.resumen = Object.assign({}, BG.db.config.resumen, { telefono: tel });
+    BG.auditar('parametros', 'WhatsApp del resumen del día', tel ? 'Se manda a ' + tel : 'Sin número: se elige el chat al mandar');
+    BG.guardar();
+    return tel;
   };
 
   /* ── Compras de antes del sistema (la libreta de lo que llevó antes) ─── */
@@ -828,7 +1102,7 @@
       if (!nuevo) throw new Error('Elegí el producto que se lleva.');
       if (nuevo.id === it.productoId) throw new Error('Es el mismo producto: usá «Cambio de talle».');
       if (!nuevo.precioVenta) throw new Error('«' + nuevo.descripcion + '» no tiene precio de venta.');
-      if (BG.disponibles(nuevo) < n) throw new Error('Solo quedan ' + BG.disponibles(nuevo) + ' de «' + nuevo.descripcion + '».');
+      if (BG.vendibles(nuevo, v.clienteId) < n) throw new Error('Solo quedan ' + BG.vendibles(nuevo, v.clienteId) + ' de «' + nuevo.descripcion + '» para vender.');
     }
     if (d.tipo === 'talle' && !limpiar(d.talle)) throw new Error('Escribí qué talle devuelve y cuál se lleva.');
     const enPlata = d.destino === 'efectivo' || d.destino === 'transferencia';

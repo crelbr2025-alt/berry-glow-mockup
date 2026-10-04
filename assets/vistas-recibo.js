@@ -96,7 +96,10 @@
         return {
           numero: v.recibo, fecha: v.fecha, anulada: !!v.anulada, anterior: BG.esAnterior(v),
           // Si se corrigió: cuándo y cuánto era el total antes (lo único público de la corrección: nada de costos ni motivos internos).
-          corregida: (v.correcciones || []).length ? { fecha: v.correcciones[v.correcciones.length - 1].fecha, totalAntes: v.correcciones[0].totalAntes } : null,
+          corregida: (v.correcciones || []).length || (v.traslados || []).length ? {
+            fecha: (v.correcciones || []).concat(v.traslados || []).map((x) => x.fecha).sort().pop(),
+            totalAntes: (v.correcciones || []).length ? v.correcciones[0].totalAntes : v.total,
+          } : null,
           // Solo lo que la clienta se quedó; lo devuelto va en «Cambios y devoluciones».
           items: v.items.filter((it) => BG.cantidadViva(it) > 0).map((it) => ({ descripcion: it.descripcion, cantidad: BG.cantidadViva(it), precio: it.precio, agregado: !!it.agregado })),
           agregados: (v.agregados || []).map((a) => ({ fecha: a.fecha, texto: a.items.map((i) => v.items[i].cantidad + ' × ' + v.items[i].descripcion).join(', ') })),

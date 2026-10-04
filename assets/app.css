@@ -1472,3 +1472,9 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 }
 .mx-archivo { overflow-wrap: anywhere; }
 .callout span { min-width: 0; overflow-wrap: anywhere; }
+
+/* ── Cobranza, apartados, lo que piden y el resumen del día ──────────────── */
+.practica { border-top: 1px solid var(--line); padding-top: 10px; }
+.practica summary { cursor: pointer; }
+.practica[open] summary { margin-bottom: 8px; }
+.cuota-fila .row-end .pill { white-space: normal; }

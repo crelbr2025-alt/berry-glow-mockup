@@ -613,10 +613,13 @@
           + '<label class="btn btn-sm" for="aj-restaurar">' + icon('upload', 'i-sm') + 'Restaurar una copia</label>'
           + '<input id="aj-restaurar" type="file" accept=".json,application/json" hidden>'
           + '<a class="btn btn-sm" href="#/ajustes/excel">' + icon('file', 'i-sm') + (info ? 'Volver a traer el Excel' : 'Traer mi Excel') + '</a>'
-          + '<button type="button" class="btn btn-sm" data-action="modo-ejemplo">' + icon('eye', 'i-sm') + 'Ver los de ejemplo</button>'
           + '<button type="button" class="btn btn-sm btn-danger" data-accion="cero">' + icon('trash', 'i-sm') + 'Empezar de cero</button>'
         : '<button type="button" class="btn btn-sm btn-primary" data-action="modo-mios">' + icon('eye', 'i-sm') + 'Volver a mis datos</button>')
-      + '</div>';
+      + '</div>'
+      // Los datos de ejemplo ya no están a la vista de todos: quedan acá, cerrados, solo para el dueño que quiera practicar.
+      + (mios && BG.esDuena() ? '<details class="practica"><summary class="small muted">Práctica con datos de mentira</summary>'
+        + '<p class="small">Sirve para probar el sistema sin tocar nada de la tienda: tus datos reales quedan guardados aparte y no se suben a la nube. Al terminar, «Volver a mis datos».</p>'
+        + '<button type="button" class="btn btn-sm" data-action="modo-ejemplo">' + icon('eye', 'i-sm') + 'Ver los de ejemplo</button></details>' : '');
   }
 
   BG.vistas.ajustes = () => {
@@ -690,6 +693,11 @@
       + '<section class="card stack" id="aj-credito">' + htmlCredito() + '</section>'
       + '<section class="card stack" id="aj-fidelidad">' + htmlFidelidad() + '</section>'
       + '<section class="card stack" id="aj-terminos">' + htmlTerminos() + '</section>'
+      + '<section class="card stack" id="aj-resumen"><div class="card-head"><h2>' + icon('chat') + 'Resumen del día por WhatsApp</h2></div>'
+      + '<p class="small">Cada noche podés mandarte un mensaje con lo que vendiste, lo que cobraste, lo que quedó a deber y el stock que se acaba (botón en Inicio). Es solo para vos: nunca se manda a una clienta.</p>'
+      + '<div class="field"><label for="aj-resumen-tel">Tu WhatsApp</label><input id="aj-resumen-tel" class="input" type="tel" inputmode="tel" autocomplete="off" placeholder="Ej.: 0981 123 456" value="' + esc((cfg.resumen && cfg.resumen.telefono) || '') + '">'
+      + '<span class="hint">' + (BG.telefonoResumen() ? 'Hoy se manda a ' + esc(BG.telefonoResumen()) + '.' : 'Sin número: WhatsApp te deja elegir el chat al mandarlo.') + ' Lo que quede escrito acá se usa en lugar del de la tienda.</span></div>'
+      + '<div class="row"><button type="button" class="btn btn-primary" data-accion="guardar-resumen">Guardar el número</button></div></section>'
       + '<section class="card stack"><div class="card-head"><h2>Envíos</h2></div>'
       + '<p class="small">Salen de <strong>' + esc(cfg.envios.origen.ciudad) + ' (' + esc(cfg.envios.origen.departamento) + ')</strong>. Empresas con las que mandan (aparecen al preparar un envío):</p>'
       + '<ul class="list" id="aj-empresas">' + cfg.envios.empresas.map((x, i) => '<li class="list-row"><span class="row-main"><span class="row-title">' + esc(x.nombre) + '</span><span class="row-sub">' + esc(x.servicio) + '</span></span>'
@@ -825,6 +833,13 @@
           }
           const b = e.target.closest('[data-accion], [data-exportar]');
           if (!b) return;
+          if (b.dataset.accion === 'guardar-resumen') {
+            const antes = (cfg.resumen && cfg.resumen.telefono) || '';
+            const tel = BG.guardarResumenConfig({ telefono: $('#aj-resumen-tel', root).value });
+            BG.toast(tel === antes ? 'El número quedó igual.' : tel ? 'Listo: el resumen del día se manda a ' + tel + '.' : 'Listo: sin número fijo, WhatsApp te deja elegir el chat.');
+            BG.render();
+            return;
+          }
           if (b.dataset.accion === 'guardar-terminos' || b.dataset.accion === 'terminos-defecto') {
             const campo = $('#fi-terminos', root);
             const sugerido = BG.terminosPuntosSugeridos(BG.configFidelidad().porPago);
@@ -960,7 +975,7 @@
 
   BG.vistas.auditoria = (args, params) => {
     const tipos = [['todo', 'Todo'], ['ventas', 'Ventas'], ['precios', 'Precios especiales'], ['cobros', 'Cobros'], ['cuotas', 'Cuotas'], ['devoluciones', 'Devoluciones'], ['recibos', 'Recibos'], ['envios', 'Envíos'],
-      ['anulaciones', 'Anulaciones'], ['productos', 'Productos'], ['gastos', 'Gastos'], ['ahorro', 'Cuenta de ahorro'], ['fidelidad', 'Clientas frecuentes'], ['parametros', 'Parámetros'], ['caja', 'Caja'], ['clientes', 'Clientes'], ['seguridad', 'Permisos y PIN']];
+      ['anulaciones', 'Anulaciones'], ['productos', 'Productos'], ['gastos', 'Gastos'], ['ahorro', 'Cuenta de ahorro'], ['cobranza', 'Cobranza'], ['apartados', 'Apartados'], ['deseos', 'Lo que piden'], ['fidelidad', 'Clientas frecuentes'], ['parametros', 'Parámetros'], ['caja', 'Caja'], ['clientes', 'Clientes'], ['seguridad', 'Permisos y PIN']];
     const pedido = params && params.get('tipo');
     const e = { tipo: tipos.some((x) => x[0] === pedido) ? pedido : 'todo', usuario: 'todos', q: '', max: 120 };
     const html = '<div class="page"><div class="page-head"><div><h1 class="page-title">Auditoría</h1><p class="page-sub">Cada venta, precio especial, cobro, recibo emitido, envío, anulación y cambio de parámetros queda con fecha, hora y usuario. No se puede editar.</p></div></div>'

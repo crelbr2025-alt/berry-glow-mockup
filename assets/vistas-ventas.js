@@ -232,7 +232,7 @@
       $('#dv-bloque-talle', form).hidden = st.tipo !== 'talle';
       const p = st.productoId && BG.producto(st.productoId);
       $('#dv-elegido', form).innerHTML = p ? '<div class="picked"><span class="avatar">' + icon('tag', 'i-sm') + '</span><div class="grow"><div class="row-title">' + esc(p.descripcion) + '</div>'
-        + '<div class="row-sub">' + gs(p.precioVenta) + ' c/u · quedan ' + BG.disponibles(p) + '</div></div></div>' : '';
+        + '<div class="row-sub">' + gs(p.precioVenta) + ' c/u · quedan ' + BG.vendibles(p, v.clienteId) + '</div></div></div>' : '';
       const sim = simular();
       const host = $('#dv-info', form);
       if (!sim || st.item == null) { host.innerHTML = ''; return; }
@@ -279,7 +279,7 @@
         if (st.tipo === 'cambio') {
           const p = st.productoId && BG.producto(st.productoId);
           if (!p) return falla('Buscá y elegí el producto que se lleva.');
-          if (BG.disponibles(p) < st.cantidad) return falla('Solo quedan ' + BG.disponibles(p) + ' de «' + p.descripcion + '».');
+          if (BG.vendibles(p, v.clienteId) < st.cantidad) return falla('Solo quedan ' + BG.vendibles(p, v.clienteId) + ' de «' + p.descripcion + '» para vender.');
         }
         if (st.tipo === 'talle' && !st.talle.trim()) return falla('Escribí qué talle devuelve y cuál se lleva.');
         if (!st.motivo) return falla('Elegí el motivo.');
@@ -292,7 +292,7 @@
         BG.combobox($('#dv-q', form), $('#dv-q-lista', form), {
           buscar: (q) => BG.buscarProductos(q, 8, (p) => p.precioVenta && p.id !== (st.item != null ? v.items[st.item].productoId : null)).map((p) => ({ p: p })),
           pintar: (x, q) => '<span class="avatar">' + icon('tag', 'i-sm') + '</span><span class="row-main"><span class="row-title">' + BG.resaltar(x.p.descripcion, q) + '</span>'
-            + '<span class="row-sub">' + esc(x.p.categoria) + ' · ' + (BG.disponibles(x.p) > 0 ? 'quedan ' + BG.disponibles(x.p) : 'agotado') + '</span></span><span class="row-end"><span class="amount">' + gs(x.p.precioVenta) + '</span></span>',
+            + '<span class="row-sub">' + esc(x.p.categoria) + ' · ' + (BG.vendibles(x.p, v.clienteId) > 0 ? 'quedan ' + BG.vendibles(x.p, v.clienteId) : 'agotado') + '</span></span><span class="row-end"><span class="amount">' + gs(x.p.precioVenta) + '</span></span>',
           elegir: (x) => { st.productoId = x.p.id; $('#dv-q', form).value = ''; pintar(form); },
         });
         form.addEventListener('change', (e) => {
@@ -343,7 +343,7 @@
   BG.agregarArticulosUI = async (v) => {
     const cli = BG.cliente(v.clienteId);
     const st = { items: [], paga: 'no', forma: 'efectivo', monto: 0, montoTocado: false };
-    const disponible = (p) => BG.disponibles(p) - st.items.filter((x) => x.productoId === p.id).reduce((a, x) => a + x.cantidad, 0);
+    const disponible = (p) => BG.vendibles(p, v.clienteId) - st.items.filter((x) => x.productoId === p.id).reduce((a, x) => a + x.cantidad, 0);
     const filtro = (p) => p.precioVenta > 0 && disponible(p) > 0;
     const agregado = () => st.items.reduce((a, x) => a + BG.producto(x.productoId).precioVenta * x.cantidad, 0);
     const simular = () => BG.totalesDe(v, v.items.concat(st.items.map((x) => ({ precio: BG.producto(x.productoId).precioVenta, cantidad: x.cantidad }))));
@@ -352,7 +352,7 @@
       $('#ag-lista', form).innerHTML = st.items.length ? st.items.map((x, i) => {
         const p = BG.producto(x.productoId);
         return '<div class="picked"><span class="avatar">' + icon('tag', 'i-sm') + '</span><div class="grow"><div class="row-title">' + esc(p.descripcion) + '</div>'
-          + '<div class="row-sub">' + gs(p.precioVenta) + ' c/u · quedan ' + BG.disponibles(p) + '</div></div>'
+          + '<div class="row-sub">' + gs(p.precioVenta) + ' c/u · quedan ' + BG.vendibles(p, v.clienteId) + '</div></div>'
           + '<div class="qty" role="group" aria-label="Cantidad de ' + esc(p.descripcion) + '"><button type="button" class="btn-icon" data-ag="menos" data-i="' + i + '" aria-label="Uno menos">−</button>'
           + '<span class="qty-n">' + x.cantidad + '</span><button type="button" class="btn-icon" data-ag="mas" data-i="' + i + '" aria-label="Uno más"' + (disponible(p) > 0 ? '' : ' disabled') + '>+</button></div>'
           + '<button type="button" class="btn-icon" data-ag="quitar" data-i="' + i + '" aria-label="Quitar ' + esc(p.descripcion) + '">' + icon('x') + '</button></div>';
@@ -463,19 +463,28 @@
     const cli = BG.cliente(v.clienteId);
     const conDesc = !!(v.descuento && v.descuento.valor);
     const st = {
-      items: v.items.map((it) => ({ descripcion: it.descripcion, cantidad: it.cantidad, precio: it.precio, costo: it.costoUnitGs == null ? '' : it.costoUnitGs })),
+      items: v.items.map((it) => ({ descripcion: it.descripcion, cantidad: it.cantidad, precio: it.precio, costo: it.costoUnitGs == null ? '' : it.costoUnitGs, productoId: null })),
       descTipo: conDesc ? v.descuento.tipo : 'monto', descValor: conDesc ? Number(v.descuento.valor) : 0, fecha: v.fecha, motivo: '', nota: '',
     };
     const armar = (paraVer) => ({
       ventaId: v.id, fecha: st.fecha, motivo: paraVer ? (st.motivo || 'Precio mal puesto') : st.motivo, nota: st.nota,
-      items: st.items.map((x) => ({ descripcion: x.descripcion, cantidad: x.cantidad, precio: x.precio, costoUnitGs: x.costo === '' ? null : x.costo })),
+      items: st.items.map((x) => ({ descripcion: x.descripcion, cantidad: x.cantidad, precio: x.precio, costoUnitGs: x.costo === '' ? null : x.costo, productoId: x.productoId || undefined })),
       descuento: { tipo: st.descTipo, valor: st.descValor },
     });
     const entero = (t) => { const n = parseInt(String(t).replace(/\D/g, ''), 10); return isNaN(n) ? '' : n; };
     const linea = (it, i) => {
       const x = st.items[i];
       const viva = BG.cantidadViva(it);
-      return '<div class="corr-item"><p class="row-title">' + (i + 1) + ' · ' + esc(it.descripcion) + (it.devueltas ? ' <span class="t-devuelto">devolvió ' + it.devueltas + '</span>' : '') + '</p>'
+      // Cambiar el artículo de la línea por otro del stock: solo si se cargó con un producto y no tuvo devolución ni cambio.
+      const puedeCambiar = !v.anterior && it.productoId && !it.devueltas && !it.cambioDe && !(v.devoluciones || []).some((d) => d.item === i || d.nuevoItem === i);
+      const cambio = !puedeCambiar ? '' : x.productoId
+        ? '<div class="callout callout-soft">' + icon('tag') + '<div class="grow"><span class="small">Cambiado por <strong>' + esc(BG.producto(x.productoId).descripcion) + '</strong>: el stock de «' + esc(it.descripcion) + '» vuelve y sale el del nuevo. '
+          + 'Revisá el precio y el costo de abajo.</span></div><button type="button" class="btn btn-sm btn-quiet" data-co-swap="deshacer" data-i="' + i + '">Deshacer</button></div>'
+        : '<div class="field"><button type="button" class="btn btn-sm" data-co-swap="abrir" data-i="' + i + '">' + icon('refresh', 'i-sm') + 'Cambiar por otro artículo</button>'
+          + '<div class="search" id="co-sw-' + i + '" hidden><label class="sr-only" for="co-sq-' + i + '">Buscar el artículo correcto</label><div class="search-box">' + icon('search')
+          + '<input id="co-sq-' + i + '" class="search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Buscar el artículo correcto" role="combobox" aria-expanded="false" aria-controls="co-sq-' + i + '-lista" aria-autocomplete="list"></div>'
+          + '<ul class="cb-list" id="co-sq-' + i + '-lista" role="listbox" hidden></ul></div></div>';
+      return '<div class="corr-item"><p class="row-title">' + (i + 1) + ' · ' + esc(it.descripcion) + (it.devueltas ? ' <span class="t-devuelto">devolvió ' + it.devueltas + '</span>' : '') + '</p>' + cambio
         + '<div class="field"><label for="co-d-' + i + '">Artículo</label><input id="co-d-' + i + '" class="input" maxlength="80" autocomplete="off" data-co="descripcion" data-i="' + i + '" value="' + esc(x.descripcion) + '"></div>'
         + '<div class="corr-fila"><div class="field"><label for="co-c-' + i + '">Cantidad</label><input id="co-c-' + i + '" class="input" inputmode="numeric" autocomplete="off" data-co="cantidad" data-i="' + i + '" value="' + x.cantidad + '"></div>'
         + '<div class="field"><label for="co-p-' + i + '">Precio c/u</label>' + BG.campoGs('co-p-' + i, x.precio, 'data-co="precio" data-i="' + i + '"') + '</div>'
@@ -507,7 +516,7 @@
       ancho: 'wide',
       cuerpo: '<p class="small">Compra de <strong>' + esc(cli.nombre) + '</strong> del ' + BG.fmtFecha(v.fecha) + '. Cambiá lo que esté mal. <strong>El ticket anterior queda guardado</strong> en la compra, el recibo nuevo dice «corregido» '
         + 'y solo se guarda si las cuentas, el stock y los puntos siguen cerrando.</p>'
-        + '<div class="stack-sm">' + v.items.map(linea).join('') + '</div>'
+        + '<div class="stack-sm" id="co-lineas">' + v.items.map(linea).join('') + '</div>'
         + '<div id="co-info" aria-live="polite"></div>'
         + '<div class="field"><span class="field-label" id="co-desc-l">Descuento de la compra</span><div class="row"><div class="seg" role="radiogroup" aria-labelledby="co-desc-l">'
         + '<label><input type="radio" name="co-dt" value="monto"' + (st.descTipo === 'monto' ? ' checked' : '') + '>En ₲</label>'
@@ -523,6 +532,33 @@
         const form = $('form', dlg);
         pintarDescuento(form);
         pintarInfo(form);
+        const pintarLineas = () => { $('#co-lineas', form).innerHTML = v.items.map(linea).join(''); BG.enlazarCampos($('#co-lineas', form)); pintarInfo(form); };
+        form.addEventListener('click', (e) => {
+          const b = e.target.closest('[data-co-swap]');
+          if (!b) return;
+          const i = Number(b.dataset.i);
+          if (b.dataset.coSwap === 'deshacer') {
+            const it = v.items[i];
+            Object.assign(st.items[i], { productoId: null, descripcion: it.descripcion, precio: it.precio, costo: it.costoUnitGs == null ? '' : it.costoUnitGs });
+            pintarLineas();
+            return;
+          }
+          const host = $('#co-sw-' + i, form);
+          host.hidden = false;
+          const inp = $('#co-sq-' + i, form);
+          inp.focus();
+          BG.combobox(inp, $('#co-sq-' + i + '-lista', form), {
+            buscar: (q) => BG.buscarProductos(q, 8, (p) => p.precioVenta > 0 && p.id !== v.items[i].productoId && BG.vendibles(p, v.clienteId) > 0).map((p) => ({ p: p })),
+            pintar: (x, q) => '<span class="avatar">' + icon('tag', 'i-sm') + '</span><span class="row-main"><span class="row-title">' + BG.resaltar(x.p.descripcion, q) + '</span>'
+              + '<span class="row-sub">' + esc(x.p.categoria) + ' · quedan ' + BG.vendibles(x.p, v.clienteId) + '</span></span><span class="row-end"><span class="amount">' + gs(x.p.precioVenta) + '</span></span>',
+            vacio: (q) => 'No hay nada con stock que se llame «' + esc(q) + '».',
+            elegir: (x) => {
+              // Pasa el nombre, el precio de lista y el costo de hoy del artículo nuevo; se pueden retocar abajo.
+              Object.assign(st.items[i], { productoId: x.p.id, descripcion: x.p.descripcion, precio: x.p.precioVenta, costo: x.p.costoTotalGs == null ? '' : x.p.costoTotalGs });
+              pintarLineas();
+            },
+          });
+        });
         form.addEventListener('input', (e) => {
           const t = e.target;
           const i = Number(t.dataset.i);
@@ -556,6 +592,59 @@
     const reg = BG.corregirVenta(armar(false));
     BG.toast('Compra ' + BG.fmtRecibo(v.recibo) + ' corregida (total ' + gs(reg.totalDespues) + ').' + (reg.aFavor ? ' ' + gs(reg.aFavor) + ' quedan a favor de la clienta.' : '')
       + ' Si ya le mandaste el recibo, mandale el nuevo: dice «corregido».');
+    return true;
+  };
+
+  /**
+   * Pasa una compra cargada a la clienta equivocada a la correcta (solo el dueño). Antes de guardar muestra qué pasaría
+   * (BG.revisarTraspaso, que lo prueba en una copia): lo que debe cada una y los puntos. Pide el PIN para confirmar.
+   */
+  BG.pasarCompraUI = async (v) => {
+    const de = BG.cliente(v.clienteId);
+    const st = { clienteId: null, motivo: '', nota: '' };
+    const armar = (paraVer) => ({ ventaId: v.id, clienteId: st.clienteId, motivo: paraVer ? (st.motivo || BG.MOTIVOS_TRASPASO[0]) : st.motivo, nota: st.nota });
+    const pintarInfo = (form) => {
+      const el = $('#pc-info', form);
+      if (!st.clienteId) { el.innerHTML = '<p class="hint">Elegí a qué clienta se pasa.</p>'; return; }
+      const r = BG.revisarTraspaso(armar(true));
+      el.innerHTML = r.ok
+        ? '<div class="callout callout-warn efecto">' + icon('info') + '<div><strong>Si guardás:</strong><ul class="efecto-lista"><li>La compra ' + BG.fmtRecibo(v.recibo) + ' y sus pagos pasan a ' + esc(BG.cliente(st.clienteId).nombre) + ', con su fecha.</li>'
+          + r.efectos.map((e) => '<li>' + esc(e) + '</li>').join('') + '<li>Queda anotado en la compra y en la cuenta de las dos; la auditoría guarda quién lo hizo.</li></ul></div></div>'
+        : '<p class="error-text" role="alert">' + esc(r.errores[0]) + '</p>';
+    };
+    const r = await BG.modal({
+      titulo: 'Pasar la compra ' + BG.fmtRecibo(v.recibo) + ' a otra clienta',
+      ancho: 'wide',
+      cuerpo: '<p class="small">Hoy está cargada a <strong>' + esc(de.nombre) + '</strong> (' + gs(v.total) + ', del ' + BG.fmtFecha(v.fecha) + '). '
+        + 'La compra se muda con sus pagos y su fecha; <strong>nada se borra</strong>: queda escrito de quién a quién pasó.</p>'
+        + '<div class="field"><span class="field-label">Pasa a</span><div id="pc-cli" class="stack"></div></div>'
+        + '<div id="pc-info" aria-live="polite"></div>'
+        + '<div class="field"><label for="pc-m">¿Por qué? <span class="req">*</span></label><select id="pc-m" class="select"><option value="">Elegí el motivo</option>'
+        + BG.MOTIVOS_TRASPASO.map((m) => '<option value="' + esc(m) + '">' + esc(m) + '</option>').join('') + '</select></div>'
+        + '<div class="field"><label for="pc-n">Detalle <span class="small muted">(obligatorio si el motivo es «Otro»)</span></label><input id="pc-n" class="input" maxlength="140" autocomplete="off"></div>'
+        + '<p class="error-text" id="pc-error" role="alert" hidden></p>',
+      acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Pasar la compra', valor: 'ok', clase: 'btn-primary', submit: true }],
+      onMount: (dlg) => {
+        const form = $('form', dlg);
+        BG.selectorClienta($('#pc-cli', form), st, () => pintarInfo(form), false, v.clienteId);
+        pintarInfo(form);
+        form.addEventListener('change', (e) => { if (e.target.id === 'pc-m') { st.motivo = e.target.value; pintarInfo(form); } });
+        form.addEventListener('input', (e) => { if (e.target.id === 'pc-n') { st.nota = e.target.value; pintarInfo(form); } });
+      },
+      validar: (val, dlg) => {
+        const er = $('#pc-error', dlg);
+        const rev = BG.revisarTraspaso(armar(false));
+        if (rev.ok) { er.hidden = true; return true; }
+        er.textContent = rev.errores[0];
+        er.hidden = false;
+        return false;
+      },
+    });
+    if (r !== 'ok') return false;
+    const nueva = BG.cliente(st.clienteId);
+    if (!(await BG.pedirPin('Pasar la compra ' + BG.fmtRecibo(v.recibo) + ' de ' + de.nombre + ' a ' + nueva.nombre + ' (' + gs(v.total) + ').'))) return false;
+    BG.pasarCompraDeClienta(armar(false));
+    BG.toast('Listo: la compra ' + BG.fmtRecibo(v.recibo) + ' ahora es de ' + nueva.nombre + '. Si ya le mandaste el recibo a ' + de.nombre.split(' ')[0] + ', avisale.');
     return true;
   };
 
@@ -827,6 +916,7 @@
       + (!v.anulada && !v.anterior && hayVivos && BG.puede('devoluciones') ? '<button type="button" class="btn" data-accion="devolucion">' + icon('undo') + 'Devolución o cambio</button>' : '')
       + (!v.anulada && hayVivos && BG.puede('preciosEspeciales') ? '<button type="button" class="btn" data-accion="ajustar-precio">' + icon('tag') + 'Ajustar precio</button>' : '')
       + (!v.anulada && duena ? '<button type="button" class="btn" data-accion="corregir">' + icon('edit') + 'Corregir compra</button>' : '')
+      + (!v.anulada && duena ? '<button type="button" class="btn" data-accion="pasar-clienta">' + icon('users') + 'Pasar a otra clienta</button>' : '')
       + (v.anulada || !BG.esDuena() ? '' : '<button type="button" class="btn btn-danger" data-accion="anular-venta">' + icon('ban') + 'Anular venta</button>')
       + '</div></div>'
       + (v.anterior ? '<div class="callout">' + icon('file') + '<div><strong>Compra de antes del sistema.</strong> Se anotó el ' + BG.fmtFecha(v.anterior.ts.slice(0, 10)) + ' por ' + esc(v.anterior.usuario)
@@ -834,6 +924,8 @@
       + lineaPuntos
       + (corregidas.length ? '<div class="callout callout-soft">' + icon('edit') + '<div class="grow"><span class="small">Esta compra se <strong>corrigió</strong> ' + (corregidas.length === 1 ? 'el ' + BG.fmtFecha(corregidas[0].fecha) : corregidas.length + ' veces (la última el ' + BG.fmtFecha(corregidas[corregidas.length - 1].fecha) + ')')
         + (duena ? '. El ticket anterior está más abajo, en «Correcciones».' : '.') + '</span></div></div>' : '')
+      + (v.traslados || []).map((t) => '<div class="callout callout-soft">' + icon('users') + '<div class="grow"><span class="small">Esta compra <strong>pasó de ' + esc(t.deNombre) + ' a ' + esc(t.aNombre) + '</strong> el '
+        + BG.fmtFecha(t.fecha) + ' (' + esc(t.motivo) + ', por ' + esc(t.usuario) + '). Los pagos que ya tenía se fueron con ella.</span></div></div>').join('')
       + (v.anulada ? '<div class="callout callout-bad">' + icon('ban') + '<div><strong>Venta anulada el ' + BG.fmtFecha(v.anulada.fecha) + ' a las ' + BG.fmtHora(v.anulada.ts) + ' por ' + esc(v.anulada.usuario) + '.</strong> Motivo: ' + esc(v.anulada.motivo) + '</div></div>' : '')
       + (!v.anulada && saldo > 0 && favorCliente > 0 ? '<div class="favor-banner favor-banner-sm">' + '<span class="favor-ic">' + icon('wallet') + '</span><div class="grow"><strong>' + esc(cli.nombre.split(' ')[0]) + ' tiene ' + gs(favorCliente) + ' a favor.</strong> '
         + '<span class="small">Se puede usar para pagar esta venta.</span></div>'
@@ -883,6 +975,7 @@
             if (b.dataset.accion === 'anular-venta' && (await BG.anularVentaUI(v))) BG.render();
             if (b.dataset.accion === 'ajustar-precio' && (await BG.ajustarPrecioUI(v))) BG.render();
             if (b.dataset.accion === 'corregir' && (await BG.corregirCompraUI(v))) BG.render();
+            else if (b.dataset.accion === 'pasar-clienta' && (await BG.pasarCompraUI(v))) BG.render();
             if (b.dataset.accion === 'devolucion' && (await BG.devolucionUI(v))) BG.render();
             if (b.dataset.accion === 'plan' && (await BG.planUI(v))) BG.render();
             if (b.dataset.accion === 'agregar' && (await BG.agregarArticulosUI(v))) BG.render();

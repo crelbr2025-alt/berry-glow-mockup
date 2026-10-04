@@ -142,6 +142,45 @@
       ]);
     },
 
+    /**
+     * Recordatorio de lo que debe, uno por clienta (lista de Cobranza): el saldo, de qué compra viene y, si tiene, la cuota
+     * atrasada o la próxima. `x` es una fila de BG.cobranza().
+     */
+    cobranza: (cli, x) => {
+      const pend = BG.pendientesDe(cli.id);
+      const de = pend.length === 1 ? 'de tu compra ' + BG.fmtRecibo(pend[0].recibo) + ' del ' + BG.fmtFecha(pend[0].fecha)
+        : 'de tus compras (la más antigua es del ' + BG.fmtFecha(x.desde) + ')';
+      return unir([
+        saludo() + ', ' + nombreCorto(cli) + '! ¿Cómo estás? Te escribimos de ' + tienda() + ' 💗',
+        '',
+        'Te recordamos que tenés un saldo pendiente de ' + gs(x.saldo) + ' ' + de + '.',
+        x.cuotasAtrasadas
+          ? (x.cuotasAtrasadas === 1 ? 'Tenés una cuota atrasada, de ' + gs(x.atrasado) : 'Tenés ' + x.cuotasAtrasadas + ' cuotas atrasadas, por ' + gs(x.atrasado)) + '.'
+          : x.proxima ? 'Tu próxima cuota es de ' + gs(x.proxima.falta) + ' y vence el ' + BG.fmtFecha(x.proxima.vence) + '.' : null,
+        '',
+        'Si ya lo pagaste, avisanos y lo registramos. Si necesitás acomodar la fecha, contanos y vemos juntas. 💗',
+      ]);
+    },
+
+    /** Aviso a la clienta de que llegó lo que había pedido (`p`: el producto que parece ser, si lo hay). */
+    deseo: (cli, d, p) => unir([
+      saludo() + ', ' + nombreCorto(cli) + '! Te escribimos de ' + tienda() + ' 💗',
+      '',
+      'Te cuento que llegó lo que nos habías pedido: ' + d.texto + (d.detalle ? ' (' + d.detalle + ')' : '') + '.',
+      p ? 'Tenemos «' + p.descripcion + '» a ' + gs(p.precioVenta) + '.' : null,
+      '¿Querés que te lo apartemos? Escribinos por acá y te lo guardamos. ✨',
+    ]),
+
+    /** Aviso de que se le guardó lo que apartó (con seña y hasta cuándo). */
+    apartado: (cli, r) => unir([
+      saludo() + ', ' + nombreCorto(cli) + '! Te escribimos de ' + tienda() + ' 💗',
+      '',
+      'Te guardamos lo que apartaste:',
+      r.items.map((x) => '• ' + x.descripcion + (x.cantidad > 1 ? ' x' + x.cantidad : '')).join('\n'),
+      r.sena ? 'Dejaste una seña de ' + gs(r.sena.monto) + ' (comprobante ' + BG.fmtRecibo(r.sena.recibo) + ').' : null,
+      'Te lo guardamos hasta el ' + BG.fmtFecha(r.vence) + '. ¡Te esperamos! ✨',
+    ]),
+
     /** Saludo de cumpleaños (con el regalo si el programa lo tiene activo). */
     cumple: (cli) => {
       const f = BG.configFidelidad();
@@ -153,6 +192,35 @@
         regalo ? 'Como regalito, esta semana tenés ' + regalo + ' % de descuento en tu compra. 🎁' : null,
         '',
         '¡Te esperamos! ✨',
+      ]);
+    },
+  };
+
+  /**
+   * Textos para el dueño (no para las clientas): el resumen del día. Llevan números de la tienda (lo que se debe, el stock)
+   * y por eso no están en BG.textosWa, que es lo único que se le manda a una clienta.
+   */
+  BG.textosInternos = {
+    resumenDia: (r) => {
+      const f = BG.FORMAS_CORTAS;
+      const formas = ['efectivo', 'transferencia', 'qr', 'tarjeta'].filter((k) => r.porForma[k] > 0).map((k) => f[k] + ' ' + gs(r.porForma[k])).join(' · ');
+      const primeros = (lista, n) => lista.slice(0, n).map((x) => x.p.descripcion + (x.q > 0 ? ' (' + x.q + ')' : '')).join(', ') + (lista.length > n ? ' y ' + (lista.length - n) + ' más' : '');
+      return unir([
+        '📋 Resumen de ' + tienda() + ' · ' + BG.fmtFechaLarga(r.fecha),
+        '',
+        '🛍️ Vendiste ' + gs(r.vendido) + ' (' + r.ventas + (r.ventas === 1 ? ' venta' : ' ventas') + ')',
+        '💵 Cobraste ' + gs(r.cobrado) + (formas ? ' · ' + formas : ''),
+        r.devuelto ? '↩️ Devolviste ' + gs(r.devuelto) : null,
+        r.gastos ? '🧾 Gastos del día: ' + gs(r.gastos) : null,
+        r.aCuenta.length
+          ? '⏳ De lo de hoy quedó a deber ' + gs(r.aCuentaTotal) + ':\n' + r.aCuenta.slice(0, 6).map((x) => '   • ' + x.c.nombre.split(' ')[0] + ' ' + gs(x.saldo)).join('\n') + (r.aCuenta.length > 6 ? '\n   y ' + (r.aCuenta.length - 6) + ' más' : '')
+          : (r.ventas ? '✔️ Todo lo de hoy quedó pagado' : null),
+        '💰 Por cobrar en total: ' + gs(r.deben.total) + ' (' + r.deben.n + (r.deben.n === 1 ? ' clienta' : ' clientas') + ')',
+        r.atrasadas.cuotas ? '⚠️ Cuotas atrasadas: ' + gs(r.atrasadas.monto) + ' (' + r.atrasadas.clientas + (r.atrasadas.clientas === 1 ? ' clienta' : ' clientas') + ')' : null,
+        r.stock.agotados.length ? '📦 Se agotó: ' + primeros(r.stock.agotados, 6) : null,
+        r.stock.bajos.length ? '📦 Quedan pocas: ' + primeros(r.stock.bajos, 6) : null,
+        r.apartadosPorVencer ? '🔖 Apartados por vencer: ' + r.apartadosPorVencer : null,
+        r.deseos ? '💬 Clientas esperando algo: ' + r.deseos : null,
       ]);
     },
   };
