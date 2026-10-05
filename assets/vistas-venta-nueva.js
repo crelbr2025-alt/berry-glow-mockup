@@ -363,6 +363,8 @@
     const puntosPrevistos = (t) => {
       const f = BG.configFidelidad();
       if (!f.activo || !b.clienteId || b.fecha < f.desde) return 0;
+      // Si Ajustes dice que las compras con descuento no suman, esta venta (con rebaja) no daría puntos: la misma regla que usa el motor al registrarla.
+      if (f.sinPuntosConDescuento && BG.ventaConRebaja(b.items.map((it) => ({ precio: it.precio, precioLista: BG.producto(it.productoId).precioVenta })), t.descuento)) return 0;
       const deCanje = Math.min(t.credito, BG.canjeDisponible(b.clienteId));
       const plata = Math.max(0, Math.min(t.recibido, t.total - t.credito));
       return Math.min(BG.puntosDeMonto(t.total - deCanje, f.cadaGs), BG.puntosDeMonto(plata, f.cadaGs));

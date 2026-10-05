@@ -1484,3 +1484,8 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 .stepper .input { max-width: 120px; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums; }
 .stepper .btn-icon { width: 44px; height: 44px; font-size: 22px; font-weight: 800; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); }
 .stepper .btn-icon:disabled { opacity: .4; }
+
+/* Ajustes → Clientas frecuentes: cuánto cuesta el programa de puntos */
+.costo-puntos { margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--line); }
+.costo-titulo { font-size: 15px; font-weight: 700; color: var(--ink); }
+.table tr.is-late td { color: var(--bad); font-weight: 700; }

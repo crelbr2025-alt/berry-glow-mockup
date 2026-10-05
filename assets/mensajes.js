@@ -123,9 +123,11 @@
      * Respuesta a «¿cuántos puntos tengo?»: lo que tiene, cuánto vale, qué le falta y las condiciones.
      * Es el mismo número que sale en el comprobante de puntos (BG.resumenPuntos).
      */
-    puntos: (cli, resumen) => {
+    puntos: (cli, resumen, opciones) => {
       const p = resumen || BG.resumenPuntos(cli.id);
       if (!p) return '';
+      // `condiciones: false`: el dueño destildó las condiciones del programa en el comprobante, y entonces tampoco van en el mensaje.
+      const conCondiciones = !(opciones && opciones.condiciones === false);
       return unir([
         saludo() + ', ' + nombreCorto(cli) + '! Te escribimos de ' + tienda() + ' 💗',
         '',
@@ -136,8 +138,8 @@
         p.pendientes ? '⏳ Vas a sumar ' + p.pendientes + (p.pendientes === 1 ? ' punto más' : ' puntos más') + ' cuando termines de pagar lo que tenés en cuotas.' : null,
         p.deLaTienda ? '🎁 Incluye ' + p.deLaTienda + (p.deLaTienda === 1 ? ' punto' : ' puntos') + ' que te dio la tienda.' : null,
         p.canjeados ? 'Ya usaste ' + p.canjeados + (p.canjeados === 1 ? ' punto' : ' puntos') + ' en compras anteriores.' : null,
-        '',
-        'Cómo funciona: ' + p.terminos,
+        conCondiciones ? '' : null,
+        conCondiciones ? 'Cómo funciona: ' + p.terminos : null,
         '',
         'Si querés, te pasamos el comprobante con el detalle. ¡Gracias por elegirnos! ✨',
       ]);

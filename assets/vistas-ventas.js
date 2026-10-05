@@ -892,7 +892,7 @@
         + (ptsSi ? (saldo > 0 ? (ptsYa ? 'Ya sumó <strong>' + ptsYa + (ptsYa === 1 ? ' punto' : ' puntos') + '</strong> con sus pagos y suma ' + (ptsSi - ptsYa) + ' más cuando termine de pagarla.'
           : 'Suma <strong>' + ptsSi + ' puntos</strong> cuando termine de pagarla.') : 'Esta compra le sumó <strong>' + ptsSi + ' puntos</strong>.')
           + (v.puntosAparte ? ' Los sumó ' + esc(v.puntosAparte.usuario) + ' a mano el ' + BG.fmtFecha(v.puntosAparte.fecha) + '.' : '')
-          : 'No suma puntos sola: es ' + (v.anterior ? 'de antes del sistema' : 'de antes del ' + BG.fmtFecha(fid.desde) + ', cuando empezó el programa') + '. Daría ' + ptsDarian + (ptsDarian === 1 ? ' punto.' : ' puntos.'))
+          : 'No suma puntos sola: ' + (v.anterior ? 'es de antes del sistema' : v.fecha >= fid.desde && v.fidelidad && v.fidelidad.sinPuntos ? 'se hizo con descuento y el programa no suma puntos en las compras con descuento' : 'es de antes del ' + BG.fmtFecha(fid.desde) + ', cuando empezó el programa') + '. Daría ' + ptsDarian + (ptsDarian === 1 ? ' punto.' : ' puntos.'))
         + '</span></div>'
         + (duena && ptsDarian ? '<button type="button" class="btn btn-sm" data-accion="puntos-sumar">' + icon('star', 'i-sm') + 'Sumar puntos</button>' : '')
         + (duena && v.puntosAparte ? '<button type="button" class="btn btn-sm btn-quiet" data-accion="puntos-quitar">Quitar</button>' : '')

@@ -376,7 +376,9 @@
       subtotal: t.subtotal, total: t.total, anulada: null, usuario: quien, autorizadoPor: d.autorizadoPor || null, ajustes: [],
       devoluciones: [], aFavor: 0, plan: null,
       // Regla de puntos vigente el día de la venta: si mañana cambia el programa, esta compra sigue valiendo lo mismo.
-      fidelidad: fid.activo && d.fecha >= fid.desde ? { cadaGs: fid.cadaGs, valorPunto: fid.valorPunto } : null,
+      // `sinPuntos`: si Ajustes dice que las compras con descuento no suman, esta quedó marcada y esa marca no cambia después.
+      fidelidad: fid.activo && d.fecha >= fid.desde
+        ? Object.assign({ cadaGs: fid.cadaGs, valorPunto: fid.valorPunto }, fid.sinPuntosConDescuento && BG.ventaConRebaja(items, t.descuento) ? { sinPuntos: true } : {}) : null,
       creditoAutorizado: !credito0.ok ? { por: d.creditoAutorizadoPor || quien, motivo: BG.textoCredito(credito0) } : null,
     };
     BG.db.ventas.push(v);
@@ -1371,9 +1373,47 @@
     BG.guardar();
     return x;
   };
+  const CAMPOS_FIDELIDAD = ['activo', 'cadaGs', 'valorPunto', 'minimo', 'porPago', 'enRecibo', 'condicionesEnRecibo', 'comoFuncionaEnRecibo', 'sinPuntosConDescuento', 'terminos', 'cumple'];
+  const decimasTexto = (d) => String(d / 10).replace('.', ',');
+  /**
+   * Cambia el programa de puntos (solo el dueño). El motor revisa lo que recibe: la pantalla ofrece pocas opciones, pero una
+   * pantalla vieja o un dato mal puesto (un cero en «1 punto cada» divide por cero y da puntos infinitos) no pueden llegar a guardarse.
+   * Y frena lo que haría perder plata: que una venta con el margen mínimo de la tienda, con el regalo de cumpleaños y los puntos
+   * canjeados, quede a pérdida (BG.equilibrioPuntos, la misma cuenta que se ve en Ajustes). Si rechaza, no deja nada escrito.
+   */
   BG.guardarFidelidad = (datos) => {
     soloDuenio('cambiar el programa de clientas frecuentes');
+    if (!datos || typeof datos !== 'object') throw new Error('No llegó qué cambiar del programa.');
     const antes = BG.configFidelidad();
+    const entero = (n) => typeof n === 'number' && Number.isInteger(n);
+    for (const k of Object.keys(datos)) if (CAMPOS_FIDELIDAD.indexOf(k) < 0) throw new Error('El programa de puntos no tiene «' + k + '».');
+    if ('cadaGs' in datos && (!entero(datos.cadaGs) || datos.cadaGs < 1000 || datos.cadaGs > 1000000)) throw new Error('«1 punto cada» tiene que ser un monto entero entre ' + gs(1000) + ' y ' + gs(1000000) + '.');
+    if ('valorPunto' in datos && (!entero(datos.valorPunto) || datos.valorPunto < 1)) throw new Error('«Cada punto vale» tiene que ser un monto entero en guaraníes, mayor que cero.');
+    if ('minimo' in datos && (!entero(datos.minimo) || datos.minimo < 1 || datos.minimo > 10000)) throw new Error('El mínimo para canjear tiene que ser un número entero de puntos, de 1 a 10.000.');
+    if (datos.cumple !== undefined && (typeof datos.cumple !== 'object' || datos.cumple === null)) throw new Error('El regalo de cumpleaños no tiene un formato válido.');
+    if (datos.cumple && 'porcentaje' in datos.cumple && (!entero(datos.cumple.porcentaje) || datos.cumple.porcentaje < 1 || datos.cumple.porcentaje > 50)) throw new Error('El regalo de cumpleaños tiene que ser de 1 a 50 %.');
+    if (datos.cumple && 'activo' in datos.cumple && typeof datos.cumple.activo !== 'boolean') throw new Error('El regalo de cumpleaños se prende o se apaga: revisá la opción.');
+    for (const k of ['activo', 'porPago', 'enRecibo', 'condicionesEnRecibo', 'comoFuncionaEnRecibo', 'sinPuntosConDescuento']) {
+      if (k in datos && typeof datos[k] !== 'boolean') throw new Error('«' + k + '» se prende o se apaga: revisá la opción.');
+    }
+    if ('terminos' in datos && typeof datos.terminos !== 'string') throw new Error('Las condiciones del programa tienen que ser un texto.');
+    if ('terminos' in datos && datos.terminos.length > 1500) throw new Error('Las condiciones del programa son muy largas: hasta 1.500 letras.');
+    // Si las condiciones siguen siendo el texto sugerido del modo anterior, pasan al del modo nuevo (las que escribió él no se tocan).
+    if ('porPago' in datos && !!datos.porPago !== !!antes.porPago && !('terminos' in datos) && (antes.terminos === BG.terminosPuntosSugeridos(antes.porPago) || BG.TERMINOS_PUNTOS_VIEJOS.indexOf(antes.terminos) >= 0)) {
+      datos = Object.assign({}, datos, { terminos: BG.terminosPuntosSugeridos(!!datos.porPago) });
+    }
+    const f = Object.assign(BG.configFidelidad(), datos);
+    if (datos.cumple) f.cumple = Object.assign({}, BG.configFidelidad().cumple, datos.cumple);
+    // Lo que se cambia en plata (valor, cada cuánto, regalo, prenderlo) no puede dejar una venta con el margen mínimo a pérdida.
+    if (f.activo && ['activo', 'cadaGs', 'valorPunto', 'cumple'].some((k) => k in datos)) {
+      const prog = { cadaGs: f.cadaGs, valorPunto: f.valorPunto, cumple: f.cumple.activo ? f.cumple.porcentaje : 0 };
+      if (f.valorPunto >= f.cadaGs) throw new Error('Cada punto no puede valer lo mismo o más que la compra que lo dio (' + gs(f.cadaGs) + ').');
+      if (BG.equilibrioPuntos(BG.margenDePrueba(), prog).peor <= 0) {
+        throw new Error('Con eso perdés plata: los puntos devuelven el ' + decimasTexto(Math.round(f.valorPunto * 1000 / f.cadaGs)) + ' %'
+          + (prog.cumple ? ' y el regalo de cumpleaños otro ' + prog.cumple + ' %' : '') + ', y una venta con el margen mínimo (' + BG.margenDePrueba()
+          + ' % sobre el costo) quedaría a pérdida. Elegí un punto que valga menos, que se gane con más compra, o un regalo más chico.');
+      }
+    }
     // Antes de cambiar la regla, se le deja escrita a cada venta la que tenía: lo que una clienta ya ganó
     // no puede moverse porque hoy se cambie el programa (vale también para las ventas viejas o importadas).
     if (antes.activo && (('cadaGs' in datos && datos.cadaGs !== antes.cadaGs) || ('valorPunto' in datos && datos.valorPunto !== antes.valorPunto))) {
@@ -1381,17 +1421,13 @@
         if (!v.fidelidad && !v.anulada && v.fecha >= antes.desde) v.fidelidad = { cadaGs: antes.cadaGs, valorPunto: antes.valorPunto };
       });
     }
-    // Si las condiciones siguen siendo el texto sugerido del modo anterior, pasan al del modo nuevo (las que escribió él no se tocan).
-    if ('porPago' in datos && !!datos.porPago !== !!antes.porPago && !('terminos' in datos) && (antes.terminos === BG.terminosPuntosSugeridos(antes.porPago) || BG.TERMINOS_PUNTOS_VIEJOS.indexOf(antes.terminos) >= 0)) {
-      datos = Object.assign({}, datos, { terminos: BG.terminosPuntosSugeridos(!!datos.porPago) });
-    }
-    const f = Object.assign(BG.configFidelidad(), datos);
-    if (datos.cumple) f.cumple = Object.assign({}, BG.configFidelidad().cumple, datos.cumple);
     BG.db.config.fidelidad = f;
     BG.auditar('fidelidad', 'Programa de clientas frecuentes', f.activo ? '1 punto cada ' + gs(f.cadaGs) + ' · cada punto ' + gs(f.valorPunto) + ' · canje desde ' + f.minimo + ' puntos'
       + (f.cumple.activo ? ' · cumpleaños ' + f.cumple.porcentaje + ' %' : ' · sin regalo de cumpleaños')
       + (f.porPago ? ' · los puntos se suman con cada pago' : ' · los puntos se suman al terminar de pagar la compra')
-      + (f.enRecibo ? ' · los puntos se imprimen en el recibo' : ' · los puntos NO se imprimen en el recibo') : 'Desactivado');
+      + (f.enRecibo ? ' · los puntos se imprimen en el recibo' : ' · los puntos NO se imprimen en el recibo')
+      + (f.enRecibo ? (f.condicionesEnRecibo ? ' · con las condiciones' : ' · sin las condiciones') + (f.comoFuncionaEnRecibo ? ' y con cómo funcionan' : ' ni cómo funcionan') + ' en el comprobante de puntos' : '')
+      + (f.sinPuntosConDescuento ? ' · las compras con descuento no suman puntos' : '') : 'Desactivado');
     BG.guardar();
   };
   /* ── Términos y condiciones de los comprobantes (los edita el dueño) ── */

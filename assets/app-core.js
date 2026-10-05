@@ -485,6 +485,14 @@
       if (!cliIds.has(x.clienteId)) mal('huerfano', 'Puntos dados a mano: la clienta no existe');
       if (!ent(x.puntos) || x.puntos < 1 || x.puntos % BG.PUNTOS_PASO !== 0) mal('puntos', 'Puntos dados a mano: cantidad inválida (' + x.puntos + ')');
     }
+    // El programa de puntos: valores con sentido (un cero o un decimal rompería cada división de puntos y cada canje).
+    const fi = BG.configFidelidad();
+    if (!ent(fi.cadaGs) || fi.cadaGs < 1) mal('programa', 'Programa de puntos: «1 punto cada» no es un monto válido (' + fi.cadaGs + ')');
+    if (!ent(fi.valorPunto) || fi.valorPunto < 1) mal('programa', 'Programa de puntos: «cada punto vale» no es un monto válido (' + fi.valorPunto + ')');
+    if (!ent(fi.minimo) || fi.minimo < 1) mal('programa', 'Programa de puntos: el mínimo para canjear no es válido (' + fi.minimo + ')');
+    for (const v of lista('ventas')) {
+      if (v.fidelidad && (!ent(v.fidelidad.cadaGs) || v.fidelidad.cadaGs < 1)) mal('programa', 'Compra ' + BG.fmtRecibo(v.recibo) + ': la regla de puntos que guardó no es válida (' + v.fidelidad.cadaGs + ')');
+    }
     // Numeración de recibos: el próximo tiene que ser mayor que todos los usados
     const usados = lista('ventas').map((v) => v.recibo).concat(lista('pagos').map((p) => p.recibo));
     const mayor = usados.length ? Math.max.apply(null, usados) : 0;
@@ -861,10 +869,15 @@
   BG.terminosPuntosSugeridos = (porPago) => (porPago ? BG.TERMINOS_PUNTOS_POR_PAGO : BG.TERMINOS_PUNTOS);
   BG.configFidelidad = () => {
     // porPago: false = los puntos se suman al terminar de pagar la compra (como siempre); true = con cada pago.
-    const f = Object.assign({ activo: false, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: '0000-00-00', enRecibo: true, porPago: false }, BG.db.config.fidelidad);
+    // condicionesEnRecibo / comoFuncionaEnRecibo: lo que viene tildado en el comprobante de puntos (en cada emisión se cambia
+    // solo para esa vez). sinPuntosConDescuento: las compras que se hacen con una rebaja no suman puntos.
+    const f = Object.assign({ activo: false, cadaGs: 10000, valorPunto: 300, minimo: 50, desde: '0000-00-00', enRecibo: true, porPago: false,
+      condicionesEnRecibo: true, comoFuncionaEnRecibo: true, sinPuntosConDescuento: false }, BG.db.config.fidelidad);
     f.cumple = Object.assign({ activo: false, porcentaje: 10 }, f.cumple);
     if (!f.terminos || !String(f.terminos).trim()) f.terminos = BG.terminosPuntosSugeridos(f.porPago);
     if (f.enRecibo === undefined) f.enRecibo = true;
+    if (f.condicionesEnRecibo === undefined) f.condicionesEnRecibo = true;
+    if (f.comoFuncionaEnRecibo === undefined) f.comoFuncionaEnRecibo = true;
     return f;
   };
   /* ── Términos y condiciones de los comprobantes ──
@@ -961,7 +974,13 @@
    * ¿Esta compra suma puntos? Las de antes de que empezara el programa (`fidelidad.desde`) y las compras
    * anteriores al sistema no suman solas: el dueño puede elegir que sumen, compra por compra (`v.puntosAparte`).
    */
-  BG.ventaSumaPuntos = (v) => !!v.puntosAparte || (!v.anterior && v.fecha >= BG.configFidelidad().desde);
+  BG.ventaSumaPuntos = (v) => !!v.puntosAparte || (!v.anterior && v.fecha >= BG.configFidelidad().desde && !(v.fidelidad && v.fidelidad.sinPuntos));
+  /**
+   * ¿Una venta se hace con rebaja? Con descuento sobre el total (el regalo de cumpleaños, el que pone el dueño) o con algún
+   * artículo a menos de su precio de lista. Si Ajustes dice «las compras con descuento no suman puntos», al vender la compra
+   * queda marcada (`v.fidelidad.sinPuntos`) y esa marca no cambia después: es la regla del día de la venta, como `cadaGs`.
+   */
+  BG.ventaConRebaja = (items, descuentoMonto) => (descuentoMonto || 0) > 0 || items.some((it) => it.precio < it.precioLista);
   /**
    * Puntos que suma una venta cuando se termine de pagar (0 si el programa está apagado o no llega a 1 punto).
    * `aunqueNoCuente`: los que daría si contara (para ofrecerle al dueño sumar los de una compra vieja). Es la
@@ -1071,6 +1090,73 @@
       /** Lo que ya canjeó y todavía no gastó: se usa en compras, no se devuelve en plata. */
       enFavor: BG.canjeDisponible(cid),
     });
+  };
+  /* ── Cuánto cuesta el programa de puntos ──
+   * Un punto se paga recién cuando se canjea, y vale `valorPunto` por cada `cadaGs` de compra pagada en plata: el costo máximo del
+   * programa es siempre ese porcentaje de lo que se cobra (más el regalo de cumpleaños y lo que el dueño regale a mano). Todo es
+   * lectura: nada de esto mueve plata ni datos. La cuenta del equilibrio (BG.equilibrioPuntos) es la misma para la pantalla y para
+   * el freno de BG.guardarFidelidad (regla 6: una sola fórmula).
+   */
+  /** Margen sobre el costo (en %) con el que se prueba que el programa no deje una venta a pérdida, si el mínimo de la tienda es más bajo. */
+  BG.MARGEN_REFERENCIA_PUNTOS = 20;
+  BG.margenDePrueba = () => Math.max(BG.margenMinimo(), BG.MARGEN_REFERENCIA_PUNTOS);
+  /**
+   * Qué le queda a la tienda por cada ₲ 100.000 de costo de un artículo vendido con un margen de `margen` % sobre el costo.
+   * `prog` = { cadaGs, valorPunto, cumple } (cumple: % del regalo de cumpleaños, 0 si no hay). Todo en guaraníes enteros:
+   *  · ganancia: sin programa · puntos: lo que cuestan los puntos de esa venta cuando se canjean todos
+   *  · quedaConPuntos: ganancia − puntos · peor: lo que queda si además es la semana de cumpleaños (descuento, y puntos sobre lo que paga).
+   */
+  BG.equilibrioPuntos = (margen, prog) => {
+    const costo = 100000;
+    const precio = Math.round(costo * (100 + margen) / 100);
+    const ganancia = precio - costo;
+    const puntos = Math.floor(precio * prog.valorPunto / prog.cadaGs);
+    const conRegalo = Math.floor(precio * (100 - (prog.cumple || 0)) / 100);
+    const peor = conRegalo - Math.floor(conRegalo * prog.valorPunto / prog.cadaGs) - costo;
+    return { margen: margen, costo: costo, precio: precio, ganancia: ganancia, puntos: puntos, quedaConPuntos: ganancia - puntos, peor: peor,
+      // Qué parte de la ganancia se van a comer los puntos (en décimas de %: 65 = 6,5 %).
+      comeDecimas: ganancia > 0 ? Math.round(puntos * 1000 / ganancia) : null };
+  };
+  /** «bien» hasta el 10 % de la ganancia, «ojo» hasta el 25 %, «alto» más. Sin ganancia, siempre «alto». */
+  BG.nivelPuntos = (fila) => (fila.comeDecimas == null || fila.comeDecimas > 250 ? 'alto' : fila.comeDecimas > 100 ? 'ojo' : 'bien');
+  BG.costoPuntos = () => {
+    const f = BG.configFidelidad();
+    const prog = { cadaGs: f.cadaGs, valorPunto: f.valorPunto, cumple: f.cumple.activo ? f.cumple.porcentaje : 0 };
+    const clientas = BG.db.clientes.map((c) => ({ c: c, p: BG.puntosDe(c.id) })).filter((x) => x.p);
+    const enCirculacion = sum(clientas, (x) => x.p.puntos);
+    const porGanar = sum(clientas, (x) => x.p.pendientes);
+    const canjes = BG.db.canjes || [];
+    const aMano = sum(BG.db.puntosManuales || [], (x) => (x.anulado ? 0 : x.puntos));
+    // Lo vendido desde que empezó el programa (lo de antes del sistema no es de ningún período) y lo que dejó.
+    const ventas = BG.db.ventas.filter((v) => BG.ventaDelSistema(v) && v.fecha >= f.desde);
+    const vendido = sum(ventas, (v) => v.total);
+    const costoVendido = sum(ventas, BG.costoVenta);
+    const prueba = BG.equilibrioPuntos(BG.margenDePrueba(), prog);
+    // El artículo del catálogo con el margen más bajo: es el que más se siente.
+    let flojo = null;
+    for (const p of BG.db.productos) {
+      if (p.archivado || !(p.precioVenta > 0) || !(p.costoTotalGs > 0)) continue;
+      if (!flojo || (p.precioVenta - p.costoTotalGs) * flojo.costo < (flojo.precio - flojo.costo) * p.costoTotalGs) flojo = { descripcion: p.descripcion, precio: p.precioVenta, costo: p.costoTotalGs };
+    }
+    if (flojo) {
+      flojo.margen = Math.floor((flojo.precio - flojo.costo) * 1000 / flojo.costo) / 10;
+      const conRegalo = Math.floor(flojo.precio * (100 - prog.cumple) / 100);
+      flojo.peor = conRegalo - Math.floor(conRegalo * prog.valorPunto / prog.cadaGs) - flojo.costo;
+    }
+    return {
+      activo: f.activo, cadaGs: f.cadaGs, valorPunto: f.valorPunto, minimo: f.minimo, cumple: prog.cumple,
+      // Lo que cuestan los puntos por cada ₲ 100.000 que paga una clienta (si canjea todo) y en % (en décimas: 15 = 1,5 %).
+      por100mil: Math.floor(100000 * f.valorPunto / f.cadaGs), decimas: Math.round(f.valorPunto * 1000 / f.cadaGs),
+      enCirculacion: { puntos: enCirculacion, valor: enCirculacion * f.valorPunto }, porGanar: { puntos: porGanar, valor: porGanar * f.valorPunto },
+      canjeado: { puntos: sum(canjes, (k) => k.puntos), monto: sum(canjes, (k) => k.monto) },
+      aMano: { puntos: aMano, valor: aMano * f.valorPunto },
+      vendido: vendido, gananciaBruta: vendido - costoVendido,
+      margenDePrueba: BG.margenDePrueba(), prueba: prueba, nivel: BG.nivelPuntos(prueba), pierde: prueba.peor <= 0,
+      tabla: Array.from(new Set([BG.margenMinimo(), 50, 80, 100, 120])).sort((a, b) => a - b).map((m) => BG.equilibrioPuntos(m, prog)),
+      masFlojo: flojo,
+      // Las que ya pueden canjear (para avisarles).
+      listas: clientas.filter((x) => x.p.canjeable).map((x) => ({ c: x.c, puntos: x.p.puntos, valor: x.p.valor })).sort((a, b) => b.puntos - a.puntos),
+    };
   };
   /** Próximo cumpleaños: días que faltan (negativo si fue hace poco) y si está en la semana del regalo (7 días antes o después). */
   BG.cumpleDe = (c) => {

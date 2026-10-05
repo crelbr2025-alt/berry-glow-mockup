@@ -517,6 +517,44 @@
           + '<p class="hint">Si una venta pasa el límite, Jazmín ve el aviso y necesita tu PIN; vos podés venderle igual (queda anotado).</p>'
         : '<p class="hint">Sin control: se puede vender a cuenta sin límite.</p>');
   }
+  /**
+   * «Cuánto te cuesta»: lo que el programa de puntos le cuesta a la tienda, lo que le debe en puntos y qué le queda con cada margen.
+   * Todo sale de BG.costoPuntos (lectura): la misma cuenta que usa el motor para frenar un programa que haría perder plata.
+   */
+  function htmlCostoPuntos() {
+    const k = BG.costoPuntos();
+    const d1 = (dec) => String(Math.round(dec) / 10).replace('.', ',');
+    const pt = (n) => n + (n === 1 ? ' punto' : ' puntos');
+    const prueba = k.prueba;
+    const nivel = k.pierde ? ['callout-bad', 'alert', 'Con tu margen mínimo (' + k.margenDePrueba + ' %), una venta en la semana de cumpleaños con los puntos canjeados quedaría a pérdida. Bajá el valor del punto o el regalo.']
+      : k.nivel === 'alto' ? ['callout-warn', 'alert', 'Es alto: los puntos se llevan más de la cuarta parte de la ganancia de un artículo con tu margen mínimo (' + k.margenDePrueba + ' %).']
+        : k.nivel === 'ojo' ? ['callout-warn', 'info', 'Ojo: los puntos se llevan entre el 10 y el 25 % de la ganancia de un artículo con tu margen mínimo (' + k.margenDePrueba + ' %).']
+          : ['callout-good', 'check', 'Está bien: con un artículo de tu margen mínimo (' + k.margenDePrueba + ' %), los puntos se llevan el ' + d1(prueba.comeDecimas) + ' % de la ganancia.'];
+    const comprometido = k.canjeado.monto + k.enCirculacion.valor;
+    const filas = k.tabla.map((x) => '<tr' + (x.peor <= 0 ? ' class="is-late"' : '') + '><td>' + x.margen + ' %' + (x.margen === BG.margenMinimo() ? ' <span class="small muted">(tu mínimo)</span>' : '') + '</td>'
+      + '<td class="num">' + gs(x.ganancia) + '</td><td class="num">' + gs(x.quedaConPuntos) + '</td>'
+      + (k.cumple ? '<td class="num">' + (x.peor <= 0 ? '−' + gs(-x.peor) : gs(x.peor)) + '</td>' : '') + '</tr>').join('');
+    return '<div class="costo-puntos stack-sm">'
+      + '<h3 class="costo-titulo">Cuánto te cuesta</h3>'
+      + '<p class="callout ' + nivel[0] + '">' + icon(nivel[1]) + '<span><strong>Los puntos te cuestan el ' + d1(k.decimas) + ' % de lo que paga una clienta:</strong> por cada ' + gs(100000) + ' de compra, ' + gs(k.por100mil)
+      + ' (recién cuando los canjea). ' + nivel[2] + '</span></p>'
+      + '<ul class="bullets">'
+      + '<li>Hoy las clientas tienen <strong>' + pt(k.enCirculacion.puntos) + '</strong> sin usar = <strong>' + gs(k.enCirculacion.valor) + '</strong>: es lo que les debés en puntos'
+      + (k.porGanar.puntos ? ' (y ' + pt(k.porGanar.puntos) + ' más, ' + gs(k.porGanar.valor) + ', que suman cuando terminen de pagar)' : '') + '.</li>'
+      + '<li>Ya canjearon <strong>' + pt(k.canjeado.puntos) + '</strong> (' + gs(k.canjeado.monto) + ')' + (k.aMano.puntos ? '; vos regalaste a mano ' + pt(k.aMano.puntos) + ' (' + gs(k.aMano.valor) + ')' : '') + '.</li>'
+      + (k.vendido > 0 ? '<li>Desde que empezó el programa vendiste <strong>' + gs(k.vendido) + '</strong> y la ganancia bruta fue ' + gs(k.gananciaBruta) + ' (' + d1(Math.round(k.gananciaBruta * 1000 / k.vendido)) + ' % de lo vendido). '
+        + 'Entre lo canjeado y lo que se debe en puntos hay ' + gs(comprometido) + ' (' + d1(Math.round(comprometido * 1000 / k.vendido)) + ' % de lo vendido).</li>' : '')
+      + (k.masFlojo ? '<li>Tu artículo con menos margen es «' + esc(k.masFlojo.descripcion) + '» (' + String(k.masFlojo.margen).replace('.', ',') + ' % sobre el costo)'
+        + (k.cumple ? ': en la semana del cumpleaños, con el regalo y todos los puntos canjeados, te deja ' + (k.masFlojo.peor < 0 ? 'una pérdida de ' + gs(-k.masFlojo.peor) : gs(k.masFlojo.peor)) + '.' : '.') + '</li>' : '')
+      + '</ul>'
+      + '<details class="table-toggle"><summary>Qué te queda según el margen que le pongas</summary><p class="small">Por cada ' + gs(100000) + ' que te cuesta un artículo (ya con dólar y envío), con cada margen sobre el costo.'
+      + (k.cumple ? ' La última columna es la semana del cumpleaños («con regalo»): con el descuento del ' + k.cumple + ' % y todos los puntos canjeados.' : '') + '</p>'
+      + '<div class="table-wrap"><table class="table table-compact"><thead><tr><th>Margen</th><th class="num">Ganancia</th><th class="num">Con puntos</th>' + (k.cumple ? '<th class="num">Con regalo</th>' : '') + '</tr></thead><tbody>' + filas + '</tbody></table></div></details>'
+      + (k.listas.length ? '<details class="table-toggle"><summary>' + (k.listas.length === 1 ? '1 clienta ya puede' : k.listas.length + ' clientas ya pueden') + ' canjear sus puntos</summary><ul class="list">'
+        + k.listas.slice(0, 8).map((x) => '<li class="list-row"><span class="row-main"><a class="row-title" href="#/clientes/' + esc(x.c.id) + '">' + esc(x.c.nombre) + '</a><span class="row-sub">' + pt(x.puntos) + ' = ' + gs(x.valor) + '</span></span>'
+          + '<span class="row-end"><a class="btn btn-sm" href="' + BG.waLink(x.c, BG.textosWa.puntos(x.c)) + '" target="_blank" rel="noopener">' + icon('chat', 'i-sm') + 'Avisarle</a></span></li>').join('') + '</ul></details>' : '')
+      + '</div>';
+  }
   /** Clientas frecuentes: puntos y regalo de cumpleaños. */
   function htmlFidelidad() {
     const f = BG.configFidelidad();
@@ -546,7 +584,15 @@
             ? 'Cada recibo dice cuántos puntos sumó la compra, los acumulados y las condiciones. Si la compra todavía no está pagada, aclara que por eso no suma todavía.'
             : 'Los recibos no dicen nada de puntos. Igual se siguen sumando y el comprobante de puntos se puede emitir aparte desde la ficha de la clienta.')
           + ' En cada recibo hay un interruptor para cambiarlo solo para esa vez.</p>'
+          + '<label class="check-inline"><input type="checkbox" id="fi-cond"' + (f.condicionesEnRecibo ? ' checked' : '') + '> Poner las condiciones del programa en los comprobantes con puntos</label>'
+          + '<label class="check-inline"><input type="checkbox" id="fi-como"' + (f.comoFuncionaEnRecibo ? ' checked' : '') + '> En el comprobante de puntos, explicar cómo funcionan (1 punto cada ' + gs(f.cadaGs) + ' · cada punto vale ' + gs(f.valorPunto) + ')</label>'
+          + '<p class="hint">Vienen tildadas así, pero en cada comprobante podés destildarlas solo para esa vez (y el mensaje de WhatsApp sigue lo que elijas).</p>'
+          + '<label class="check-inline"><input type="checkbox" id="fi-sindesc"' + (f.sinPuntosConDescuento ? ' checked' : '') + '> Las compras con descuento no suman puntos</label>'
+          + '<p class="hint">' + (f.sinPuntosConDescuento
+            ? 'Una venta con descuento en el total (como el regalo de cumpleaños) o con un artículo a menos de su precio de lista no suma puntos. Vale para las ventas desde ahora; las ya hechas no cambian, y a una compra puntual vos le podés sumar los puntos a mano desde su pantalla.'
+            : 'Hoy una compra con descuento suma puntos igual que cualquier otra. Si lo tildás, las ventas con descuento (desde ahora) no suman: la tienda no regala dos beneficios en la misma venta.') + '</p>'
         : '')
+      + (f.activo ? htmlCostoPuntos() : '')
       + (f.activo
         ? '<div class="field"><label for="fi-terminos">Condiciones del programa <span class="small muted">(se imprimen en el recibo y se muestran al canjear)</span></label>'
           + '<textarea id="fi-terminos" class="textarea" rows="4" maxlength="600">' + esc(f.terminos) + '</textarea>'
@@ -764,26 +810,24 @@
           }
           if (t.id === 'cr-activo') { BG.guardarCredito({ activo: t.checked }); BG.toast(t.checked ? 'Límite de crédito activado.' : 'Sin control de límite.'); repintar('aj-credito', htmlCredito); return; }
           if (t.name === 'cr-dias') { BG.guardarCredito({ diasAtraso: Number(t.value) }); BG.toast('Atraso permitido: ' + t.value + ' días.'); return; }
-          if (t.id === 'fi-activo') { BG.guardarFidelidad({ activo: t.checked }); BG.toast(t.checked ? 'Programa de clientas frecuentes activado.' : 'Programa desactivado.'); repintar('aj-fidelidad', htmlFidelidad); return; }
-          if (t.id === 'fi-cumple') { BG.guardarFidelidad({ cumple: { activo: t.checked } }); BG.toast(t.checked ? 'Regalo de cumpleaños activado.' : 'Sin regalo de cumpleaños.'); repintar('aj-fidelidad', htmlFidelidad); return; }
-          if (t.name === 'fi-cada' || t.name === 'fi-valor' || t.name === 'fi-min') {
-            BG.guardarFidelidad(t.name === 'fi-cada' ? { cadaGs: Number(t.value) } : t.name === 'fi-valor' ? { valorPunto: Number(t.value) } : { minimo: Number(t.value) });
-            BG.toast('Programa actualizado.');
-            repintar('aj-fidelidad', htmlFidelidad);
-            return;
-          }
-          if (t.name === 'fi-cuando') {
-            BG.guardarFidelidad({ porPago: t.value === 'pago' });
-            BG.toast(t.value === 'pago' ? 'Los puntos se suman con cada pago.' : 'Los puntos se suman al terminar de pagar la compra.');
-            repintar('aj-fidelidad', htmlFidelidad);
-            return;
-          }
-          if (t.name === 'fi-pct') { BG.guardarFidelidad({ cumple: { porcentaje: Number(t.value) } }); BG.toast('Regalo de cumpleaños: ' + t.value + ' %.'); return; }
-          if (t.id === 'fi-recibo') {
-            BG.guardarFidelidad({ enRecibo: t.checked });
-            BG.toast(t.checked ? 'Los recibos muestran los puntos.' : 'Los recibos no muestran los puntos.');
-            repintar('aj-fidelidad', htmlFidelidad);
-            return;
+          // Programa de puntos: el motor revisa cada cambio (valores con sentido, que no deje una venta a pérdida). Si lo rechaza se dice por qué y la pantalla vuelve a lo que estaba guardado.
+          if ((t.id && t.id.indexOf('fi-') === 0) || (t.name && t.name.indexOf('fi-') === 0)) {
+            const cambiar = (datos, aviso) => {
+              try { BG.guardarFidelidad(datos); BG.toast(aviso); } catch (err) { BG.toast(err.message, 'error'); }
+              repintar('aj-fidelidad', htmlFidelidad);
+            };
+            const v = Number(t.value);
+            if (t.id === 'fi-activo') return cambiar({ activo: t.checked }, t.checked ? 'Programa de clientas frecuentes activado.' : 'Programa desactivado.');
+            if (t.id === 'fi-cumple') return cambiar({ cumple: { activo: t.checked } }, t.checked ? 'Regalo de cumpleaños activado.' : 'Sin regalo de cumpleaños.');
+            if (t.name === 'fi-cada') return cambiar({ cadaGs: v }, 'Programa actualizado.');
+            if (t.name === 'fi-valor') return cambiar({ valorPunto: v }, 'Programa actualizado.');
+            if (t.name === 'fi-min') return cambiar({ minimo: v }, 'Programa actualizado.');
+            if (t.name === 'fi-cuando') return cambiar({ porPago: t.value === 'pago' }, t.value === 'pago' ? 'Los puntos se suman con cada pago.' : 'Los puntos se suman al terminar de pagar la compra.');
+            if (t.name === 'fi-pct') return cambiar({ cumple: { porcentaje: v } }, 'Regalo de cumpleaños: ' + t.value + ' %.');
+            if (t.id === 'fi-recibo') return cambiar({ enRecibo: t.checked }, t.checked ? 'Los recibos muestran los puntos.' : 'Los recibos no muestran los puntos.');
+            if (t.id === 'fi-cond') return cambiar({ condicionesEnRecibo: t.checked }, t.checked ? 'Los comprobantes de puntos llevan las condiciones del programa (en cada uno lo podés cambiar).' : 'Los comprobantes de puntos salen sin las condiciones del programa (en cada uno lo podés cambiar).');
+            if (t.id === 'fi-como') return cambiar({ comoFuncionaEnRecibo: t.checked }, t.checked ? 'El comprobante de puntos explica cómo funcionan (en cada uno lo podés cambiar).' : 'El comprobante de puntos sale sin la explicación de cómo funcionan (en cada uno lo podés cambiar).');
+            if (t.id === 'fi-sindesc') return cambiar({ sinPuntosConDescuento: t.checked }, t.checked ? 'Desde ahora, las compras con descuento no suman puntos.' : 'Las compras con descuento vuelven a sumar puntos.');
           }
           if (t.dataset && t.dataset.com) {
             BG.guardarComision(t.dataset.usuario, { [t.dataset.com]: t.checked });

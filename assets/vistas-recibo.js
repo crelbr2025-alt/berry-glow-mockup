@@ -155,7 +155,7 @@
    * en esta emisión no lo apagó con el interruptor de arriba. Cuando la compra todavía no está pagada, la
    * letra chica dice que por eso todavía no suma.
    */
-  function bloquePuntos(d) {
+  function bloquePuntos(d, opc) {
     const usos = d.usosPuntos || [];
     const tieneAlgo = d.puntosGanados || d.puntosAlPagar || d.puntosPorPagos || d.puntosDeEstePago || (d.puntos && d.puntos.puntos > 0) || usos.length;
     if (!tieneAlgo) return '';
@@ -171,11 +171,11 @@
       + (d.puntos && d.puntos.puntos > 0 ? '<p class="r-account"><span>Tus puntos acumulados: ' + d.puntos.puntos + (d.puntos.canjeable ? ' · ya los podés usar' : '') + '</span><strong>' + gs(d.puntos.valor) + '</strong></p>' : '')
       + (d.puntosAlPagar ? '<p class="r-account"><span>Al terminar de pagar esta compra sumás' + (d.puntosPorPagos ? ' otros' : '') + '</span><strong>' + d.puntosAlPagar + (d.puntosAlPagar === 1 ? ' punto' : ' puntos') + '</strong></p>'
         + '<p class="r-chica">' + (d.puntosPorPagos ? 'Parte de los puntos ya se acreditó con tus pagos; el resto se acredita cuando quede pagada del todo.' : 'Esta compra todavía no suma puntos: se acreditan cuando quede pagada del todo.') + '</p>' : '')
-      + (d.terminosPuntos ? '<p class="r-terminos"><strong>Programa de clientas frecuentes:</strong> ' + esc(d.terminosPuntos) + '</p>' : '');
+      + (d.terminosPuntos && opc.condiciones ? '<p class="r-terminos"><strong>Programa de clientas frecuentes:</strong> ' + esc(d.terminosPuntos) + '</p>' : '');
   }
 
   /** Comprobante de puntos: cuántos tiene, de dónde salieron, qué canjeó y las condiciones. */
-  function htmlSoloPuntos(d) {
+  function htmlSoloPuntos(d, opc) {
     const p = d.detallePuntos;
     return '<section class="r-section"><h2>Tus puntos<span>al ' + BG.fmtFecha(d.emision) + '</span></h2>'
       + '<p class="r-puntos-gran">' + p.puntos + '<small>' + (p.puntos === 1 ? ' punto' : ' puntos') + '</small></p>'
@@ -196,9 +196,10 @@
         + '</tbody><tfoot><tr><td>Total usado</td><td class="num">' + p.canjeados + (p.canjeados === 1 ? ' punto' : ' puntos') + '</td></tr></tfoot></table></section>' : '')
       + '<div class="r-saldo' + (p.canjeable ? ' is-paid' : '') + '"><span>Tu descuento disponible</span><strong>' + gs(p.valor) + '</strong></div>'
       + (d.aFavor > 0 ? '<p class="r-account"><span>Además tenés a favor para tu próxima compra</span><strong>' + gs(d.aFavor) + '</strong></p>' : '')
-      + '<p class="r-terminos"><strong>Condiciones del programa:</strong> ' + esc(p.terminos) + '</p>'
-      + '<p class="r-chica">1 punto cada ' + gs(p.cadaGs) + ' de compra pagada · cada punto vale ' + gs(p.valorPunto) + ' de descuento. '
-      + 'Este comprobante vale por los puntos que tenías al ' + BG.fmtFecha(d.emision) + '.</p>';
+      // Las condiciones y la explicación de cómo funcionan se pueden sacar en cada emisión; lo que dice hasta cuándo vale, no.
+      + (opc.condiciones ? '<p class="r-terminos"><strong>Condiciones del programa:</strong> ' + esc(p.terminos) + '</p>' : '')
+      + (opc.comoFunciona ? '<p class="r-chica">1 punto cada ' + gs(p.cadaGs) + ' de compra pagada · cada punto vale ' + gs(p.valorPunto) + ' de descuento.</p>' : '')
+      + '<p class="r-chica">Este comprobante vale por los puntos que tenías al ' + BG.fmtFecha(d.emision) + '.</p>';
   }
 
   /** Una línea de la compra para el historial: «2 × Remera · 1 × Jean» (lo que se quedó). */
@@ -248,7 +249,7 @@
         + ' · compra ' + BG.fmtRecibo(q.compra) + ' · ' + (q.vencida ? 'venció el ' : 'vence el ') + BG.fmtFecha(q.vence) + '</td><td class="num">' + gs(q.falta) + '</td></tr>').join('') + '</tbody></table></section>' : '');
   }
 
-  function htmlRecibo(d, formato, verPuntos, escala, conDetalle, terminosOff) {
+  function htmlRecibo(d, formato, verPuntos, escala, conDetalle, terminosOff, opc) {
     const m = BG.configMarca();
     const t = d.tienda;
     const unaCompra = d.compras.length === 1;
@@ -299,7 +300,7 @@
       + (d.subtitulo ? '<p class="r-subt">' + esc(d.subtitulo) + '</p>' : '') + '<p>Emitido el ' + BG.fmtFecha(d.emision) + '</p></div></header>'
       + '<p class="r-contact">' + [t.whatsapp && 'WhatsApp ' + esc(t.whatsapp), t.instagram && 'Instagram ' + esc(t.instagram), t.direccion && esc(t.direccion)].filter(Boolean).map((x) => '<span>' + x + '</span>').join('') + '</p>'
       + '<div class="r-client"><div><span>Cliente</span><strong>' + esc(d.cliente.nombre) + '</strong></div><div><span>Documento</span><strong>' + esc(d.cliente.documento) + '</strong></div></div>'
-      + (d.soloPuntos ? htmlSoloPuntos(d)
+      + (d.soloPuntos ? htmlSoloPuntos(d, opc)
         : (compacto ? htmlHistorial(d, verPuntos)
           : d.compras.length ? d.compras.map(compra).join('') : '<p class="r-section">' + (d.historial ? 'Todavía no hay compras.' : 'No hay compras con saldo pendiente.') + '</p>')
           + '<div class="r-saldo' + (saldoPrincipal > 0 ? '' : ' is-paid') + '"><span>' + etiquetaSaldo + '</span><strong>' + gs(saldoPrincipal) + '</strong></div>'
@@ -309,7 +310,7 @@
             ? '<p class="r-account"><span>De eso, de compras de antes del sistema</span><strong>' + gs(d.saldoAnterior) + '</strong></p>' : '')
           + (d.anteriores && d.saldoCuenta !== saldoPrincipal ? '<p class="r-account"><span>Saldo total de tu cuenta (con lo de ahora)</span><strong>' + gs(d.saldoCuenta) + '</strong></p>' : '')
           + (d.aFavor > 0 ? '<div class="r-favor"><span>Saldo a tu favor para la próxima compra</span><strong>' + gs(d.aFavor) + '</strong></div>' : '')
-          + (verPuntos ? bloquePuntos(d) : ''))
+          + (verPuntos ? bloquePuntos(d, opc) : ''))
       + (legales.length ? '<section class="r-legales" data-propio="1"><h2 class="r-sub">Términos y condiciones</h2>'
         + legales.map((t) => '<p class="r-terminos"><strong>' + esc(t.titulo) + ':</strong> ' + esc(t.texto) + '</p>').join('') + '</section>' : '')
       + '<footer class="r-foot"><p class="r-thanks">' + esc(t.mensaje || '¡Gracias por tu compra!') + '</p><p class="r-legal">' + esc(t.nombre) + ' · ' + (d.soloPuntos ? 'Comprobante informativo de puntos' : 'Comprobante interno de pago') + ', no válido como factura.</p></footer>'
@@ -358,7 +359,9 @@
     const cli = d.clienteRef;
     const ventasOrig = tipo === 'v' ? [BG.venta(args[1])] : BG.ventasDeCliente(cli.id);
     const prox = d.compras.length === 1 && d.compras[0].cuotas.length ? d.compras[0].cuotas[0] : null;
-    const textoWa = d.soloPuntos ? BG.textosWa.puntos(cli, d.detallePuntos) : BG.textosWa.recibo(cli, d, prox);
+    // Lo que se imprime del programa: viene de Ajustes y en cada emisión se cambia solo para esa vez (también en el mensaje de WhatsApp).
+    const opc = { condiciones: BG.configFidelidad().condicionesEnRecibo !== false, comoFunciona: BG.configFidelidad().comoFuncionaEnRecibo !== false };
+    const textoWaDe = () => (d.soloPuntos ? BG.textosWa.puntos(cli, d.detallePuntos, { condiciones: opc.condiciones }) : BG.textosWa.recibo(cli, d, prox));
     // Los puntos en el recibo: viene lo que eligió el dueño en Ajustes, y acá se puede cambiar solo para esta emisión.
     let verPuntos = BG.configFidelidad().activo && (d.verPuntosPago != null ? d.verPuntosPago : BG.configFidelidad().enRecibo);
     const volver = tipo === 'v' ? '#/ventas/' + args[1] : '#/clientes/' + cli.id;
@@ -366,7 +369,7 @@
     const esCuenta = tipo === 'c' && !pagosIds.length;
     // Los términos que salen vienen de Ajustes; en cada comprobante se puede sacar alguno solo para esa vez.
     const terminosOff = new Set();
-    const pintar = () => htmlRecibo(d, formato, verPuntos, escala, conDetalle, terminosOff);
+    const pintar = () => htmlRecibo(d, formato, verPuntos, escala, conDetalle, terminosOff, opc);
     const html = '<div class="page">'
       + '<div class="receipt-toolbar no-print"><a class="back-link" href="' + volver + '">' + icon('left', 'i-sm') + 'Volver</a>'
       + '<div class="row"><div class="seg" role="radiogroup" aria-label="Formato de impresión">'
@@ -374,7 +377,7 @@
       + '<label><input type="radio" name="formato" value="ticket"' + (formato === 'ticket' ? ' checked' : '') + '>Ticket 80 mm</label></div>'
       + '<button type="button" class="btn" data-accion="imprimir">' + icon('print') + 'Imprimir</button>'
       + '<button type="button" class="btn" data-accion="pdf">' + icon('download') + 'Guardar PDF</button>'
-      + '<a class="btn btn-primary" data-accion="whatsapp" href="' + BG.waLink(cli, textoWa) + '" target="_blank" rel="noopener">' + icon('chat') + 'WhatsApp</a></div></div>'
+      + '<a class="btn btn-primary" data-accion="whatsapp" href="' + BG.waLink(cli, textoWaDe()) + '" target="_blank" rel="noopener">' + icon('chat') + 'WhatsApp</a></div></div>'
       + '<div class="receipt-opciones no-print">'
       + (esCuenta ? '<div class="seg" role="radiogroup" aria-label="Qué muestra el estado de cuenta">'
         + '<label><input type="radio" name="r-ver" value="todo"' + (ver === 'todo' ? ' checked' : '') + '>Todo el historial</label>'
@@ -391,8 +394,16 @@
       + '</div>'
       + (BG.configFidelidad().activo && !d.soloPuntos
         ? '<label class="check-inline no-print"><input type="checkbox" id="r-puntos-ver"' + (verPuntos ? ' checked' : '') + '> Mostrar los puntos en este comprobante'
-          + '<span class="hint"> · lo que viene marcado ' + (d.verPuntosPago != null ? 'lo elegiste al cobrar este pago' : 'se elige en <a href="#/ajustes">Ajustes → Clientas frecuentes</a>') + '</span></label>' : '')
+          + '<span class="hint"> · lo que viene marcado ' + (d.verPuntosPago != null ? 'lo elegiste al cobrar este pago' : 'se elige en <a href="#/ajustes">Ajustes → Clientas frecuentes</a>') + '</span></label>'
+          // Con los puntos a la vista, las condiciones del programa se pueden sacar solo en este comprobante.
+          + (d.terminosPuntos ? '<label class="check-inline no-print"><input type="checkbox" id="r-cond-puntos"' + (opc.condiciones ? ' checked' : '') + (verPuntos ? '' : ' disabled') + '> Con las condiciones del programa de puntos</label>' : '') : '')
+      // El comprobante de puntos: qué explica del programa (lo que viene marcado se elige en Ajustes; acá se cambia solo para esta emisión).
+      + (d.soloPuntos ? '<div class="receipt-opciones no-print"><span class="seg-label">Qué lleva este comprobante</span>'
+        + '<label class="check-inline"><input type="checkbox" id="r-cond-puntos"' + (opc.condiciones ? ' checked' : '') + '> Condiciones del programa de puntos</label>'
+        + '<label class="check-inline"><input type="checkbox" id="r-como-puntos"' + (opc.comoFunciona ? ' checked' : '') + '> Cómo funcionan los puntos (1 punto cada ' + gs(d.detallePuntos.cadaGs) + ' · cada punto vale ' + gs(d.detallePuntos.valorPunto) + ')</label>'
+        + (BG.esDuena() ? '<a class="small" href="#/ajustes">Dejarlo así para todos</a>' : '') + '</div>' : '')
       + (d.terminos.length ? '<div class="receipt-opciones no-print"><span class="seg-label">Términos y condiciones</span>'
+        + (d.terminos.length > 1 ? '<label class="check-inline"><input type="checkbox" id="r-termino-todos" checked> Todos</label>' : '')
         + d.terminos.map((t) => '<label class="check-inline"><input type="checkbox" data-termino="' + esc(t.id) + '" checked> ' + esc(t.titulo) + '</label>').join('')
         + (BG.esDuena() ? '<a class="small" href="#/ajustes">Editarlos</a>' : '') + '</div>' : '')
       + '<div class="no-print row" id="privacidad"></div>'
@@ -437,8 +448,32 @@
         const repintar = () => { $('.receipt-stage', root).innerHTML = pintar(); revisar(); };
         root.addEventListener('change', (e) => {
           const t = e.target;
-          if (t.id === 'r-puntos-ver') { verPuntos = t.checked; repintar(); return; }
-          if (t.dataset && t.dataset.termino) { if (t.checked) terminosOff.delete(t.dataset.termino); else terminosOff.add(t.dataset.termino); repintar(); return; }
+          if (t.id === 'r-puntos-ver') {
+            verPuntos = t.checked;
+            const cb = $('#r-cond-puntos', root);
+            if (cb) cb.disabled = !verPuntos;
+            repintar();
+            return;
+          }
+          if (t.id === 'r-cond-puntos' || t.id === 'r-como-puntos') {
+            if (t.id === 'r-cond-puntos') opc.condiciones = t.checked; else opc.comoFunciona = t.checked;
+            const wa = $('[data-accion="whatsapp"]', root);
+            if (wa) wa.href = BG.waLink(cli, textoWaDe());
+            repintar();
+            return;
+          }
+          if (t.id === 'r-termino-todos') {
+            $$('[data-termino]', root).forEach((x) => { x.checked = t.checked; if (t.checked) terminosOff.delete(x.dataset.termino); else terminosOff.add(x.dataset.termino); });
+            repintar();
+            return;
+          }
+          if (t.dataset && t.dataset.termino) {
+            if (t.checked) terminosOff.delete(t.dataset.termino); else terminosOff.add(t.dataset.termino);
+            const todos = $('#r-termino-todos', root);
+            if (todos) todos.checked = terminosOff.size === 0;
+            repintar();
+            return;
+          }
           if (t.id === 'r-detalle') { conDetalle = t.checked; guardarPref(KEY_DETALLE, conDetalle ? '1' : '0'); repintar(); return; }
           if (t.name === 'r-tam' || t.id === 'r-escala') {
             aplicarEscala(Number(t.value));
