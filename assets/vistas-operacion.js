@@ -29,7 +29,7 @@
         + (conOtra ? '<div class="field"><label for="sel-otra">O escribí el nombre de quien pidió <span class="small muted">(si no es clienta todavía)</span></label><input id="sel-otra" class="input" maxlength="60" autocomplete="off" value="' + esc(st.nombre || '') + '"></div>' : '');
       BG.combobox($('#sel-q', host), $('#sel-q-lista', host), {
         mostrarVacio: true,
-        buscar: (q) => (q.trim() ? BG.buscarClientes(q, 9) : BG.db.clientes.slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).slice(0, 9)).filter((c) => c.id !== excepto).slice(0, 8).map((c) => ({ c: c })),
+        buscar: (q) => (q.trim() ? BG.buscarClientes(q, 9) : BG.clientesVivas().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).slice(0, 9)).filter((c) => c.id !== excepto).slice(0, 8).map((c) => ({ c: c })),
         pintar: (it, q) => BG.filaCliente(it.c, q),
         elegir: (it) => { st.clienteId = it.c.id; st.nombre = ''; pintar(); if (alCambiar) alCambiar(); },
         vacio: (q) => 'No existe «' + esc(q) + '»: ' + (conOtra ? 'escribí abajo el nombre.' : 'creala desde Clientes.'),

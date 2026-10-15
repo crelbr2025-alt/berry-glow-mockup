@@ -119,6 +119,48 @@
     return lo;
   };
 
+  /**
+   * Archivar una clienta es lo que se hace con la que ya no compra: sale de las listas y de los buscadores, pero sus ventas, pagos, recibos, puntos y cuentas
+   * quedan EXACTAMENTE igual (no cambia ningún número ni el stock; borrarla, en cambio, borra sus compras y devuelve las unidades al stock). Solo se archiva la
+   * que no deja nada suelto: sin deuda, sin saldo a favor, sin apartados ni envíos en curso. Se puede desarchivar cuando vuelve.
+   */
+  BG.puedeArchivarCliente = (c) => {
+    if (!c) return { ok: false, razon: 'No encontramos esa clienta.' };
+    if (c.archivado) return { ok: true, razon: '', desarchivar: true };
+    const debe = BG.saldoCliente(c.id);
+    if (debe > 0) return { ok: false, razon: 'Todavía debe ' + gs(debe) + ': archivala cuando esté al día.' };
+    const favor = BG.creditoCliente(c.id);
+    if (favor > 0) return { ok: false, razon: 'Tiene ' + gs(favor) + ' de saldo a favor: usalo o devolvelo antes de archivarla.' };
+    if (BG.reservasActivas().some((r) => r.clienteId === c.id)) return { ok: false, razon: 'Tiene un apartado sin resolver: retiralo o liberalo antes de archivarla.' };
+    if (BG.db.envios.some((e) => e.clienteId === c.id && !['entregado', 'cancelado'].includes(e.estado))) return { ok: false, razon: 'Tiene un envío en curso: terminalo antes de archivarla.' };
+    return { ok: true, razon: '' };
+  };
+  BG.archivarCliente = (id, motivo) => {
+    delegable('archivarClientas', 'archivar clientas');
+    const c = BG.cliente(id);
+    const p = BG.puedeArchivarCliente(c);
+    if (!p.ok) throw new Error(p.razon);
+    if (c.archivado) throw new Error(c.nombre + ' ya está archivada.');
+    c.archivado = { fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, motivo: limpiar(motivo) };
+    BG.auditar('clientes', 'Clienta archivada', c.nombre + (limpiar(motivo) ? ' · motivo: ' + limpiar(motivo) : '') + ' · sus compras, pagos y recibos quedan igual');
+    BG.guardar();
+    return c;
+  };
+  BG.desarchivarCliente = (id) => {
+    delegable('archivarClientas', 'archivar clientas');
+    const c = BG.cliente(id);
+    if (!c || !c.archivado) throw new Error('Esa clienta no está archivada.');
+    c.archivado = null;
+    BG.auditar('clientes', 'Clienta desarchivada', c.nombre);
+    BG.guardar();
+    return c;
+  };
+  /** Una archivada no vuelve a comprar, apartar ni pagar sin desarchivarla antes (así nadie le carga algo sin darse cuenta). */
+  const clienteActiva = (id) => {
+    const c = BG.cliente(id);
+    if (c && c.archivado) throw new Error(c.nombre + ' está archivada: desarchivala (en su ficha) para seguir con ella.');
+  };
+
   /** Clientes que podrían ser la misma persona (misma CI, mismo teléfono o nombre muy parecido). */
   BG.posiblesDuplicados = (datos, excluirId) => {
     const ci = BG.soloDigitos(datos.ci);
@@ -156,6 +198,7 @@
       partes: unirPartes(o.partes), total: o.total, excedente: o.excedente || 0, recibo: o.recibo,
       inicial: !!o.inicial, grupo: o.grupo || null, anulado: null, usuario: BG.usuario().nombre,
     };
+    if (o.opId) pg.opId = o.opId;   // la clave del intento que lo creó: así un reintento se reconoce (BG.registrarCobro)
     BG.db.pagos.push(pg);
     return pg;
   }
@@ -320,6 +363,13 @@
 
   BG.registrarVenta = (d) => {
     if (!BG.puede('registrarVentas')) throw new Error('Tu usuario no puede registrar ventas.');
+    // Un reintento de la MISMA operación (doble toque, respuesta que tardó) no crea otra venta: devuelve la que ya quedó registrada.
+    // Dos compras distintas con el mismo importe siguen siendo posibles: cada intento trae su propia clave.
+    if (d.opId) {
+      const previa = BG.db.ventas.find((x) => x.opId === d.opId && x.clienteId === d.clienteId);
+      if (previa) return { venta: previa, pago: BG.pagosDeVenta(previa.id).find((p) => p.inicial) || null, repetida: true };
+    }
+    clienteActiva(d.clienteId);
     const cli = BG.cliente(d.clienteId);
     if (!cli) throw new Error('Elegí la clienta de la venta.');
     if (!fechaValida(d.fecha)) throw new Error('La fecha de la venta no es válida.');
@@ -381,6 +431,7 @@
         ? Object.assign({ cadaGs: fid.cadaGs, valorPunto: fid.valorPunto }, fid.sinPuntosConDescuento && BG.ventaConRebaja(items, t.descuento) ? { sinPuntos: true } : {}) : null,
       creditoAutorizado: !credito0.ok ? { por: d.creditoAutorizadoPor || quien, motivo: BG.textoCredito(credito0) } : null,
     };
+    if (d.opId) v.opId = d.opId;
     BG.db.ventas.push(v);
     BG.auditar('ventas', 'Venta registrada', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · ' + items.length + ' artículo(s) · ' + gs(v.total));
     if (apartado) {
@@ -431,6 +482,12 @@
    */
   BG.registrarCobro = (d) => {
     if (!BG.puede('registrarCobros')) throw new Error('Tu usuario no puede registrar cobros.');
+    // Un reintento del MISMO cobro (doble toque, respuesta que tardó) no cobra dos veces: devuelve el cobro que ya quedó registrado.
+    if (d.opId) {
+      const previos = BG.db.pagos.filter((p) => p.opId === d.opId && p.clienteId === d.clienteId);
+      if (previos.length) return { pagos: previos, recibo: previos[0].recibo, repetida: true };
+    }
+    clienteActiva(d.clienteId);
     const cli = BG.cliente(d.clienteId);
     if (!cli) throw new Error('Elegí la clienta.');
     if (!fechaValida(d.fecha)) throw new Error('La fecha del cobro no es válida.');
@@ -462,7 +519,7 @@
     if (usar > 0) credito(d.clienteId, -usar, 'Aplicado al recibo ' + BG.fmtRecibo(recibo), { ventaId: d.destino === 'todas' ? null : d.destino });
     const pagos = [];
     if (d.destino === 'sena') {
-      pagos.push(nuevoPago({ clienteId: d.clienteId, fecha: d.fecha, partes: cola, total: 0, excedente: entregado, recibo: recibo, grupo: grupo }));
+      pagos.push(nuevoPago({ clienteId: d.clienteId, fecha: d.fecha, partes: cola, total: 0, excedente: entregado, recibo: recibo, grupo: grupo, opId: d.opId }));
       credito(d.clienteId, entregado, 'Seña / anticipo, recibo ' + BG.fmtRecibo(recibo), { pagoId: pagos[0].id });
       BG.auditar('cobros', 'Seña registrada', 'Recibo ' + BG.fmtRecibo(recibo) + ' · ' + cli.nombre + ' · ' + textoPartes(cola));
       BG.guardar();
@@ -493,7 +550,7 @@
         cola.forEach((x) => partes.push({ forma: x.forma, monto: x.monto }));
         cola.length = 0;
       }
-      const pg = nuevoPago({ ventaId: v.id, clienteId: d.clienteId, fecha: d.fecha, partes: partes, total: aplicar, excedente: excedente, recibo: recibo, grupo: grupo });
+      const pg = nuevoPago({ ventaId: v.id, clienteId: d.clienteId, fecha: d.fecha, partes: partes, total: aplicar, excedente: excedente, recibo: recibo, grupo: grupo, opId: d.opId });
       puntosAlCobrar(v, pg, d);
       pagos.push(pg);
     });
@@ -571,6 +628,7 @@
     if (!BG.puede('registrarVentas')) throw new Error('Tu usuario no puede registrar ventas.');
     const v = BG.venta(d.ventaId);
     if (!v || v.anulada) throw new Error('Esa compra está anulada: no se le pueden agregar artículos.');
+    clienteActiva(v.clienteId);
     if (v.anterior) throw new Error('Es una compra de antes del sistema: lo que llevó antes se anota como otra compra anterior.');
     const lista = (d.items || []).filter((x) => x && x.productoId);
     if (!lista.length) throw new Error('Elegí al menos un artículo para agregar.');
@@ -822,7 +880,7 @@
   };
 
   BG.corregirVenta = (d) => {
-    soloDuenio('corregir compras ya hechas');
+    delegable('corregirCompras', 'corregir compras ya hechas');
     const r = BG.revisarCorreccion(d);
     if (!r.ok) throw new Error(r.errores[0]);
     const v = BG.venta(d.ventaId);
@@ -927,7 +985,8 @@
   };
 
   BG.pasarCompraDeClienta = (d) => {
-    soloDuenio('pasar una compra a otra clienta');
+    delegable('corregirCompras', 'pasar una compra a otra clienta');
+    clienteActiva(d.clienteId);
     const r = BG.revisarTraspaso(d);
     if (!r.ok) throw new Error(r.errores[0]);
     const v = BG.venta(d.ventaId);
@@ -970,6 +1029,7 @@
    */
   BG.apartar = (d) => {
     if (!BG.puede('registrarVentas')) throw new Error('Tu usuario no puede apartar artículos.');
+    clienteActiva(d.clienteId);
     const cli = BG.cliente(d.clienteId);
     if (!cli) throw new Error('Elegí la clienta.');
     const lista = (d.items || []).filter((x) => x && x.productoId);
@@ -1107,6 +1167,7 @@
    */
   BG.registrarCompraAnterior = (d) => {
     soloDuenio('cargar compras de antes del sistema');
+    clienteActiva(d.clienteId);
     const cli = BG.cliente(d.clienteId);
     if (!cli) throw new Error('Elegí la clienta.');
     if (!d.fecha || d.fecha > BG.hoy()) throw new Error('La fecha no puede ser futura.');
@@ -1170,6 +1231,7 @@
     if (!BG.puede('devoluciones')) throw new Error(BG.nombreDuena() + ' no te habilitó las devoluciones y cambios.');
     const v = BG.venta(d.ventaId);
     if (!v || v.anulada) throw new Error('Esa venta está anulada.');
+    clienteActiva(v.clienteId);
     if (v.anterior) throw new Error('Es una compra de antes del sistema: no tiene artículos del stock para devolver. Si hay que cambiarla, corregí la compra.');
     const it = v.items[d.item];
     const quedan = it ? BG.cantidadViva(it) : 0;
@@ -1268,6 +1330,7 @@
    * programa ni más de los que tiene). El valor sale de `valorPunto`: 1 punto = valorPunto guaraníes, exacto.
    */
   BG.canjearPuntos = (clienteId, puntos) => {
+    clienteActiva(clienteId);
     const f = BG.configFidelidad();
     const pts = BG.puntosDe(clienteId);
     if (!pts || !pts.canjeable) throw new Error('Todavía no tiene los ' + f.minimo + ' puntos para canjear.');
@@ -1291,7 +1354,7 @@
    * compra ya está pagada se pueden usar enseguida; si debe, se suman al terminar de pagar.
    */
   BG.sumarPuntosAparte = (ventaIds, motivo) => {
-    soloDuenio('sumar puntos de compras anteriores');
+    delegable('darPuntos', 'sumar puntos de compras anteriores');
     const f = BG.configFidelidad();
     if (!f.activo) throw new Error('El programa de puntos está apagado: se prende en Ajustes → Clientas frecuentes.');
     const ventas = (ventaIds || []).map((id) => BG.venta(id)).filter(Boolean);
@@ -1310,8 +1373,8 @@
       v.puntosAparte = { fecha: BG.hoy(), ts: BG.ahora(), usuario: quien, motivo: limpiar(motivo) };
       if (!v.fidelidad) v.fidelidad = { cadaGs: f.cadaGs, valorPunto: f.valorPunto };
       const n = BG.puntosDeVenta(v);
-      // Con «los puntos se suman con cada pago», lo que esa clienta ya había pagado de la compra también suma: si no, pagó ₲ 390.000 de una
-      // compra de ₲ 470.000 y solo tenía los puntos del último pago (le pasó a Rocío Pérez, HANDOFF §28).
+      // Con «los puntos se suman con cada pago», lo que esa clienta ya había pagado de la compra también suma: si no, podía haber pagado la
+      // mayor parte de una compra y tener solo los puntos del último pago (HANDOFF §28).
       if (f.porPago) anotarPuntosDePagos(v);
       const ya = BG.saldoVenta(v) <= 0 ? n : BG.puntosGanadosDeVenta(v);
       ganados += ya;
@@ -1335,7 +1398,7 @@
    * compra y no toca lo ya sumado. d: lista de ids de compras, motivo opcional.
    */
   BG.sumarPuntosDePagos = (ventaIds, motivo) => {
-    soloDuenio('sumar los puntos de pagos ya hechos');
+    delegable('darPuntos', 'sumar los puntos de pagos ya hechos');
     const f = BG.configFidelidad();
     if (!f.activo) throw new Error('El programa de puntos está apagado: se prende en Ajustes → Clientas frecuentes.');
     const ventas = (ventaIds || []).map((id) => BG.venta(id)).filter(Boolean);
@@ -1353,7 +1416,7 @@
   };
   /** Deshace lo de arriba para una compra, salvo que esos puntos ya se hayan canjeado. */
   BG.quitarPuntosAparte = (ventaId) => {
-    soloDuenio('quitar puntos de compras anteriores');
+    delegable('darPuntos', 'quitar puntos de compras anteriores');
     const v = BG.venta(ventaId);
     if (!v || !v.puntosAparte) throw new Error('Esa compra no tiene puntos sumados a mano.');
     const n = BG.puntosGanadosDeVenta(v);
@@ -1373,7 +1436,7 @@
    * d = { clienteId, puntos, motivo, nota }
    */
   BG.darPuntos = (d) => {
-    soloDuenio('darle puntos a una clienta sin una compra');
+    delegable('darPuntos', 'darle puntos a una clienta sin una compra');
     const f = BG.configFidelidad();
     if (!f.activo) throw new Error('El programa de puntos está apagado: se prende en Ajustes → Clientas frecuentes.');
     const cli = BG.cliente(d.clienteId);
@@ -1392,7 +1455,7 @@
   };
   /** Anula puntos dados a mano (nada se borra). No se puede si la clienta ya canjeó puntos que quedarían sin respaldo. */
   BG.quitarPuntosManuales = (id, motivo) => {
-    soloDuenio('quitar puntos dados a mano');
+    delegable('darPuntos', 'quitar puntos dados a mano');
     const x = (BG.db.puntosManuales || []).find((y) => y.id === id);
     if (!x || x.anulado) throw new Error('Esos puntos ya no están.');
     const texto = limpiar(motivo);
@@ -1569,7 +1632,7 @@
    * d = { items: [{ productoId, contado, motivo }], nota }
    */
   BG.registrarConteo = (d) => {
-    soloDuenio('hacer el conteo de inventario');
+    delegable('hacerConteo', 'hacer el conteo de inventario');
     const filas = (d.items || []).filter((x) => x.contado != null && x.contado !== '' && Number(x.contado) >= 0);
     if (!filas.length) throw new Error('Contá al menos un producto.');
     const conteo = { id: BG.uid('ct'), fecha: BG.hoy(), ts: BG.ahora(), usuario: BG.usuario().nombre, nota: limpiar(d.nota), contados: filas.length, diferencias: 0, faltanteGs: 0, sobranteGs: 0 };
@@ -1701,6 +1764,13 @@
   /* ── Anulaciones (nunca se borra nada) ───────────────────────────────── */
 
   const soloDuenio = (que) => { if (!BG.esDuena()) throw new Error('Solo ' + BG.nombreDuena() + ' (dueño) puede ' + que + '.'); };
+  /**
+   * Lo que el dueño puede dejar en manos de la vendedora (Ajustes → Usuarios y permisos): el dueño siempre; ella, solo si se lo habilitó. El motor lo revisa por
+   * sí mismo (no alcanza con esconder el botón) y mira el permiso EFECTIVO de este momento: si el dueño se lo quita, la próxima vez que lo intente se rechaza.
+   */
+  const delegable = (permiso, que) => {
+    if (!BG.puede(permiso)) throw new Error('Solo ' + BG.nombreDuena() + ' (dueño) puede ' + que + ', o quien él habilite en Ajustes → Usuarios y permisos.');
+  };
 
   BG.cambiarMargenMinimo = (m) => {
     soloDuenio('cambiar el margen mínimo');
@@ -1716,7 +1786,7 @@
    * que la clienta había pagado queda como saldo a favor.
    */
   BG.anularVenta = (id, motivo, tipo) => {
-    soloDuenio('anular ventas');
+    delegable('anularVentas', 'anular ventas');
     const v = BG.venta(id);
     const cli = BG.cliente(v.clienteId);
     const puntos = BG.puntosGanadosDeVenta(v);
@@ -1777,7 +1847,7 @@
   };
 
   BG.anularPago = (id, motivo, tipo) => {
-    soloDuenio('anular pagos');
+    delegable('anularVentas', 'anular pagos');
     const pg = BG.db.pagos.find((p) => p.id === id);
     const problema = BG.motivoNoAnulable(pg);
     if (problema) throw new Error(problema);
@@ -1852,6 +1922,7 @@
    * escrito en la auditoría con todos sus datos, y si venía de un pedido se lo saca de ese pedido.
    */
   BG.borrarProducto = (id, motivo) => {
+    if (!BG.esDuena() && !BG.puede('cargarProductos')) throw new Error(BG.nombreDuena() + ' no te habilitó cargar productos.');
     const p = BG.producto(id);
     const puede = BG.puedeBorrarProducto(p);
     if (!puede.ok) throw new Error(puede.razon);
@@ -1883,7 +1954,7 @@
   };
 
   BG.actualizarPrecio = (pid, margen, precio, nota) => {
-    soloDuenio('cambiar precios');
+    delegable('cambiarPrecios', 'cambiar precios');
     const p = BG.producto(pid);
     const antes = p.precioVenta;
     p.margen = margen;
@@ -1986,7 +2057,7 @@
   };
 
   BG.reabrirCaja = (fecha) => {
-    soloDuenio('reabrir la caja');
+    delegable('reabrirCaja', 'reabrir la caja');
     BG.db.config.cajaCerradaHasta = BG.sumarDias(fecha, -1);
     BG.auditar('caja', 'Caja reabierta', BG.fmtFecha(fecha) + ' y días siguientes');
     BG.guardar();
@@ -2009,13 +2080,25 @@
 
   /* ── Usuarios y permisos ─────────────────────────────────────────────── */
 
+  /**
+   * Habilita o quita un permiso a la vendedora. Solo el dueño, y solo sobre una clave que existe (`BG.PERMISOS`) y una cuenta que no es la suya: el dueño
+   * puede todo siempre, así que un permiso «suyo» no significa nada. Si algo no tiene sentido se rechaza sin escribir nada. Cambiar a lo mismo que ya valía
+   * no toca los datos (no deja una línea de auditoría vacía) y se lo dice a quien apretó.
+   */
   BG.actualizarPermiso = (usuarioId, permiso, valor) => {
     soloDuenio('cambiar permisos');
     const u = BG.db.usuarios.find((x) => x.id === usuarioId);
-    u.permisos = Object.assign({}, u.permisos, { [permiso]: !!valor });
-    const etiqueta = (BG.PERMISOS.find((p) => p[0] === permiso) || [permiso, permiso])[1];
-    BG.auditar('seguridad', 'Permisos de ' + u.nombre, (valor ? 'Habilitado: ' : 'Quitado: ') + etiqueta);
+    if (!u) throw new Error('Esa cuenta no existe.');
+    if (u.rol === 'admin') throw new Error('Los permisos del dueño no se cambian: puede hacer todo.');
+    const def = BG.PERMISOS.find((p) => p[0] === permiso);
+    if (!def) throw new Error('Ese permiso no existe.');
+    if (typeof valor !== 'boolean') throw new Error('El permiso se habilita o se quita (sí o no).');
+    if (BG.permisoDe(u, permiso) === valor && u.permisos && Object.prototype.hasOwnProperty.call(u.permisos, permiso)) return { cambio: false };
+    const antes = BG.permisoDe(u, permiso);
+    u.permisos = Object.assign({}, u.permisos, { [permiso]: valor });
+    BG.auditar('seguridad', 'Permisos de ' + u.nombre, (valor ? 'Habilitado: ' : 'Quitado: ') + def[1] + (antes === valor ? ' (ya valía así; ahora queda guardado)' : ''));
     BG.guardar();
+    return { cambio: antes !== valor };
   };
 
   /** PIN con el que el dueño autoriza en el mostrador. Nunca se escribe el PIN en la auditoría. */

@@ -171,6 +171,9 @@
     const p = BG.producto(id);
     if (!p) return;
     const duena = BG.esDuena();
+    // Quien tiene «Ver costos» ve el cálculo; solo cambia el precio quien además tiene «Cambiar el precio de lista» (y ve el costo para elegirlo).
+    const verCostos = BG.veCostos();
+    const puedeEditar = duena || (BG.puede('cambiarPrecios') && verCostos);
     const disp = BG.disponibles(p);
     const ultima = BG.ultimaVentaDe(p.id);
     const quieto = disp > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO;
@@ -184,7 +187,7 @@
       + (BG.ajusteStock(p.id) ? '<dt>Ajuste por conteo</dt><dd>' + (BG.ajusteStock(p.id) > 0 ? '+' : '') + BG.ajusteStock(p.id) + '</dd>' : '') + '<dt>Disponibles</dt><dd>' + disp + '</dd>'
       + '<dt>Última venta</dt><dd>' + (ultima ? BG.fmtFecha(ultima) + ' (' + BG.haceDias(ultima) + ')' : 'nunca se vendió') + '</dd></dl>'
       + (quieto ? '<p class="callout callout-warn">' + icon('pause') + '<span>Lleva <strong>' + BG.diasSinVender(p) + ' días</strong> sin venderse: candidato a liquidación o promoción.</span></p>' : '');
-    const cabecera = '<p class="muted small">' + esc(p.codigo) + ' · ' + esc(p.categoria) + (duena ? ' · ' + esc(p.proveedor) : '') + ' · cargado el ' + BG.fmtFecha(p.fechaCarga)
+    const cabecera = '<p class="muted small">' + esc(p.codigo) + ' · ' + esc(p.categoria) + (verCostos ? ' · ' + esc(p.proveedor) : '') + ' · cargado el ' + BG.fmtFecha(p.fechaCarga)
       + (p.usuario ? ' por ' + esc(p.usuario) : '') + '</p>';
     // Se cargó por error: se puede borrar solo si nunca se movió (sin ventas vivas ni conteos). Queda en la auditoría.
     // Si ya se vendió, no se borra: se archiva, y así sale de las listas sin tocar ninguna venta.
@@ -198,7 +201,7 @@
       : borrable.ok
         ? '<p class="hint">¿Se cargó por error? Con <strong>Borrar</strong> desaparece de la lista (queda anotado en la auditoría). Se puede porque no está en ninguna venta viva ni en un conteo.</p>'
         : '<p class="hint">No se puede borrar: ' + esc(borrable.razon) + (archivable.ok ? '' : ' ' + esc(archivable.razon)) + '</p>';
-    if (!duena) {
+    if (!verCostos) {
       const rv = await BG.modal({
         titulo: p.descripcion, cuerpo: cabecera + '<p class="hero-figure">' + (p.precioVenta ? gs(p.precioVenta) : 'Sin precio') + '</p>' + stock
           + (BG.puede('cargarProductos') ? avisoBorrar : ''),
@@ -215,18 +218,22 @@
         + BG.htmlRastro({ r: det, envioFormula: envioFormulaProducto(p), cotNota: 'dólar del ' + BG.fmtFechaCorta(p.fechaCarga) }) + '</section>'
         + (p.cotizacion !== BG.db.config.cotizacion.valor ? '<div class="callout">' + icon('lock') + '<div>Se cargó con el dólar a ' + C.fmtCot(p.cotizacion) + '. Hoy está a ' + C.fmtCot(BG.db.config.cotizacion.valor) + ', pero el costo de este producto no cambia.</div></div>' : '')
         + (p.repreciado ? '<p class="hint">Precio de venta actualizado al dólar ' + C.fmtCot(p.repreciado.cotizacion) + ' el ' + BG.fmtFecha(p.repreciado.fecha) + '.</p>' : '')
-        + '<section class="stack"><h3 class="section-title">Precio de venta</h3>' + BG.htmlEscalera(BG.preciosProducto(p), seleccion, 'pp', p.costoTotalGs, p.margen ? 0 : p.precioVenta) + '</section>';
+        + '<section class="stack"><h3 class="section-title">Precio de venta</h3>' + (puedeEditar
+          ? BG.htmlEscalera(BG.preciosProducto(p), seleccion, 'pp', p.costoTotalGs, p.margen ? 0 : p.precioVenta)
+          : '<dl class="kv"><dt>Precio de venta</dt><dd>' + (p.precioVenta ? gs(p.precioVenta) + (p.margen ? ' (' + p.margen + ' % sobre el costo)' : ' (precio a mano)') : 'sin precio') + '</dd></dl>'
+            + '<p class="hint">Solo ' + esc(BG.nombreDuena()) + ' cambia el precio, o quien él habilite en Ajustes.</p>') + '</section>';
     } else {
-      cuerpo += '<div class="callout callout-warn">' + icon('alert') + '<div><strong>Costo pendiente.</strong> ' + esc(p.nota || 'Falta el costo en dólares.') + ' Sin costo no hay precio, y el sistema no deja venderlo.</div></div>'
-        + '<div class="field"><label for="pp-costo">Costo unitario (US$)</label><div class="money"><span class="money-sym" aria-hidden="true">US$</span><input id="pp-costo" class="input input-usd" inputmode="decimal" data-dec="2" autocomplete="off" placeholder="0,00"></div>'
-        + '<span class="hint">Se calcula con el dólar y el envío del día de carga (' + C.fmtCot(p.cotizacion) + ').</span><span class="error-text" id="pp-e" hidden></span></div>';
+      cuerpo += '<div class="callout callout-warn">' + icon('alert') + '<div><strong>Costo pendiente.</strong> ' + esc(p.nota || 'Falta el costo en dólares.') + ' Sin costo no hay precio, y el sistema no deja venderlo.'
+        + (duena ? '' : ' Lo completa ' + esc(BG.nombreDuena()) + '.') + '</div></div>'
+        + (!duena ? '' : '<div class="field"><label for="pp-costo">Costo unitario (US$)</label><div class="money"><span class="money-sym" aria-hidden="true">US$</span><input id="pp-costo" class="input input-usd" inputmode="decimal" data-dec="2" autocomplete="off" placeholder="0,00"></div>'
+        + '<span class="hint">Se calcula con el dólar y el envío del día de carga (' + C.fmtCot(p.cotizacion) + ').</span><span class="error-text" id="pp-e" hidden></span></div>');
     }
     cuerpo += '<section class="stack"><h3 class="section-title">Stock</h3>' + stock + avisoBorrar + '</section>';
     let nuevo = null;
     const r = await BG.modal({
       titulo: p.descripcion, ancho: 'wide', cuerpo: cuerpo,
       acciones: [{ texto: 'Cerrar', valor: 'cancelar', clase: 'btn-quiet' }].concat(accionBorrar).concat(accionArchivar)
-        .concat([{ texto: det ? 'Guardar precio' : 'Calcular y guardar', valor: 'ok', clase: 'btn-primary' }]),
+        .concat(det ? (puedeEditar ? [{ texto: 'Guardar precio', valor: 'ok', clase: 'btn-primary' }] : []) : (duena ? [{ texto: 'Calcular y guardar', valor: 'ok', clase: 'btn-primary' }] : [])),
       onMount: (dlg) => {
         dlg.addEventListener('focusin', (e) => { if (e.target.dataset && e.target.dataset.otroDe) { const rd = $('input[name="pp"][value="otro"]', dlg); if (rd) rd.checked = true; } });
       },
@@ -343,17 +350,22 @@
 
   BG.vistas.productos = (args, params) => {
     const duena = BG.esDuena();
+    // Costos, margen y ganancia por artículo: los ve quien tenga «Ver costos» (el dueño siempre). Los botones salen según el permiso, no según el rol.
+    const verCostos = BG.veCostos();
     const e = { q: '', cat: 'todas', stock: 'todos' };
     const cats = Array.from(new Set(BG.db.productos.map((p) => p.categoria)));
     const chips = (grupo, pares) => '<div class="chips" role="group">' + pares.map(([k, t]) => '<button type="button" class="chip" data-' + grupo + '="' + esc(k) + '" aria-pressed="' + (e[grupo] === k) + '">' + esc(t) + '</button>').join('') + '</div>';
     const html = '<div class="page">'
-      + '<div class="page-head"><div><h1 class="page-title">' + (duena ? 'Productos' : 'Lista de precios') + '</h1><p class="page-sub" id="p-resumen"></p></div>'
-      + (duena || BG.puede('cargarProductos')
+      + '<div class="page-head"><div><h1 class="page-title">' + (verCostos ? 'Productos' : 'Lista de precios') + '</h1><p class="page-sub" id="p-resumen"></p></div>'
+      + (duena || BG.puede('cargarProductos') || BG.puede('hacerConteo')
         ? '<div class="page-actions">'
-          + (duena ? '<a class="btn" href="#/productos/conteo">' + icon('count') + 'Conteo de inventario</a><a class="btn" href="#/pedidos">' + icon('box2') + 'Pedidos al proveedor</a><a class="btn" href="#/productos/importar">' + icon('file') + 'Importar Excel</a>'
+          + (BG.puede('hacerConteo') ? '<a class="btn" href="#/productos/conteo">' + icon('count') + 'Conteo de inventario</a>' : '')
+          + (duena ? '<a class="btn" href="#/pedidos">' + icon('box2') + 'Pedidos al proveedor</a><a class="btn" href="#/productos/importar">' + icon('file') + 'Importar Excel</a>'
             + '<a class="btn" href="#/productos/pedido">' + icon('truck') + 'Cargar pedido</a>' : '')
-          + '<a class="btn btn-primary" href="#/productos/nuevo">' + icon('plus') + 'Cargar producto</a></div>' : '') + '</div>'
-      + (duena ? BG.htmlParametros() : '<div class="note-mock">' + icon('eye') + '<span>Vista de vendedor/a: se ven precio y stock; los costos, el dólar y los márgenes están ocultos.</span></div>')
+          + (duena || BG.puede('cargarProductos') ? '<a class="btn btn-primary" href="#/productos/nuevo">' + icon('plus') + 'Cargar producto</a>' : '') + '</div>' : '') + '</div>'
+      + (duena ? BG.htmlParametros() : verCostos
+        ? '<div class="note-mock">' + icon('eye') + '<span>Ves los costos, el dólar y los márgenes, pero no los podés cambiar' + (BG.puede('cambiarPrecios') ? ': solo el precio de cada artículo' : '') + '.</span></div>'
+        : '<div class="note-mock">' + icon('eye') + '<span>Vista de vendedor/a: se ven precio y stock; los costos, el dólar y los márgenes están ocultos.</span></div>')
       + '<div class="toolbar"><div class="search-box grow"><label class="sr-only" for="q-prod-lista">Buscar producto</label>' + icon('search')
       + '<input id="q-prod-lista" class="search-input" type="search" autocomplete="off" placeholder="Buscar producto"></div>'
       + chips('cat', [['todas', 'Todas']].concat(cats.map((c) => [c, c + (c.endsWith('o') || c.endsWith('a') ? 's' : '')])))
@@ -367,7 +379,7 @@
       if (e.stock === 'con') lista = lista.filter((p) => BG.disponibles(p) > 0);
       if (e.stock === 'sin') lista = lista.filter((p) => BG.disponibles(p) <= 0);
       const valorStock = sum(lista, (p) => Math.max(0, BG.disponibles(p)) * (p.costoTotalGs || 0));
-      $('#p-resumen', root).textContent = lista.length + (lista.length === 1 ? ' producto · ' : ' productos · ') + sum(lista, (p) => Math.max(0, BG.disponibles(p))) + ' unidades disponibles' + (duena ? ' · stock al costo ' + gs(valorStock) : '')
+      $('#p-resumen', root).textContent = lista.length + (lista.length === 1 ? ' producto · ' : ' productos · ') + sum(lista, (p) => Math.max(0, BG.disponibles(p))) + ' unidades disponibles' + (verCostos ? ' · stock al costo ' + gs(valorStock) : '')
         + (e.stock !== 'arch' && BG.archivados() ? ' · ' + BG.archivados() + (BG.archivados() === 1 ? ' archivado' : ' archivados') + ' fuera de la lista' : '');
       const quieto = (p) => (p.archivado ? '<span class="pill pill-muted">' + icon('box2') + 'Archivado</span>'
         : BG.disponibles(p) > 0 && BG.diasSinVender(p) >= BG.DIAS_QUIETO ? '<span class="pill pill-warn pill-quieto">' + icon('pause') + BG.diasSinVender(p) + ' días sin venderse</span>' : '');
@@ -380,19 +392,19 @@
         ? '<button type="button" class="btn-icon btn-del" data-borrar="' + esc(p.id) + '" title="Borrar «' + esc(p.descripcion) + '»: se cargó por error" aria-label="Borrar ' + esc(p.descripcion) + '">' + icon('trash', 'i-sm') + '</button>'
         : '');
       const tabla = '<div class="table-wrap hide-narrow"><table class="table"><thead><tr><th>Producto</th><th>Categoría</th><th class="num">Stock</th>'
-        + (duena ? '<th class="num">Costo US$</th><th class="num">Costo ₲ (congelado)</th>' : '') + '<th class="num">Precio</th>' + (duena ? '<th class="num">Gana c/u</th><th>Cargado</th>' : '')
+        + (verCostos ? '<th class="num">Costo US$</th><th class="num">Costo ₲ (congelado)</th>' : '') + '<th class="num">Precio</th>' + (verCostos ? '<th class="num">Gana c/u</th><th>Cargado</th>' : '')
         + (puedeCargar ? '<th class="col-del"><span class="sr-only">Borrar</span></th>' : '') + '</tr></thead><tbody>'
         + lista.map((p) => '<tr class="is-link" data-ver="' + p.id + '" tabindex="0"><td><div class="t-title">' + (e.q ? BG.resaltar(p.descripcion, e.q) : esc(p.descripcion)) + '</div>'
-          + '<div class="t-sub">' + esc(p.codigo) + (duena ? ' · ' + esc(p.proveedor) : '') + '</div>' + quieto(p) + '</td><td>' + esc(p.categoria) + '</td><td class="num">' + stockTxt(p) + '</td>'
-          + (duena ? '<td class="num">' + (p.costoUSD ? C.fmtUSD(p.costoUSD) : '—') + '</td><td class="num">' + (p.costoTotalGs ? gs(p.costoTotalGs) : '—') + '</td>' : '')
-          + '<td class="num"><strong>' + precioTxt(p) + '</strong>' + (duena && p.precioVenta ? '<div class="t-sub">' + (p.margen ? p.margen + ' %' : 'a mano') + '</div>' : '') + '</td>'
-          + (duena ? '<td class="num">' + (p.precioVenta && p.costoTotalGs ? gs(p.precioVenta - p.costoTotalGs) : '—') + '</td><td class="nowrap"><div>' + BG.fmtFecha(p.fechaCarga) + '</div><div class="t-sub">dólar ' + C.fmtCot(p.cotizacion) + '</div></td>' : '')
+          + '<div class="t-sub">' + esc(p.codigo) + (verCostos ? ' · ' + esc(p.proveedor) : '') + '</div>' + quieto(p) + '</td><td>' + esc(p.categoria) + '</td><td class="num">' + stockTxt(p) + '</td>'
+          + (verCostos ? '<td class="num">' + (p.costoUSD ? C.fmtUSD(p.costoUSD) : '—') + '</td><td class="num">' + (p.costoTotalGs ? gs(p.costoTotalGs) : '—') + '</td>' : '')
+          + '<td class="num"><strong>' + precioTxt(p) + '</strong>' + (verCostos && p.precioVenta ? '<div class="t-sub">' + (p.margen ? p.margen + ' %' : 'a mano') + '</div>' : '') + '</td>'
+          + (verCostos ? '<td class="num">' + (p.precioVenta && p.costoTotalGs ? gs(p.precioVenta - p.costoTotalGs) : '—') + '</td><td class="nowrap"><div>' + BG.fmtFecha(p.fechaCarga) + '</div><div class="t-sub">dólar ' + C.fmtCot(p.cotizacion) + '</div></td>' : '')
           + (puedeCargar ? '<td class="col-del">' + btnBorrar(p) + '</td>' : '')
           + '</tr>').join('') + '</tbody></table></div>';
       const tarjetas = '<ul class="list show-narrow">' + lista.map((p) => '<li' + (borrable(p) ? ' class="list-del"' : '') + '><button type="button" class="list-row list-btn" data-ver="' + p.id + '"><span class="avatar">' + icon('tag', 'i-sm') + '</span>'
         + '<span class="row-main"><span class="row-title">' + esc(p.descripcion) + '</span><span class="row-sub">' + esc(p.categoria) + ' · ' + (BG.disponibles(p) > 0 ? 'quedan ' + BG.disponibles(p) : 'agotado')
-        + (duena && p.costoTotalGs ? ' · costo ' + gs(p.costoTotalGs) : '') + '</span>' + quieto(p) + '</span><span class="row-end"><span class="amount">' + (p.precioVenta ? gs(p.precioVenta) : 'Sin precio') + '</span>'
-        + (duena && p.precioVenta && p.costoTotalGs ? '<span class="small muted">gana ' + gs(p.precioVenta - p.costoTotalGs) + '</span>' : '') + '</span></button>' + btnBorrar(p) + '</li>').join('') + '</ul>';
+        + (verCostos && p.costoTotalGs ? ' · costo ' + gs(p.costoTotalGs) : '') + '</span>' + quieto(p) + '</span><span class="row-end"><span class="amount">' + (p.precioVenta ? gs(p.precioVenta) : 'Sin precio') + '</span>'
+        + (verCostos && p.precioVenta && p.costoTotalGs ? '<span class="small muted">gana ' + gs(p.precioVenta - p.costoTotalGs) + '</span>' : '') + '</span></button>' + btnBorrar(p) + '</li>').join('') + '</ul>';
       $('#p-lista', root).innerHTML = lista.length ? tabla + tarjetas : BG.db.productos.length ? '<p class="empty">Ningún producto coincide.</p>' : '<p class="empty">Todavía no cargaste productos. <a href="#/productos/nuevo">Cargar el primero</a></p>';
     };
     return {

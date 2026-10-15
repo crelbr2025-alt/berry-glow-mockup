@@ -101,6 +101,17 @@
      */
     pago: (cli, r, opciones) => {
       const saldo = BG.saldoCliente(cli.id);
+      // Un pago anulado no se manda como «recibimos tu pago»: se dice que se anuló y cómo queda la cuenta.
+      if (r.anulado) {
+        return unir([
+          saludo() + ', ' + nombreCorto(cli) + '! Te escribimos de ' + tienda() + ' 💗',
+          '',
+          '⚠️ El pago ' + BG.fmtRecibo(r.numero) + ' de ' + gs(r.anulado.entregado) + ' (del ' + BG.fmtFecha(r.fecha) + ') fue anulado: ya no cuenta como pago.',
+          saldo > 0 ? 'Saldo pendiente de tu cuenta: ' + gs(saldo) + '.' : '✔️ ¡Tu cuenta está al día!',
+          '',
+          '¡Gracias por elegirnos! Cualquier consulta, escribinos por acá. ✨',
+        ]);
+      }
       const conPuntos = !(opciones && opciones.puntos === false);
       const formas = r.formas.map((x) => x.forma.toLowerCase()).join(' + ');
       const reparto = r.aplicaciones.map((a) => 'la compra ' + BG.fmtRecibo(a.numero) + ' (' + gs(a.monto) + (a.saldo > 0 ? ', te faltan ' + gs(a.saldo) : ', quedó saldada') + ')');
@@ -126,6 +137,18 @@
       const total = d.compras.reduce((a, x) => a + x.total, 0);
       const pagado = d.compras.reduce((a, x) => a + x.pagado, 0);
       const saldo = d.anteriores ? d.saldoDocumento : d.saldoCuenta;
+      // Una compra anulada no se manda como «compra saldada»: se dice que está anulada y qué pasó con lo que había pagado.
+      if (c && c.anulada) {
+        return unir([
+          saludo() + ', ' + nombreCorto(cli) + '! Te escribimos de ' + tienda() + ' 💗',
+          '',
+          '⚠️ Tu compra ' + BG.fmtRecibo(c.numero) + ' de ' + gs(c.total) + ' fue anulada' + (c.anuladaEl ? ' el ' + BG.fmtFecha(c.anuladaEl) : '') + ': ya no vale.',
+          c.aFavorPorAnular > 0 ? 'Lo que habías pagado (' + gs(c.aFavorPorAnular) + ') quedó a tu favor para otra compra.' : null,
+          saldo > 0 ? 'Saldo pendiente de tu cuenta: ' + gs(saldo) + '.' : '✔️ ¡Tu cuenta está al día!',
+          '',
+          '¡Gracias por elegirnos! Cualquier consulta, escribinos por acá. ✨',
+        ]);
+      }
       return unir([
         saludo() + ', ' + nombreCorto(cli) + '! Te escribimos de ' + tienda() + ' 💗',
         '',

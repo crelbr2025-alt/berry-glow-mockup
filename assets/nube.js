@@ -140,9 +140,24 @@
     return N.perfil;
   };
 
+  /**
+   * Cerrar sesión no deja los datos de la tienda en el aparato: la copia local del documento (costos, clientas, PIN) se borra, salvo que
+   * todavía haya algo sin subir. Eso se intenta subir ANTES de salir (después de cerrar la sesión ya no hay permiso para guardar); si no
+   * se puede (sin internet), la copia queda para no perder el trabajo y se le dice a la persona.
+   */
   N.salir = async () => {
+    if (N.activa && !N.bloqueada) {
+      // Una subida en camino termina antes de seguir (salvo que ya se sepa que no hay internet: ahí no tiene sentido esperar).
+      for (let i = 0; i < 40 && empujando && N.estado !== 'sin-conexion'; i++) await new Promise((r) => setTimeout(r, 150));
+      if (pendiente && !empujando) { try { await empujarAhora(false); } catch (e) { /* queda sin subir: se avisa abajo */ } }
+    }
+    const cache = BG.leer(KEY_CACHE);
+    const sinSubir = pendiente || !!(cache && cache.sinSubir);
     try { if (canal && sb) { await sb.removeChannel(canal); canal = null; } } catch (e) { /* ya estaba cortado */ }
     try { if (sb) await sb.auth.signOut(); } catch (e) { /* igual salimos */ }
+    if (sinSubir) BG.toast('Saliste, pero hay cambios de este aparato que no se pudieron subir: quedaron guardados acá. Volvé a entrar con tu cuenta cuando tengas internet para que se suban.', 'error');
+    else { try { localStorage.removeItem(KEY_CACHE); } catch (e) { /* sin almacenamiento */ } }
+    pendiente = false;
     marcarEntrado(false);
     N.activa = false;
     N.perfil = null;

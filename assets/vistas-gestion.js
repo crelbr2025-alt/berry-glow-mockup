@@ -380,7 +380,7 @@
       + (f < h ? '<a class="btn btn-quiet" href="#/caja?fecha=' + BG.sumarDias(f, 1) + '" aria-label="Día siguiente">' + icon('right') + '</a>' : '') + '</div></div>'
       + (cerrada ? '<div class="callout callout-good">' + icon('lock') + '<div><strong>Caja cerrada' + (cierre ? ' el ' + BG.fmtFecha(cierre.ts.slice(0, 10)) + ' a las ' + BG.fmtHora(cierre.ts) + ' por ' + esc(cierre.usuario) : '') + '.</strong> '
         + 'Los movimientos de este día ya no se pueden anular ni cambiar sin la autorización de ' + esc(BG.nombreDuena()) + '.'
-        + (BG.esDuena() ? ' <button type="button" class="linkish" data-accion="reabrir">Reabrir con PIN</button>' : '') + '</div></div>' : '')
+        + (BG.puede('reabrirCaja') ? ' <button type="button" class="linkish" data-accion="reabrir">' + (BG.esDuena() ? 'Reabrir con PIN' : 'Reabrir') + '</button>' : '') + '</div></div>' : '')
       + '<div class="grid-2"><section class="card"><div class="card-head"><h2>Lo que entró</h2><span class="small muted">' + pagos.length + ' cobros</span></div>'
       + '<div class="table-wrap table-bare"><table class="table"><thead><tr><th>Forma de pago</th><th class="num">Cobros</th><th class="num">Monto</th></tr></thead><tbody>'
       + ['efectivo', 'transferencia', 'qr', 'tarjeta'].map((k) => '<tr><td>' + BG.FORMAS[k] + '</td><td class="num">' + n(k) + '</td><td class="num">' + gs(t[k]) + '</td></tr>').join('')
@@ -430,10 +430,15 @@
             BG.toast('Caja del ' + BG.fmtFecha(f) + ' cerrada.');
             BG.render();
           }
-          if (b.dataset.accion === 'reabrir' && (await BG.pedirPin('Reabrir la caja del ' + BG.fmtFecha(f) + ' (y los días siguientes).'))) {
-            BG.reabrirCaja(f);
-            BG.toast('Caja reabierta.');
-            BG.render();
+          if (b.dataset.accion === 'reabrir') {
+            // El dueño confirma con su PIN; quien tiene el permiso delegado ya está autorizada y solo confirma (no tiene por qué saber el PIN del dueño).
+            const ok = BG.esDuena()
+              ? await BG.pedirPin('Reabrir la caja del ' + BG.fmtFecha(f) + ' (y los días siguientes).')
+              : (await BG.modal({ titulo: 'Reabrir la caja del ' + BG.fmtFecha(f), cuerpo: '<p>Se reabre ese día y los siguientes: sus movimientos vuelven a poder cambiarse. Queda en la auditoría.</p>',
+                acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Reabrir', valor: 'ok', clase: 'btn-primary' }] })) === 'ok';
+            if (ok) {
+              try { BG.reabrirCaja(f); BG.toast('Caja reabierta.'); BG.render(); } catch (err) { BG.toast(err.message, 'error'); }
+            }
           }
         });
       },
@@ -457,10 +462,9 @@
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
-  /** Baja un archivo con todo lo cargado, para guardarlo o pasarlo a otro dispositivo. */
-  function descargarCopia() {
-    const nombre = 'berry-glow-copia-' + BG.hoy() + '.json';
-    const url = URL.createObjectURL(new Blob([BG.copiaDeSeguridad()], { type: 'application/json' }));
+  /** Baja un archivo de texto (copias de seguridad). */
+  function bajarJson(nombre, texto) {
+    const url = URL.createObjectURL(new Blob([texto], { type: 'application/json' }));
     const a = document.createElement('a');
     a.href = url;
     a.download = nombre;
@@ -468,6 +472,11 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
+    return nombre;
+  }
+  /** Baja un archivo con todo lo cargado, para guardarlo o pasarlo a otro dispositivo. */
+  function descargarCopia() {
+    const nombre = bajarJson('berry-glow-copia-' + BG.hoy() + '.json', BG.copiaDeSeguridad());
     BG.marcarCopia();
     return nombre;
   }
@@ -724,8 +733,10 @@
         ? '<div class="callout">' + icon('shield') + '<div><strong>' + esc(u.nombre) + ' · dueño</strong> (usuario «' + esc(u.usuario) + '»). Ve y cambia todo: costos, dólar, precios, anulaciones, ajustes, resumen y la auditoría de lo que hace cada usuario.</div></div>'
         : '<div class="stack"><p><strong>' + esc(u.nombre) + ' · vendedora</strong> <span class="small muted">(usuario «' + esc(u.usuario) + '»)</span></p><div class="perm-list">'
           + '<label class="perm is-fixed"><input type="checkbox" checked disabled><strong>Ver ventas, clientes y cuánto debe cada uno</strong><span>Siempre, es la base de su perfil.</span></label>'
-          + BG.PERMISOS.map(([k, t, desc]) => '<label class="perm"><input type="checkbox" data-permiso="' + k + '" data-usuario="' + u.id + '"' + (u.permisos && u.permisos[k] ? ' checked' : '') + '><strong>' + esc(t) + '</strong><span>' + esc(desc) + '</span></label>').join('')
-          + '<label class="perm is-fixed"><input type="checkbox" disabled><strong>Costos, dólar, márgenes, anular, gastos y ganancia neta, pedidos, conteo, límites de crédito, puntos, resumen y ajustes</strong><span>Nunca: son solo del dueño. Ella solo ve los avisos al vender.</span></label>'
+          // Agrupados por tarea. Lo que ya estaba configurado se conserva tal cual; lo nuevo viene apagado, salvo «Ver costos» (hoy habilitado para ella).
+          + BG.GRUPOS_PERMISOS.map(([g, titulo]) => '<h3 class="perm-grupo">' + esc(titulo) + '</h3>' + BG.PERMISOS.filter((x) => x[3] === g)
+            .map(([k, t, desc]) => '<label class="perm"><input type="checkbox" data-permiso="' + k + '" data-usuario="' + u.id + '"' + (BG.permisoDe(u, k) ? ' checked' : '') + '><strong>' + esc(t) + '</strong><span>' + esc(desc) + '</span></label>').join('')).join('')
+          + '<label class="perm is-fixed"><input type="checkbox" disabled><strong>Siguen siendo solo del dueño</strong><span>Cambiar el dólar, el courier y el redondeo; gastos, cuenta de ahorro y ganancia neta; pedidos al proveedor; límites de crédito y programa de puntos; resumen, reportes y auditoría; ajustes, usuarios, permisos y copias de seguridad; borrar una clienta con todo lo suyo. Ella ve solo los avisos al vender.</span></label>'
           + '</div></div>').join('')
       + '<div class="field"><span class="field-label" id="aj-min">Margen mínimo sin tu autorización</span><div class="seg" role="radiogroup" aria-labelledby="aj-min">'
       + [0, 20, 30, 40, 50].map((m) => '<label><input type="radio" name="aj-minimo" value="' + m + '"' + (BG.margenMinimo() === m ? ' checked' : '') + '>' + m + ' %</label>').join('') + '</div>'
@@ -794,7 +805,8 @@
                 cuerpo: (BG.enLaNube()
                   ? '<p>Los datos de la tienda se <strong>reemplazan en la nube</strong> por los del archivo «' + esc(file.name) + '»: el cambio lo van a ver <strong>todos los aparatos</strong>, también el de ' + esc(BG.nombreVendedora()) + '.</p>'
                   : '<p>Los datos que tenés ahora en este dispositivo se <strong>reemplazan</strong> por los del archivo «' + esc(file.name) + '».</p>')
-                  + '<p>Antes de guardar nada, el sistema controla que las cuentas de esa copia cuadren.</p>',
+                  + '<p>Antes de guardar nada, el sistema controla que las cuentas de esa copia cuadren <strong>y que cada dato sea coherente</strong> (por ejemplo, que no deje stock en negativo). Si algo no cierra, no se toca nada.</p>'
+                  + '<p>Si todo cierra, se te baja un archivo con <strong>cómo estaban los datos ahora</strong>, para que puedas volver atrás.</p>',
                 acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Restaurar', valor: 'ok', clase: 'btn-primary' }],
               });
               if (ok !== 'ok') return;
@@ -803,8 +815,10 @@
               BG.toast(err.message || 'No se pudo leer ese archivo.', 'error');
               return;
             }
+            // Lo de antes se baja a un archivo: es la forma de volver atrás si la copia no era la que se quería.
+            try { bajarJson('berry-glow-antes-de-restaurar-' + BG.hoy() + '.json', r.anterior); } catch (er) { /* igual queda guardado en este aparato (BG.copiaAnterior) */ }
             BG.renderChrome();
-            BG.toast('Copia restaurada: ' + r.clientes + ' clientas y ' + r.ventas + ' ventas.');
+            BG.toast('Copia restaurada: ' + r.clientes + ' clientas y ' + r.ventas + ' ventas. Se bajó un archivo con cómo estaba todo antes.');
             BG.ir('#/inicio');
             return;
           }
@@ -846,8 +860,10 @@
           if (t.name === 'aj-minimo') { BG.cambiarMargenMinimo(Number(t.value)); BG.toast('Margen mínimo sin autorización: ' + t.value + ' %.'); }
           if (t.dataset && t.dataset.permiso) {
             const u = BG.db.usuarios.find((x) => x.id === t.dataset.usuario);
-            BG.actualizarPermiso(u.id, t.dataset.permiso, t.checked);
-            BG.toast((t.checked ? 'Habilitado para ' : 'Quitado a ') + u.nombre + ': ' + BG.PERMISOS.find((p) => p[0] === t.dataset.permiso)[1].toLowerCase() + '.');
+            try {
+              BG.actualizarPermiso(u ? u.id : t.dataset.usuario, t.dataset.permiso, t.checked);
+              BG.toast((t.checked ? 'Habilitado para ' : 'Quitado a ') + u.nombre + ': ' + BG.PERMISOS.find((p) => p[0] === t.dataset.permiso)[1].toLowerCase() + '.');
+            } catch (err) { BG.toast(err.message, 'error'); BG.render(); }
           }
           if (t.id === 'aj-c1' || t.id === 'aj-c2') { BG.guardarMarca(t.id === 'aj-c1' ? { principal: t.value } : { acento: t.value }); BG.toast('Color guardado: se ve en el recibo.'); }
           if (t.id === 'aj-tam-a4' || t.id === 'aj-tam-ticket') {

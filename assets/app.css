@@ -1556,3 +1556,16 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 /* Un botón con texto largo dentro de un aviso (por ejemplo «Sumar los puntos de lo ya pagado») pasa a dos renglones en vez de salirse en celulares angostos. */
 .callout > div { min-width: 0; }
 .callout .btn { white-space: normal; text-align: left; max-width: 100%; height: auto; min-height: 36px; }
+
+/* ── Lo anulado en los comprobantes (HANDOFF §29) ──
+   Se dice con palabras («COMPRA ANULADA», «PAGO ANULADO»): el ticket sale en blanco y negro. El gris, el borde punteado y el importe tachado solo refuerzan. */
+.r-anulada { margin: 0 0 10px; padding: 9px 12px; border: 2px dashed var(--r-muted); border-radius: 8px; font-size: 13px; }
+.r-pago-caja.is-anulado { border: 2px dashed var(--r-muted); background: #fff; }
+.r-pago-caja.is-anulado span, .r-pago-caja.is-anulado strong { color: var(--r-muted); }
+.r-pago-caja.is-anulado strong { text-decoration: line-through; }
+.r-saldo.is-anulada { background: var(--r-muted); }
+.r-pago-anulado td { color: var(--r-muted); }
+.r-pago-anulado .num { text-decoration: line-through; }
+
+/* Ajustes → Usuarios y permisos: los permisos agrupados por tarea (HANDOFF §29). */
+.perm-grupo { margin: 16px 0 4px; font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }

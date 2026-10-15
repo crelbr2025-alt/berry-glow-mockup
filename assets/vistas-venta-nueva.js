@@ -345,9 +345,9 @@
           : '<dt><strong>Pagó de más</strong></dt><dd class="big due">' + gs(-t.resto) + '</dd><dd class="span hint">Al registrar vas a elegir si es vuelto o saldo a favor.</dd>');
       $('#ss-total', root).textContent = gs(t.total);
       b.items.forEach((it, i) => { const s = $('#sub-' + i, root); if (s) s.textContent = gs((it.precio || 0) * it.cantidad); });
-      // Ganancia de toda la venta: el dueño la ve siempre; la vendedora, cuando cambió algún precio o hizo descuento.
+      // Ganancia de toda la venta: la ve quien tiene «Ver costos» (el dueño siempre); la vendedora sin ese permiso, cuando cambió algún precio o hizo descuento.
       const conCambios = b.items.some(esEspecial) || t.descuento > 0;
-      const ev = b.items.length && t.total > 0 && (duena || (puedeEspecial && conCambios)) ? BG.evaluarPrecio(t.total, sum(b.items, (it) => costoDe(it) * it.cantidad)) : null;
+      const ev = b.items.length && t.total > 0 && (BG.veCostos() || (puedeEspecial && conCambios)) ? BG.evaluarPrecio(t.total, sum(b.items, (it) => costoDe(it) * it.cantidad)) : null;
       $('#s-ganancia', root).innerHTML = ev ? '<p class="precio-info"><span class="muted">En toda la venta:</span> ' + BG.infoPrecio(ev) + '</p>' : '';
       pintarPlan(t.resto);
       pintarPuntosPago(t);
@@ -428,6 +428,11 @@
       pintarTotales();
       pintarHay();
     };
+    // Un doble toque en «Registrar» no puede crear dos ventas: mientras una se está registrando se ignora el otro toque, y la venta lleva una
+    // clave (`opId`) con la que el motor reconoce un reintento de la misma operación.
+    const opId = BG.uid('op');
+    let enCurso = false;
+    const registrarUnaVez = async () => { if (enCurso) return; enCurso = true; try { await registrar(); } finally { enCurso = false; } };
     const registrar = async () => {
       const err = $('#err-venta', root);
       const fallar = (msg) => { err.textContent = msg; err.hidden = false; BG.toast(msg, 'error'); };
@@ -502,7 +507,7 @@
       let res;
       try {
         res = BG.registrarVenta({
-          clienteId: b.clienteId, fecha: b.fecha, descuento: descuento(), partes: partes, usarCredito: t.credito, excedenteACredito: aCredito, autorizadoPor: autorizadoPor,
+          opId: opId, clienteId: b.clienteId, fecha: b.fecha, descuento: descuento(), partes: partes, usarCredito: t.credito, excedenteACredito: aCredito, autorizadoPor: autorizadoPor,
           reservaId: b.reserva && b.reserva.clienteId === b.clienteId ? b.reserva.id : undefined,
           plan: conPlan ? { frecuencia: b.plan.frecuencia, n: b.plan.n, primera: b.plan.primera } : null, creditoAutorizadoPor: creditoAutorizadoPor,
           sumarPuntos: opcionesPuntosPago(b.pp).sumarPuntos, puntosEnRecibo: opcionesPuntosPago(b.pp).puntosEnRecibo,
@@ -655,7 +660,7 @@
             pintarTotales();
             const ult = $('#monto-' + (b.partes.length - 1), root);
             if (ult) ult.focus();
-          } else if (a === 'registrar') registrar();
+          } else if (a === 'registrar') registrarUnaVez();
         });
       },
     };
@@ -788,6 +793,10 @@
       if (host.innerHTML !== h) host.innerHTML = h;
     };
     const pintarTodo = () => { pintarCliente(); pintarDestino(); pintarFavor(); pintarCuota(); pintarResumen(); };
+    // Igual que en la venta: un doble toque no cobra dos veces, y el cobro lleva una clave de operación para reconocer un reintento.
+    const opId = BG.uid('op');
+    let enCurso = false;
+    const registrarUnaVez = async () => { if (enCurso) return; enCurso = true; try { await registrar(); } finally { enCurso = false; } };
     const registrar = async () => {
       const err = $('#err-cobro', root);
       const fallar = (msg) => { err.textContent = msg; err.hidden = false; BG.toast(msg, 'error'); };
@@ -810,7 +819,7 @@
       }
       let res;
       try {
-        res = BG.registrarCobro(Object.assign({ clienteId: e.clienteId, destino: e.destino, fecha: e.fecha, partes: partes, excedenteACredito: aCredito, usarCredito: u }, opcionesPuntosPago(e.pp)));
+        res = BG.registrarCobro(Object.assign({ opId: opId, clienteId: e.clienteId, destino: e.destino, fecha: e.fecha, partes: partes, excedenteACredito: aCredito, usarCredito: u }, opcionesPuntosPago(e.pp)));
       } catch (er) {
         return fallar(er.message);
       }
@@ -858,7 +867,7 @@
             pintarResumen();
             const ult = $('#monto-' + (e.partes.length - 1), root);
             if (ult) ult.focus();
-          } else if (a === 'registrar') registrar();
+          } else if (a === 'registrar') registrarUnaVez();
         });
       },
     };

@@ -59,7 +59,7 @@
           + '<div class="demo-hint"><span><strong>Datos de ejemplo:</strong> el ingreso es de mentira y no pide contraseña. Elegí con qué vista entrar:</span>'
           + '<div class="row"><button type="button" class="btn btn-sm" data-demo="ariel">Entrar como Ariel (dueño)</button>'
           + '<button type="button" class="btn btn-sm" data-demo="jazmin">Entrar como Jazmín (vendedora)</button></div>'
-          + '<span class="small">Jazmín vende, cobra, acuerda cuotas, hace devoluciones y cambios, emite recibos, prepara envíos y puede poner precios especiales (ve la ganancia de ese precio); no ve costos ni dólar y no puede anular. Ariel ve todo y el registro de lo que hace cada una.</span></div>')
+          + '<span class="small">Jazmín vende, cobra, acuerda cuotas, hace devoluciones y cambios, emite recibos, prepara envíos y puede poner precios especiales; ve los costos y el margen, pero no puede cambiar el dólar ni los gastos. Anular, corregir, dar puntos, archivar y reabrir la caja son de Ariel, salvo lo que él le habilite en Ajustes. Ariel ve todo y el registro de lo que hace cada una.</span></div>')
       + '<div class="login-tema"><span class="small muted">Tema de la pantalla</span>' + BG.selectorTema() + '</div>'
       + '</div></div>';
     const entrar = (usuario) => {
@@ -246,7 +246,7 @@
     const resMes = duena ? BG.resultado(mDesde, mHasta) : null;
     // Los primeros días del mes la ganancia da casi cero: al lado va cómo cerró el anterior, para que no parezca que se borró algo.
     const cierre = duena ? BG.cierreMesAnterior() : null;
-    const cumples = duena ? BG.db.clientes.map((c) => ({ c: c, k: BG.cumpleDe(c) })).filter((x) => x.k && x.k.enSemana && x.k.dias >= -1).sort((a, b) => a.k.dias - b.k.dias) : [];
+    const cumples = duena ? BG.clientesVivas().map((c) => ({ c: c, k: BG.cumpleDe(c) })).filter((x) => x.k && x.k.enSemana && x.k.dias >= -1).sort((a, b) => a.k.dias - b.k.dias) : [];
     const pedidosCamino = duena ? BG.db.pedidos.filter((p) => BG.estadoPedido(p) === 'en_camino') : [];
     const ultimoConteo = (BG.db.conteos || []).slice().sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
     const conteoViejo = !duena ? '' : !ultimoConteo ? 'todavía no se hizo ninguno; conviene contar una vez por mes.'
@@ -346,7 +346,8 @@
   BG.vistas.clientes = (args, params) => {
     const e = { filtro: params.get('filtro') || 'todos', q: params.get('q') || '' };
     e.orden = e.filtro === 'deben' ? 'saldo' : e.filtro === 'favor' ? 'favor' : 'nombre';
-    const todos = BG.db.clientes;
+    const todos = BG.clientesVivas();
+    const archivadas = BG.esDuena() || BG.puede('archivarClientas') ? BG.db.clientes.filter((c) => c.archivado) : [];   // las archivadas se ven solo desde el filtro «Archivadas» (el dueño y quien puede archivar)
     const nDeben = todos.filter((c) => BG.saldoCliente(c.id) > 0).length;
     const nFavor = todos.filter((c) => BG.creditoCliente(c.id) > 0).length;
     const totalFavor = sum(todos, (c) => Math.max(0, BG.creditoCliente(c.id)));
@@ -359,7 +360,7 @@
       + '<div class="search-box grow"><label class="sr-only" for="q-clientes">Buscar cliente</label>' + icon('search')
       + '<input id="q-clientes" class="search-input" type="search" autocomplete="off" placeholder="Nombre, CI/RUC o teléfono (tolera errores de tipeo)" value="' + esc(e.q) + '"></div>'
       + '<div class="chips" role="group" aria-label="Filtrar">' + chip('todos', 'Todos', todos.length) + chip('deben', 'Con saldo', nDeben) + chip('aldia', 'Al día', todos.length - nDeben)
-      + chip('favor', 'A favor', nFavor) + '</div>'
+      + chip('favor', 'A favor', nFavor) + (archivadas.length ? chip('archivadas', 'Archivadas', archivadas.length) : '') + '</div>'
       + '<label class="sr-only" for="orden">Ordenar</label><select id="orden" class="select select-auto">'
       + '<option value="nombre">Por nombre</option><option value="saldo">Mayor saldo primero</option><option value="antiguedad">Deuda más antigua primero</option><option value="favor">Mayor saldo a favor primero</option></select>'
       + '</div>'
@@ -367,7 +368,8 @@
       + '</div>';
     const pintar = (root) => {
       const q = e.q.trim();
-      let lista = q ? BG.buscarClientes(q, 200) : todos.slice();
+      const verArchivadas = e.filtro === 'archivadas';
+      let lista = q ? BG.buscarClientes(q, 200, verArchivadas).filter((c) => !!c.archivado === verArchivadas) : (verArchivadas ? archivadas.slice() : todos.slice());
       const saldos = new Map(lista.map((c) => [c.id, BG.saldoCliente(c.id)]));
       if (e.filtro === 'deben') lista = lista.filter((c) => saldos.get(c.id) > 0);
       if (e.filtro === 'aldia') lista = lista.filter((c) => saldos.get(c.id) <= 0);
@@ -496,6 +498,33 @@
    * exactamente qué se va a ir (y qué días de caja cambian) y se pide el PIN: no es una anulación, es un
    * borrado de verdad, pensado para las clientas de prueba o cargadas por error.
    */
+  /** Archivar (o desarchivar) una clienta: sale de las listas y del buscador; no cambia ningún número. */
+  BG.archivarClienteUI = async (c) => {
+    const p = BG.puedeArchivarCliente(c);
+    if (!p.ok) { BG.toast(p.razon, 'error'); return false; }
+    if (c.archivado) {
+      BG.desarchivarCliente(c.id);
+      BG.toast(c.nombre + ' volvió a las listas.');
+      BG.render();
+      return true;
+    }
+    let motivo = '';
+    const r = await BG.modal({
+      titulo: 'Archivar a ' + c.nombre,
+      cuerpo: '<p>Deja de salir en las listas y en el buscador, y no se le puede vender hasta que la desarchives. <strong>No cambia ningún número</strong>: sus compras, pagos, recibos y puntos quedan exactamente igual.</p>'
+        + '<div class="field"><label for="ac-motivo">Motivo <span class="small muted">(opcional)</span></label>'
+        + '<input id="ac-motivo" class="input" maxlength="120" autocomplete="off" placeholder="Ej.: hace mucho que no compra"></div>',
+      acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Archivar', valor: 'ok', clase: 'btn-primary' }],
+      validar: (v, dlg) => { motivo = $('#ac-motivo', dlg).value.trim(); return true; },
+      onMount: (dlg) => $('#ac-motivo', dlg).focus(),
+    });
+    if (r !== 'ok') return false;
+    BG.archivarCliente(c.id, motivo);
+    BG.toast(c.nombre + ' quedó archivada. La encontrás en Clientes → Archivadas.');
+    BG.ir('#/clientes');
+    return true;
+  };
+
   BG.borrarClienteUI = async (c) => {
     const puede = BG.puedeBorrarCliente(c);
     if (!puede.ok) { BG.toast(puede.razon, 'error'); return false; }
@@ -504,6 +533,8 @@
     const detalle = lo.conMovimientos
       ? '<div class="callout callout-warn">' + icon('alert') + '<div><strong>Se borra también todo lo suyo:</strong><ul class="efecto-lista">'
         + linea(lo.ventas.length, 'venta', 'ventas', ' por ' + gs(lo.vendido))
+        // Las ventas dejan de existir, así que lo que se había llevado vuelve a figurar en el stock: por eso borrar es para pruebas, no para una clienta real.
+        + (() => { const u = sum(lo.ventas.filter((v) => !v.anulada), (v) => sum(v.items.filter((it) => it.productoId), BG.cantidadViva)); return u ? '<li><strong>' + u + (u === 1 ? ' unidad vuelve' : ' unidades vuelven') + ' a figurar en el stock</strong> (aunque la clienta se las llevó)</li>' : ''; })()
         + linea(lo.pagos.length, 'cobro', 'cobros', ' por ' + gs(lo.cobrado))
         + (lo.devuelto ? '<li>' + gs(lo.devuelto) + ' que se le devolvieron en plata</li>' : '')
         + (lo.aFavor > 0 ? '<li>' + gs(lo.aFavor) + ' de saldo a favor</li>' : '')
@@ -518,7 +549,7 @@
         + (lo.diasCerrados.length ? '<p class="small t-devuelto">Tiene movimientos en ' + lo.diasCerrados.length + (lo.diasCerrados.length === 1 ? ' día con la caja ya cerrada' : ' días con la caja ya cerrada')
           + ' (' + lo.diasCerrados.slice(0, 3).map(BG.fmtFechaCorta).join(', ') + (lo.diasCerrados.length > 3 ? '…' : '') + '): el arqueo de ' + (lo.diasCerrados.length === 1 ? 'ese día' : 'esos días') + ' va a cambiar.</p>' : '')
         + '</div></div>'
-        + '<p class="hint">Si lo que querés es dejar sin efecto una compra, no borres la clienta: <strong>anulá esa venta</strong> y queda todo registrado.</p>'
+        + '<p class="hint">Si lo que querés es dejar sin efecto una compra, no borres la clienta: <strong>anulá esa venta</strong> y queda todo registrado. Si es una clienta real que ya no compra, usá <strong>Archivar</strong>: no cambia ningún número.</p>'
       : '<div class="callout">' + icon('info') + '<div>Esta clienta <strong>no tiene ninguna compra ni cobro</strong>: borrarla no cambia ningún número. Queda anotada en la auditoría.</div></div>';
     let motivo = '';
     const r = await BG.modal({
@@ -554,21 +585,21 @@
     const lineaSinPuntos = sinPuntos.length
       ? '<div class="callout callout-soft">' + icon('info') + '<div><p class="small">' + (sinPuntos.length === 1 ? 'Tiene 1 compra que no suma puntos' : 'Tiene ' + sinPuntos.length + ' compras que no suman puntos')
         + ' porque ' + (sinPuntos.some((x) => BG.esAnterior(x.v)) && !sinPuntos.every((x) => BG.esAnterior(x.v)) ? 'son de antes del programa' : sinPuntos.every((x) => BG.esAnterior(x.v)) ? 'son de antes del sistema' : 'son de antes del ' + BG.fmtFecha(BG.configFidelidad().desde) + ', cuando empezó el programa')
-        + '. ' + (BG.esDuena() ? 'Si querés, se los sumás: darían <strong>' + darian + (darian === 1 ? ' punto' : ' puntos') + '</strong>.' : 'Si corresponde sumárselos, lo hace ' + esc(BG.nombreDuena()) + '.') + '</p>'
-        + (BG.esDuena() ? '<button type="button" class="btn btn-sm" data-accion="puntos-aparte">' + icon('star', 'i-sm') + 'Sumar puntos de esas compras</button>' : '') + '</div></div>'
+        + '. ' + (BG.puede('darPuntos') ? 'Si querés, se los sumás: darían <strong>' + darian + (darian === 1 ? ' punto' : ' puntos') + '</strong>.' : 'Si corresponde sumárselos, lo hace ' + esc(BG.nombreDuena()) + '.') + '</p>'
+        + (BG.puede('darPuntos') ? '<button type="button" class="btn btn-sm" data-accion="puntos-aparte">' + icon('star', 'i-sm') + 'Sumar puntos de esas compras</button>' : '') + '</div></div>'
       : '';
     // Pagos ya hechos que no dieron sus puntos (compras que empezaron a sumar después, o pagos de antes de pasar a «con cada pago»).
     const sinSusPuntos = BG.comprasConPagosSinPuntos(c.id);
     const ptsSinSus = sinSusPuntos.reduce((a, x) => a + x.puntos, 0);
     const lineaPagosSinPuntos = sinSusPuntos.length
       ? '<div class="callout callout-soft">' + icon('info') + '<div><p class="small">' + (sinSusPuntos.length === 1 ? 'Una compra tiene' : sinSusPuntos.length + ' compras tienen') + ' pagos ya hechos que no sumaron sus puntos. '
-        + (BG.esDuena() ? 'Si querés, se los sumás: darían <strong>' + ptsSinSus + (ptsSinSus === 1 ? ' punto' : ' puntos') + '</strong>.' : 'Si corresponde sumárselos, lo hace ' + esc(BG.nombreDuena()) + '.') + '</p>'
-        + (BG.esDuena() ? '<button type="button" class="btn btn-sm" data-accion="puntos-pagos">' + icon('star', 'i-sm') + 'Sumar los puntos de lo ya pagado</button>' : '') + '</div></div>'
+        + (BG.puede('darPuntos') ? 'Si querés, se los sumás: darían <strong>' + ptsSinSus + (ptsSinSus === 1 ? ' punto' : ' puntos') + '</strong>.' : 'Si corresponde sumárselos, lo hace ' + esc(BG.nombreDuena()) + '.') + '</p>'
+        + (BG.puede('darPuntos') ? '<button type="button" class="btn btn-sm" data-accion="puntos-pagos">' + icon('star', 'i-sm') + 'Sumar los puntos de lo ya pagado</button>' : '') + '</div></div>'
       : '';
     // Solo el dueño puede darle puntos a mano (sin una compra): botón aparte, con alerta y PIN (BG.darPuntosUI).
-    const botonDar = BG.esDuena() ? '<button type="button" class="btn btn-sm" data-accion="dar-puntos">' + icon('star', 'i-sm') + 'Darle puntos a mano</button>' : '';
+    const botonDar = BG.puede('darPuntos') ? '<button type="button" class="btn btn-sm" data-accion="dar-puntos">' + icon('star', 'i-sm') + 'Darle puntos a mano</button>' : '';
     // Lo que le dio la tienda: el dueño ve el motivo y puede anularlo; la vendedora solo ve que lo tiene.
-    const dadosAMano = !p.manuales.length ? '' : BG.esDuena()
+    const dadosAMano = !p.manuales.length ? '' : BG.puede('darPuntos')
       ? '<div class="stack-sm"><p class="small"><strong>Puntos que le diste a mano</strong> (sin una compra)</p><ul class="lines">' + p.manuales.map((x) => '<li class="line"><div class="line-top"><div class="grow"><div class="row-title">+' + x.puntos + ' puntos · ' + BG.fmtFecha(x.fecha) + '</div>'
         + '<div class="row-sub">' + esc(x.motivo) + (x.nota ? ' · ' + esc(x.nota) : '') + ' · por ' + esc(x.usuario) + '</div></div>'
         + '<button type="button" class="btn btn-sm btn-quiet" data-accion="quitar-puntos-manuales" data-id="' + esc(x.id) + '">Quitar</button></div></li>').join('') + '</ul></div>'
@@ -674,7 +705,8 @@
       acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Sí, darle los puntos', valor: 'ok', clase: 'btn-danger-solid' }],
     });
     if (r2 !== 'ok') return false;
-    if (!(await BG.pedirPin('Darle ' + st.puntos + ' puntos (' + gs(st.puntos * f.valorPunto) + ') a ' + c.nombre + ' sin una compra.'))) return false;
+    // El dueño confirma con su PIN (es plata que la tienda regala); quien tiene el permiso delegado ya está autorizada y confirma en este mismo cuadro.
+    if (BG.esDuena() && !(await BG.pedirPin('Darle ' + st.puntos + ' puntos (' + gs(st.puntos * f.valorPunto) + ') a ' + c.nombre + ' sin una compra.'))) return false;
     BG.darPuntos({ clienteId: c.id, puntos: st.puntos, motivo: st.motivo, nota: st.nota });
     BG.toast('Listo: le diste ' + st.puntos + ' puntos a ' + c.nombre.split(' ')[0] + ' y ahora tiene ' + BG.puntosDe(c.id).puntos + '. Quedó anotado en su ficha y en la auditoría.');
     return true;
@@ -1013,12 +1045,15 @@
       + '<span>' + icon('phone', 'i-sm') + esc(c.telefono) + '</span>'
       + (c.direccion ? '<span>' + esc(c.direccion) + '</span>' : '') + (c.email ? '<span>' + esc(c.email) + '</span>' : '')
       + '<span class="muted">Cliente desde el ' + BG.fmtFecha(c.alta) + '</span></p></div>'
-      + (BG.puede('editarClientes') || BG.esDuena()
+      + (BG.puede('editarClientes') || BG.puede('archivarClientas') || BG.esDuena()
         ? '<div class="page-actions">'
           + (BG.puede('editarClientes') ? '<a class="btn btn-quiet" href="#/clientes/' + c.id + '/editar">' + icon('edit') + 'Editar</a>' : '')
           + (BG.esDuena() ? '<button type="button" class="btn btn-quiet" data-accion="compra-anterior">' + icon('file') + 'Lo que llevó antes</button>' : '')
+          + (BG.puede('archivarClientas') ? '<button type="button" class="btn btn-quiet" data-accion="archivar-cliente">' + icon('box2') + (c.archivado ? 'Desarchivar' : 'Archivar') + '</button>' : '')
           + (BG.esDuena() ? '<button type="button" class="btn btn-quiet btn-del" data-accion="borrar-cliente">' + icon('trash') + 'Borrar</button>' : '')
           + '</div>' : '') + '</div>'
+      + (c.archivado ? '<div class="callout callout-warn">' + icon('box2') + '<div><strong>Clienta archivada el ' + BG.fmtFecha(c.archivado.fecha) + '.</strong> No sale en las listas ni en el buscador y no se le puede vender '
+        + 'hasta desarchivarla; su historial, sus recibos y sus cuentas siguen igual.</div></div>' : '')
       + (aFavor > 0 ? '<section class="favor-banner" aria-label="Saldo a favor"><span class="favor-ic">' + icon('wallet') + '</span>'
         + '<div class="grow"><p class="favor-label">Saldo a favor</p><p class="favor-monto">' + gs(aFavor) + '</p>'
         + '<p class="small">La tienda le debe este monto. Se descuenta solo en su próxima compra' + (saldo > 0 ? ' o al cobrarle lo que debe' : '') + '; el detalle está en la pestaña «Saldo a favor».</p></div>'
@@ -1099,6 +1134,7 @@
             else if (b.dataset.accion === 'apartar' && (await BG.apartarUI({ clienteId: c.id }))) BG.render();
             else if (b.dataset.accion === 'anotar-deseo' && (await BG.deseoUI({ clienteId: c.id }))) BG.render();
             else if (b.dataset.accion === 'borrar-cliente') await BG.borrarClienteUI(c);
+            else if (b.dataset.accion === 'archivar-cliente') await BG.archivarClienteUI(c);
           } catch (err) { BG.toast(err.message, 'error'); }
         });
       },

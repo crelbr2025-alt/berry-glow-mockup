@@ -21,10 +21,10 @@
   const soloDigitos = (s) => String(s == null ? '' : s).replace(/\D/g, '');
   const sum = (arr, f) => arr.reduce((s, x) => s + (f ? f(x) : x), 0);
   const gs = (n) => C.fmtGs(n);
-  // Identificadores: la hora, un contador de este aparato (dos registros creados en el mismo milisegundo nunca chocan) y cuatro
+  // Identificadores: la hora, un contador de este aparato (dos registros creados en el mismo milisegundo nunca chocan: son 46.656 por milisegundo) y cuatro
   // caracteres al azar (dos aparatos distintos tampoco).
   let secuenciaUid = 0;
-  const uid = (p) => p + Date.now().toString(36) + (secuenciaUid++ % 1296).toString(36).padStart(2, '0') + Math.random().toString(36).slice(2, 6);
+  const uid = (p) => p + Date.now().toString(36) + (secuenciaUid++ % 46656).toString(36).padStart(3, '0') + Math.random().toString(36).slice(2, 6);
 
   // Fechas: siempre la fecha local del dispositivo (Paraguay), nunca la de UTC.
   const isoLocal = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
@@ -59,6 +59,7 @@
   const KEY_MIOS_INFO = 'berryglow.mockup.mios.info';
   const KEY_MODO = 'berryglow.mockup.modo';
   const KEY_COPIA = 'berryglow.mockup.copia';
+  const KEY_ANTES = 'berryglow.mockup.antes';     // cómo estaban los datos justo antes de restaurar una copia
   // La versión sube solo cuando un dato que ya existe cambia de forma. Agregar campos o listas opcionales
   // (compras anteriores, artículos agregados, puntos sumados a mano, la cuenta de ahorro) no la sube a
   // propósito: un aparato con el sistema anterior abierto sigue leyendo y guardando el documento entero,
@@ -171,8 +172,14 @@
   BG.copiaDeSeguridad = () => JSON.stringify({ sistema: 'berry.Glow_py', version: VERSION_DB, fecha: ahora(), datos: BG.db });
   BG.fechaCopia = () => BG.leer(KEY_COPIA);
   BG.marcarCopia = () => BG.escribir(KEY_COPIA, ahora());
-  /** Reemplaza los datos de la tienda con los de una copia. Devuelve un resumen; no guarda nada si algo no cierra. */
+  /**
+   * Reemplaza los datos de la tienda con los de una copia. Solo el dueño. Antes de instalar nada se revisa la copia entera: que las dos cuentas
+   * cuadren **y** que cada dato sea coherente (BG.revisarIntegridad: stock que no queda negativo, montos enteros, nada que apunte a algo que no
+   * existe, totales que son los de sus artículos…). Si algo no cierra, no se toca nada. Si cierra, el estado de antes queda guardado en el aparato
+   * (`BG.copiaAnterior`) y se devuelve en `anterior`, para que la persona pueda volver atrás.
+   */
   BG.restaurarCopia = (texto) => {
+    if (!BG.esDuena()) throw new Error('Solo ' + BG.nombreDuena() + ' (dueño) puede restaurar una copia de seguridad.');
     let c;
     try { c = JSON.parse(texto); } catch (e) { throw new Error('Ese archivo no es una copia de seguridad del sistema.'); }
     const d = c && c.datos && c.datos.clientes ? c.datos : (c && c.clientes ? c : null);
@@ -184,13 +191,22 @@
       BG.db = d;
       if (!BG.cuadre().ok) problema = 'las cuentas por cobrar de esa copia no cuadran';
       else if (!BG.cuadreFavor().ok) problema = 'los saldos a favor de esa copia no cuadran';
+      else {
+        const graves = BG.revisarIntegridad().problemas.filter((x) => x.grave);
+        if (graves.length) problema = 'esa copia tiene datos que no son coherentes (' + graves.slice(0, 3).map((x) => x.texto).join('; ') + (graves.length > 3 ? '; y ' + (graves.length - 3) + ' más' : '') + ')';
+      }
     } finally {
       BG.db = antes;
     }
     if (problema) throw new Error('No se restauró nada: ' + problema + '.');
+    // El estado de antes se guarda ANTES de reemplazarlo: es lo que permite volver atrás si la copia no era la que se quería.
+    const anterior = BG.copiaDeSeguridad();
+    BG.escribir(KEY_ANTES, { fecha: ahora(), texto: anterior });
     if (BG.enLaNube()) { BG.usarDatosDeLaNube(d); BG.guardar(); } else BG.usarMisDatos(d, null);
-    return { clientes: d.clientes.length, ventas: d.ventas.length, fecha: c.fecha || '' };
+    return { clientes: d.clientes.length, ventas: d.ventas.length, fecha: c.fecha || '', anterior: anterior };
   };
+  /** Cómo estaban los datos justo antes de la última restauración (o null): { fecha, texto } con el mismo formato que una copia de seguridad. */
+  BG.copiaAnterior = () => BG.leer(KEY_ANTES);
 
   BG.db = null;
   if (BG.leer(KEY_MODO) === 'ejemplo') BG.usarDatosDeEjemplo();
@@ -242,27 +258,49 @@
   BG.nombreDuena = () => (BG.db.usuarios.find((u) => u.rol === 'admin') || { nombre: 'el dueño' }).nombre;
   BG.nombreVendedora = () => (BG.db.usuarios.find((u) => u.rol === 'vendedor') || { nombre: 'la vendedora' }).nombre;
 
-  /** Lo que el dueño puede habilitar o quitar a la vendedora (Ajustes → Usuarios y permisos). */
+  /**
+   * Lo que el dueño puede habilitar o quitar a la vendedora (Ajustes → Usuarios y permisos).
+   * [clave, título, descripción, grupo]. Las once primeras son las de siempre (se conservan tal cual, con sus valores guardados); las demás se agregaron el
+   * 15/10/2026 (HANDOFF §29) para que el dueño pueda dejar en manos de la vendedora tareas que antes eran solo suyas. **Una clave que todavía no está guardada
+   * en el perfil vale lo que dice `BG.PERMISOS_POR_DEFECTO`**: por defecto «no» (queda como estaba), salvo «Ver costos», que el dueño decidió dejarle a Jazmín.
+   */
   BG.PERMISOS = [
-    ['emitirRecibos', 'Emitir recibos', 'Imprimir, guardar en PDF y mandar por WhatsApp.'],
-    ['registrarVentas', 'Registrar ventas', 'Nueva venta con el precio de lista, sin ver costos.'],
-    ['preciosEspeciales', 'Poner precios especiales', 'Cambiar el precio de lista al vender o ajustarlo después (promoción, cliente frecuente…), siempre con el motivo.'],
-    ['verGanancia', 'Ver la ganancia de sus precios especiales', 'Ve cuánto gana la tienda y el margen del precio que pone. Con eso puede deducir el costo.'],
-    ['registrarCobros', 'Registrar cobros', 'Pagos, pagos mixtos, señas y cuotas con fecha.'],
-    ['devoluciones', 'Devoluciones y cambios', 'Devolver o cambiar un artículo de una venta. Lo que sobra queda como saldo a favor; devolver plata en efectivo pide tu PIN.'],
-    ['editarClientes', 'Crear y editar clientes', 'Alta de clientes nuevos y corrección de datos.'],
-    ['verPrecios', 'Ver la lista de precios', 'Precios de venta y stock, sin costos.'],
-    ['cargarProductos', 'Cargar productos nuevos', 'Da de alta artículos que llegaron. Para calcular el precio escribe el costo en dólares, así que ve el costo y el margen de lo que carga ella.'],
-    ['verCaja', 'Caja del día', 'Ver lo cobrado y hacer el cierre (reabrir es solo del dueño).'],
-    ['prepararEnvios', 'Preparar envíos', 'Cargar envíos, imprimir etiquetas y registrar el despacho.'],
+    ['emitirRecibos', 'Emitir recibos', 'Imprimir, guardar en PDF y mandar por WhatsApp.', 'vender'],
+    ['registrarVentas', 'Registrar ventas', 'Nueva venta a precio de lista. Ver los costos depende de «Ver costos».', 'vender'],
+    ['preciosEspeciales', 'Poner precios especiales', 'Cobrar un precio más alto que el de lista al vender o ajustarlo después (con el motivo). Cobrar menos o hacer descuentos lo hace solo el dueño.', 'vender'],
+    ['verGanancia', 'Ver la ganancia de sus precios especiales', 'Ve cuánto gana la tienda y el margen del precio que pone. Con eso puede deducir el costo.', 'costos'],
+    ['registrarCobros', 'Registrar cobros', 'Pagos, pagos mixtos, señas y cuotas con fecha.', 'vender'],
+    ['devoluciones', 'Devoluciones y cambios', 'Devolver o cambiar un artículo de una venta. Lo que sobra queda como saldo a favor; devolver plata en efectivo pide tu PIN.', 'vender'],
+    ['editarClientes', 'Crear y editar clientes', 'Alta de clientes nuevos y corrección de datos.', 'clientas'],
+    ['verPrecios', 'Ver la lista de precios', 'Precios de venta y stock. Los costos dependen de «Ver costos».', 'productos'],
+    ['cargarProductos', 'Cargar productos nuevos', 'Da de alta artículos que llegaron. Para calcular el precio escribe el costo en dólares, así que ve el costo y el margen de lo que carga ella.', 'productos'],
+    ['verCaja', 'Caja del día', 'Ver lo cobrado y hacer el cierre (reabrir un día cerrado es un permiso aparte).', 'caja'],
+    ['prepararEnvios', 'Preparar envíos', 'Cargar envíos, imprimir etiquetas y registrar el despacho.', 'vender'],
+    // Nuevos (15/10/2026): vienen apagados, salvo «Ver costos».
+    ['verCostos', 'Ver costos, dólar y márgenes', 'Ve el costo de cada producto, lo que gana la tienda en cada artículo y en cada venta, y el dólar y el courier con los que se calcularon los precios. No puede cambiarlos.', 'costos'],
+    ['cambiarPrecios', 'Cambiar el precio de lista de un producto', 'Cambia el precio de venta de un artículo (no el dólar ni el courier).', 'productos'],
+    ['hacerConteo', 'Hacer el conteo de inventario', 'Cuenta lo que hay y corrige el stock con su motivo (faltante, dañado, error de carga).', 'productos'],
+    ['reabrirCaja', 'Reabrir la caja de un día cerrado', 'Vuelve a abrir un día ya cerrado para corregirlo. Sin esto, solo vos lo reabrís.', 'caja'],
+    ['anularVentas', 'Anular ventas y pagos', 'Anula una venta o un pago con su motivo (nada se borra). Las unidades vuelven al stock y lo pagado pasa a saldo a favor.', 'corregir'],
+    ['corregirCompras', 'Corregir una compra y pasarla a otra clienta', 'Corrige una compra ya hecha (el ticket anterior queda guardado) o la pasa a otra clienta.', 'corregir'],
+    ['darPuntos', 'Dar y sumar puntos a mano', 'Darle puntos a una clienta sin compra y sumar los puntos de compras viejas o de lo ya pagado (de 10 en 10, con su motivo).', 'corregir'],
+    ['archivarClientas', 'Archivar clientas', 'Saca de las listas a la que ya no compra, sin cambiar ningún número. Borrar una clienta con todo lo suyo sigue siendo solo del dueño.', 'clientas'],
   ];
+  /** Lo que vale una clave que todavía no está guardada en el perfil de la vendedora. */
+  BG.PERMISOS_POR_DEFECTO = { verCostos: true };
+  BG.GRUPOS_PERMISOS = [['vender', 'Vender y cobrar'], ['clientas', 'Clientas'], ['productos', 'Productos y stock'], ['costos', 'Costos y ganancia'], ['caja', 'Caja'], ['corregir', 'Anular, corregir y puntos']];
+  /** El valor de un permiso en el perfil `u`: lo guardado, o el valor por defecto si todavía no se guardó. */
+  BG.permisoDe = (u, permiso) => {
+    const p = u && u.permisos;
+    if (p && Object.prototype.hasOwnProperty.call(p, permiso)) return !!p[permiso];
+    return BG.PERMISOS_POR_DEFECTO[permiso] === true;
+  };
   /** ¿El usuario actual puede hacer esto? El dueño puede todo; la vendedora, lo que tenga habilitado. */
   BG.puede = (permiso) => {
     if (!BG.sesion && !(BG.enLaNube() && BG.nube.perfil)) return false;
     if (BG.esDuena()) return true;
     if (permiso === 'verVentas' || permiso === 'verClientes') return true;
-    const u = BG.usuario();
-    return !!(u && u.permisos && u.permisos[permiso]);
+    return BG.permisoDe(BG.usuario(), permiso);
   };
 
   /* ── Consultas del dominio ───────────────────────────────────────────── */
@@ -334,7 +372,9 @@
     .filter((d) => d.saldo > 0)
     .sort((a, b) => b.saldo - a.saldo);
   /** Todos los clientes, primero los que más deben y después los que están al día, por nombre. */
-  BG.clientesPorDeuda = () => BG.db.clientes.slice().sort((a, b) => {
+  /** Las clientas que se ven en las listas y en los buscadores: sin las archivadas (siguen en el historial, los recibos y los cuadres). */
+  BG.clientesVivas = () => BG.db.clientes.filter((c) => !c.archivado);
+  BG.clientesPorDeuda = () => BG.clientesVivas().sort((a, b) => {
     const sa = BG.saldoCliente(a.id);
     const sb = BG.saldoCliente(b.id);
     return sb - sa || a.nombre.localeCompare(b.nombre);
@@ -603,17 +643,23 @@
       if (puntos) formas.push({ forma: 'Con tus puntos', monto: puntos, puntos: true });
       if (x.monto - puntos > 0) formas.push({ forma: BG.FORMAS[x.forma], monto: x.monto - puntos });
     });
+    const apl = (x) => {
+      const v = BG.venta(x.ventaId);
+      return { ventaId: v.id, numero: v.recibo, fecha: v.fecha, anterior: BG.esAnterior(v), sinDetalle: !!(v.anterior && v.anterior.sinDetalle), detalle: BG.detalleCorto(v), monto: x.monto, total: v.total, saldo: BG.saldoVenta(v) };
+    };
     return {
       numero: c.recibo, fecha: c.fecha, entregado: c.entregado, formas: formas, aplicado: c.aplicado, excedente: c.excedente, puntos: c.puntos,
-      aplicaciones: c.aplicaciones.map((x) => {
-        const v = BG.venta(x.ventaId);
-        return { ventaId: v.id, numero: v.recibo, fecha: v.fecha, anterior: BG.esAnterior(v), sinDetalle: !!(v.anterior && v.anterior.sinDetalle), detalle: BG.detalleCorto(v), monto: x.monto, total: v.total, saldo: BG.saldoVenta(v) };
-      }),
+      // Un cobro ANULADO (todas sus partes) ya no es un pago: se dice qué fue y cuándo se anuló, con el importe original, nunca «pago recibido ₲ 0».
+      anulado: !c.pagos.length && c.anulados.length ? { fecha: c.anuladoFecha, entregado: c.entregadoAnulado, aplicaciones: c.anulados.filter((x) => x.ventaId).map((x) => apl({ ventaId: x.ventaId, monto: x.total })) } : null,
+      // Una parte anulada de un cobro que sigue vigente: se avisa cuánto no cuenta.
+      parteAnulada: c.pagos.length && c.anulados.length ? { entregado: c.entregadoAnulado, fecha: c.anuladoFecha } : null,
+      aplicaciones: c.aplicaciones.map(apl),
     };
   };
   BG.cobroDe = (p) => {
     const todos = p.grupo ? BG.db.pagos.filter((x) => x.clienteId === p.clienteId && x.grupo === p.grupo) : [p];
     const vivos = todos.filter((x) => !x.anulado).sort((a, b) => a.ts.localeCompare(b.ts));
+    const anulados = todos.filter((x) => x.anulado);
     const formas = [];
     vivos.forEach((x) => x.partes.forEach((y) => {
       const f = formas.find((z) => z.forma === y.forma);
@@ -621,6 +667,7 @@
     }));
     return {
       recibo: p.recibo, fecha: p.fecha, ts: (vivos[0] || p).ts, pagos: vivos, formas: formas,
+      anulados: anulados, anuladoFecha: anulados.map((x) => x.anulado.fecha).sort().pop() || null, entregadoAnulado: sum(anulados, (x) => sum(x.partes, (y) => y.monto)),
       aplicado: sum(vivos, (x) => x.total), excedente: sum(vivos, (x) => x.excedente || 0), entregado: sum(vivos, (x) => sum(x.partes, (y) => y.monto)),
       puntos: sum(vivos, (x) => x.puntos || 0),
       aplicaciones: vivos.filter((x) => x.ventaId).map((x) => ({ pagoId: x.id, ventaId: x.ventaId, numero: BG.venta(x.ventaId).recibo, monto: x.total })),
@@ -1224,7 +1271,7 @@
   BG.costoPuntos = () => {
     const f = BG.configFidelidad();
     const prog = { cadaGs: f.cadaGs, valorPunto: f.valorPunto, cumple: f.cumple.activo ? f.cumple.porcentaje : 0 };
-    const clientas = BG.db.clientes.map((c) => ({ c: c, p: BG.puntosDe(c.id) })).filter((x) => x.p);
+    const clientas = BG.clientesVivas().map((c) => ({ c: c, p: BG.puntosDe(c.id) })).filter((x) => x.p);
     const enCirculacion = sum(clientas, (x) => x.p.puntos);
     const porGanar = sum(clientas, (x) => x.p.pendientes);
     const canjes = BG.db.canjes || [];
@@ -1626,8 +1673,10 @@
   BG.fmtMargen = (m) => (Number.isInteger(m) ? String(m) : m.toFixed(1).replace('.', ',')) + ' %';
   /** ¿Hace falta el PIN del dueño? Solo cuando la vendedora baja del mínimo; el dueño decide solo. */
   BG.pideAutorizacion = (ev) => !BG.esDuena() && !!ev && (ev.estado === 'minimo' || ev.estado === 'perdida');
-  /** ¿El usuario ve ganancia y margen? El dueño siempre; la vendedora, si tiene el permiso. */
-  BG.veGanancia = () => BG.esDuena() || BG.puede('verGanancia');
+  /** ¿El usuario ve costos, dólar y márgenes? El dueño siempre; la vendedora, si tiene «Ver costos» (hoy viene habilitado). */
+  BG.veCostos = () => BG.puede('verCostos');
+  /** ¿Ve la ganancia y el margen del precio que pone? Con «Ver costos» sí; sin él, solo si tiene «Ver la ganancia de sus precios especiales». */
+  BG.veGanancia = () => BG.veCostos() || BG.puede('verGanancia');
   /** registrado: el precio ya quedó guardado (y autorizado si hacía falta), así que no se pide nada. */
   BG.pillPrecio = (ev, registrado) => {
     if (!ev) return '';
@@ -1726,13 +1775,14 @@
     }
     return total / qs.length;
   }
-  BG.buscarClientes = (q, max) => {
+  BG.buscarClientes = (q, max, conArchivadas) => {
     const t = String(q || '').trim();
     if (!t) return [];
     const dig = soloDigitos(t);
     const esNumero = dig.length >= 2 && /^[\d\s.+-]+$/.test(t);
     const res = [];
     for (const c of BG.db.clientes) {
+      if (c.archivado && !conArchivadas) continue;   // las archivadas no salen en el buscador (salvo donde se buscan ventas viejas)
       let s = 0;
       if (esNumero) {
         const ci = soloDigitos(c.ci);
@@ -1882,11 +1932,10 @@
     if (!d.startsWith('595')) d = '595' + d.replace(/^0/, '');
     return 'https://wa.me/' + d + '?text=' + t;
   };
+  /** Link de WhatsApp a una clienta: el mismo armado de número que `waLinkTel` (una sola regla: con o sin 0, con o sin 595; sin número se elige el chat). */
   BG.waLink = (c, texto) => {
-    const t = encodeURIComponent(texto);
-    if (!c || c.demo) return 'https://wa.me/?text=' + t;
-    const tel = soloDigitos(c.telefono).replace(/^0/, '');
-    return 'https://wa.me/595' + tel + '?text=' + t;
+    if (!c || c.demo) return 'https://wa.me/?text=' + encodeURIComponent(texto);
+    return BG.waLinkTel(c.telefono, texto);
   };
 
   BG.toast = (msg, tipo) => {
@@ -2086,7 +2135,7 @@
     [/^\/productos\/nuevo$/, 'productoNuevo', 'cargarProductos'],
     [/^\/productos\/pedido$/, 'pedido', true],
     [/^\/productos\/importar$/, 'importar', true],
-    [/^\/productos\/conteo$/, 'conteo', true],
+    [/^\/productos\/conteo$/, 'conteo', 'hacerConteo'],
     [/^\/pedidos$/, 'pedidos', true],
     [/^\/pedidos\/nuevo$/, 'pedidoForm', true],
     [/^\/pedidos\/([\w-]+)\/editar$/, 'pedidoForm', true],
@@ -2170,12 +2219,13 @@
     const cfg = BG.db.config;
     $('#nav').innerHTML = navItems().map((n) => (n[0] === '-' ? '<div class="nav-sep" role="separator"></div>'
       : '<a class="nav-item" href="#/' + n[0] + '" data-nav="' + n[0] + '">' + icon(n[2]) + '<span>' + n[1] + '</span></a>')).join('');
-    $('#sidebar-foot').innerHTML = (d ? '<div class="params">'
+    // El dólar y el courier los ve quien tiene «Ver costos» (el dueño siempre); solo el dueño los puede cambiar.
+    $('#sidebar-foot').innerHTML = (d || BG.veCostos() ? '<div class="params">'
       + '<div class="params-row"><span>Dólar</span><strong>' + C.fmtCot(cfg.cotizacion.valor) + '</strong></div>'
       + '<div class="params-row"><span>Courier</span><strong>' + C.fmtUSD(cfg.tarifa.valor) + '/kg</strong></div>'
-      + '<a href="#/ajustes">Cambiar parámetros</a></div>' : '')
+      + (d ? '<a href="#/ajustes">Cambiar parámetros</a>' : '') + '</div>' : '')
       + '<div class="user-box"><span class="avatar">' + esc(iniciales(u.nombre)) + '</span><div class="grow"><strong>' + esc(u.nombre) + '</strong>'
-      + '<small>' + (d ? 'Dueño · ve y cambia todo' : 'Vendedora · sin costos') + '</small></div>'
+      + '<small>' + (d ? 'Dueño · ve y cambia todo' : BG.veCostos() ? 'Vendedora' : 'Vendedora · sin costos') + '</small></div>'
       + '<button type="button" class="btn-icon" data-action="salir" aria-label="Cerrar sesión" title="Cerrar sesión">' + icon('logout') + '</button></div>';
     // Franja de arriba: avisa qué datos se están viendo. En uso real la vendedora no la necesita (las copias son del dueño).
     const mios = BG.modoDatos === 'mios';
@@ -2306,7 +2356,7 @@
     BG.sesion = { usuarioId: u.id, rol: u.rol };
     BG.guardarSesion();
     renderChrome();
-    BG.toast(u.rol === 'admin' ? 'Vista de ' + u.nombre + ' (dueño): se ve y se cambia todo.' : 'Vista de ' + u.nombre + ' (vendedora): sin costos, dólar ni márgenes.');
+    BG.toast(u.rol === 'admin' ? 'Vista de ' + u.nombre + ' (dueño): se ve y se cambia todo.' : 'Vista de ' + u.nombre + ' (vendedora): ' + (BG.veCostos() ? 've los costos, pero no cambia el dólar ni los márgenes.' : 'sin costos, dólar ni márgenes.'));
     if (BG.rutaPermitida(ruta().path)) BG.render(); else BG.ir('#/inicio');
   };
 

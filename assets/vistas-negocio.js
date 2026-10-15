@@ -328,7 +328,7 @@
       const falt = sum(difs.filter((x) => x.d < 0), (x) => -x.d * (x.p.costoTotalGs || 0));
       const sobr = sum(difs.filter((x) => x.d > 0), (x) => x.d * (x.p.costoTotalGs || 0));
       $('#conteo-res', root).innerHTML = '<dl class="summary"><dt>Productos contados</dt><dd>' + contados.length + '</dd><dt>Con diferencia</dt><dd>' + difs.length + '</dd>'
-        + '<div class="sep"></div><dt>Faltante al costo</dt><dd class="' + (falt ? 'due' : '') + '">' + gs(falt) + '</dd><dt>Sobrante al costo</dt><dd>' + gs(sobr) + '</dd></dl>'
+        + (BG.veCostos() ? '<div class="sep"></div><dt>Faltante al costo</dt><dd class="' + (falt ? 'due' : '') + '">' + gs(falt) + '</dd><dt>Sobrante al costo</dt><dd>' + gs(sobr) + '</dd>' : '') + '</dl>'
         + '<p class="hint">Solo se guardan los productos con un número escrito. Las diferencias corrigen el stock con su motivo; las ventas no se tocan.</p>';
     };
     const pintarHist = () => {
@@ -336,7 +336,7 @@
       $('#conteo-hist', root).innerHTML = cs.length ? '<ul class="lines">' + cs.map((c) => {
         const aj = (BG.db.ajustesStock || []).filter((a) => a.conteoId === c.id);
         return '<li class="line"><div class="row-title">' + BG.fmtFecha(c.fecha) + ' · ' + c.contados + ' productos contados · ' + (c.diferencias ? c.diferencias + ' con diferencia' : 'sin diferencias') + '</div>'
-          + '<div class="row-sub">por ' + esc(c.usuario) + (c.nota ? ' · ' + esc(c.nota) : '') + (c.faltanteGs ? ' · faltante ' + gs(c.faltanteGs) + ' al costo' : '') + '</div>'
+          + '<div class="row-sub">por ' + esc(c.usuario) + (c.nota ? ' · ' + esc(c.nota) : '') + (c.faltanteGs && BG.veCostos() ? ' · faltante ' + gs(c.faltanteGs) + ' al costo' : '') + '</div>'
           + (aj.length ? '<ul class="bullets">' + aj.map((a) => '<li>' + esc(a.descripcion) + ': sistema ' + a.sistema + ', contado ' + a.contado + ' (' + (a.diferencia > 0 ? '+' : '') + a.diferencia + ') · ' + esc(a.motivo) + '</li>').join('') + '</ul>' : '') + '</li>';
       }).join('') + '</ul>' : '<p class="empty">Todavía no se hizo ningún conteo.</p>';
     };

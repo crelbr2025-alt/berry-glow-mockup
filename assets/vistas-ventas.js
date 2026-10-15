@@ -767,7 +767,7 @@
       const h = BG.hoy();
       const desde = e.periodo === 'hoy' ? h : e.periodo === '7' ? BG.sumarDias(h, -6) : e.periodo === 'mes' ? h.slice(0, 8) + '01' : '0000';
       const q = e.q.trim();
-      const ids = q ? new Set(BG.buscarClientes(q, 200).map((c) => c.id)) : null;
+      const ids = q ? new Set(BG.buscarClientes(q, 200, true).map((c) => c.id)) : null;   // con las archivadas: sus ventas viejas se siguen encontrando
       let lista = BG.db.ventas.filter((v) => v.fecha >= desde && (!ids || ids.has(v.clienteId)));
       if (e.estado === 'debe') lista = lista.filter((v) => BG.saldoVenta(v) > 0);
       if (e.estado === 'cuotas') lista = lista.filter((v) => BG.saldoVenta(v) > 0 && v.plan);
@@ -807,6 +807,8 @@
     if (!v) return { html: '<div class="page"><p class="empty">No encontramos esa venta. <a href="#/ventas">Ver ventas</a></p></div>' };
     const cli = BG.cliente(v.clienteId);
     const duena = BG.esDuena();
+    // Lo que el dueño puede dejar en manos de la vendedora (Ajustes → Usuarios y permisos): cada botón sale según el permiso efectivo, no según el rol.
+    const verCostos = BG.veCostos(), puedeCorregir = BG.puede('corregirCompras'), puedeDarPuntos = BG.puede('darPuntos'), puedeAnular = BG.puede('anularVentas');
     const saldo = BG.saldoVenta(v);
     const pagado = BG.pagadoVenta(v);
     const pagos = BG.pagosDeVenta(v.id, true).sort((a, b) => a.ts.localeCompare(b.ts));
@@ -831,7 +833,7 @@
       if (it.cambioDe) partes.push('<span class="t-favor">Se lo llevó a cambio</span> de «' + esc(v.items[it.cambioDe.item].descripcion) + '»');
       if (it.devueltas) partes.push('<span class="t-devuelto">Devolvió ' + it.devueltas + (it.devueltas === it.cantidad ? (it.cantidad === 1 ? '' : ' (todas)') : ' de ' + it.cantidad) + '</span>');
       if (esp) partes.push('<span class="t-especial">Precio especial</span> · lista <span class="strike">' + gs(it.precioLista) + '</span>');
-      if (duena && it.productoId) partes.push((!esp && it.margen ? 'Margen ' + it.margen + ' %' : ev ? 'margen ' + BG.fmtMargen(ev.margen) : 'Precio a mano') + ' · costo ' + gs(it.costoUnitGs) + '/u');
+      if (verCostos && it.productoId) partes.push((!esp && it.margen ? 'Margen ' + it.margen + ' %' : ev ? 'margen ' + BG.fmtMargen(ev.margen) : 'Precio a mano') + ' · costo ' + gs(it.costoUnitGs) + '/u');
       else if (esp && ev && BG.veGanancia()) partes.push('gana ' + gs(ev.ganancia) + '/u · margen ' + BG.fmtMargen(ev.margen));
       return partes.length ? '<div class="t-sub">' + partes.join(' · ') + '</div>' : '';
     };
@@ -870,7 +872,7 @@
     const textoWa = BG.textosWa.compra(cli, v);
     const corregidas = v.correcciones || [];
     // Cada corrección con lo que cambió y el ticket anterior (con el costo: solo lo ve el dueño).
-    const cardCorrecciones = duena && corregidas.length ? '<section class="card stack" aria-labelledby="t-corr"><div class="card-head"><h2 id="t-corr">Correcciones</h2><span class="small muted">El ticket anterior queda guardado</span></div><ul class="lines">'
+    const cardCorrecciones = puedeCorregir && corregidas.length ? '<section class="card stack" aria-labelledby="t-corr"><div class="card-head"><h2 id="t-corr">Correcciones</h2><span class="small muted">El ticket anterior queda guardado</span></div><ul class="lines">'
       + corregidas.slice().reverse().map((c) => {
         const yaEmitidos = BG.emisionesDe(v.recibo, v.clienteId).filter((e) => e.ts < c.ts).length;
         return '<li class="line"><div class="row-title">' + BG.fmtFecha(c.fecha) + ' a las ' + BG.fmtHora(c.ts) + ' · por ' + esc(c.usuario) + '</div>'
@@ -893,8 +895,8 @@
     const ptsSinSus = pagosSinSus.reduce((a, x) => a + x.puntos, 0);
     const lineaPagosSinPuntos = !pagosSinSus.length ? ''
       : '<div class="callout callout-soft">' + icon('star') + '<div class="grow"><span class="small">' + (pagosSinSus.length === 1 ? 'Un pago de esta compra no sumó sus puntos' : pagosSinSus.length + ' pagos de esta compra no sumaron sus puntos')
-        + (duena ? ': sumándolos, ' + esc(cli.nombre.split(' ')[0]) + ' gana <strong>' + ptsSinSus + (ptsSinSus === 1 ? ' punto' : ' puntos') + '</strong>.' : '. Si corresponde, lo suma ' + esc(BG.nombreDuena()) + '.') + '</span></div>'
-        + (duena ? '<button type="button" class="btn btn-sm" data-accion="puntos-pagos">' + icon('star', 'i-sm') + 'Sumar los puntos de lo ya pagado</button>' : '') + '</div>';
+        + (puedeDarPuntos ? ': sumándolos, ' + esc(cli.nombre.split(' ')[0]) + ' gana <strong>' + ptsSinSus + (ptsSinSus === 1 ? ' punto' : ' puntos') + '</strong>.' : '. Si corresponde, lo suma ' + esc(BG.nombreDuena()) + '.') + '</span></div>'
+        + (puedeDarPuntos ? '<button type="button" class="btn btn-sm" data-accion="puntos-pagos">' + icon('star', 'i-sm') + 'Sumar los puntos de lo ya pagado</button>' : '') + '</div>';
     const lineaPuntos = !fid.activo || v.anulada || (!ptsSi && !ptsDarian) ? ''
       : '<div class="callout callout-soft">' + icon('star') + '<div class="grow"><span class="small">'
         + (ptsSi ? (saldo > 0 ? (ptsYa ? 'Ya sumó <strong>' + ptsYa + (ptsYa === 1 ? ' punto' : ' puntos') + '</strong> con sus pagos y suma ' + (ptsSi - ptsYa) + ' más cuando termine de pagarla.'
@@ -902,8 +904,8 @@
           + (v.puntosAparte ? ' Los sumó ' + esc(v.puntosAparte.usuario) + ' a mano el ' + BG.fmtFecha(v.puntosAparte.fecha) + '.' : '')
           : 'No suma puntos sola: ' + (v.anterior ? 'es de antes del sistema' : v.fecha >= fid.desde && v.fidelidad && v.fidelidad.sinPuntos ? 'se hizo con descuento y el programa no suma puntos en las compras con descuento' : 'es de antes del ' + BG.fmtFecha(fid.desde) + ', cuando empezó el programa') + '. Daría ' + ptsDarian + (ptsDarian === 1 ? ' punto.' : ' puntos.'))
         + '</span></div>'
-        + (duena && ptsDarian ? '<button type="button" class="btn btn-sm" data-accion="puntos-sumar">' + icon('star', 'i-sm') + 'Sumar puntos</button>' : '')
-        + (duena && v.puntosAparte ? '<button type="button" class="btn btn-sm btn-quiet" data-accion="puntos-quitar">Quitar</button>' : '')
+        + (puedeDarPuntos && ptsDarian ? '<button type="button" class="btn btn-sm" data-accion="puntos-sumar">' + icon('star', 'i-sm') + 'Sumar puntos</button>' : '')
+        + (puedeDarPuntos && v.puntosAparte ? '<button type="button" class="btn btn-sm btn-quiet" data-accion="puntos-quitar">Quitar</button>' : '')
         + '</div>';
 
     const html = '<div class="page">'
@@ -923,16 +925,16 @@
       + (!v.anulada && !v.anterior && BG.puede('registrarVentas') ? '<button type="button" class="btn" data-accion="agregar">' + icon('plus') + 'Agregar artículos</button>' : '')
       + (!v.anulada && !v.anterior && hayVivos && BG.puede('devoluciones') ? '<button type="button" class="btn" data-accion="devolucion">' + icon('undo') + 'Devolución o cambio</button>' : '')
       + (!v.anulada && hayVivos && BG.puede('preciosEspeciales') ? '<button type="button" class="btn" data-accion="ajustar-precio">' + icon('tag') + 'Ajustar precio</button>' : '')
-      + (!v.anulada && duena ? '<button type="button" class="btn" data-accion="corregir">' + icon('edit') + 'Corregir compra</button>' : '')
-      + (!v.anulada && duena ? '<button type="button" class="btn" data-accion="pasar-clienta">' + icon('users') + 'Pasar a otra clienta</button>' : '')
-      + (v.anulada || !BG.esDuena() ? '' : '<button type="button" class="btn btn-danger" data-accion="anular-venta">' + icon('ban') + 'Anular venta</button>')
+      + (!v.anulada && puedeCorregir ? '<button type="button" class="btn" data-accion="corregir">' + icon('edit') + 'Corregir compra</button>' : '')
+      + (!v.anulada && puedeCorregir ? '<button type="button" class="btn" data-accion="pasar-clienta">' + icon('users') + 'Pasar a otra clienta</button>' : '')
+      + (v.anulada || !puedeAnular ? '' : '<button type="button" class="btn btn-danger" data-accion="anular-venta">' + icon('ban') + 'Anular venta</button>')
       + '</div></div>'
       + (v.anterior ? '<div class="callout">' + icon('file') + '<div><strong>Compra de antes del sistema.</strong> Se anotó el ' + BG.fmtFecha(v.anterior.ts.slice(0, 10)) + ' por ' + esc(v.anterior.usuario)
         + (v.anterior.nota ? ' (' + esc(v.anterior.nota) + ')' : '') + '. No movió el stock ni entra en la caja ni en los reportes; lo que debe de acá se cobra como cualquier deuda.</div></div>' : '')
       + lineaPuntos
       + lineaPagosSinPuntos
       + (corregidas.length ? '<div class="callout callout-soft">' + icon('edit') + '<div class="grow"><span class="small">Esta compra se <strong>corrigió</strong> ' + (corregidas.length === 1 ? 'el ' + BG.fmtFecha(corregidas[0].fecha) : corregidas.length + ' veces (la última el ' + BG.fmtFecha(corregidas[corregidas.length - 1].fecha) + ')')
-        + (duena ? '. El ticket anterior está más abajo, en «Correcciones».' : '.') + '</span></div></div>' : '')
+        + (puedeCorregir ? '. El ticket anterior está más abajo, en «Correcciones».' : '.') + '</span></div></div>' : '')
       + (v.traslados || []).map((t) => '<div class="callout callout-soft">' + icon('users') + '<div class="grow"><span class="small">Esta compra <strong>pasó de ' + esc(t.deNombre) + ' a ' + esc(t.aNombre) + '</strong> el '
         + BG.fmtFecha(t.fecha) + ' (' + esc(t.motivo) + ', por ' + esc(t.usuario) + '). Los pagos que ya tenía se fueron con ella.</span></div></div>').join('')
       + (v.anulada ? '<div class="callout callout-bad">' + icon('ban') + '<div><strong>Venta anulada el ' + BG.fmtFecha(v.anulada.fecha) + ' a las ' + BG.fmtHora(v.anulada.ts) + ' por ' + esc(v.anulada.usuario) + '.</strong> Motivo: ' + esc(v.anulada.motivo) + '</div></div>' : '')
@@ -947,7 +949,7 @@
       + '</tbody><tfoot>'
       + (v.descuento.monto ? '<tr><td colspan="3">Subtotal</td><td class="num">' + gs(v.subtotal) + '</td></tr><tr><td colspan="3">Descuento' + (v.descuento.tipo === 'porcentaje' ? ' (' + BG.C.fmtNum(v.descuento.valor, 0, 2) + ' %)' : '') + '</td><td class="num">−' + gs(v.descuento.monto) + '</td></tr>' : '')
       + '<tr><td colspan="3">Total</td><td class="num">' + gs(v.total) + '</td></tr></tfoot></table></div>'
-      + (duena && !v.anterior ? '<div class="card-foot"><span class="small muted">Solo ' + esc(BG.nombreDuena()) + ' ve esto</span><span class="small">Costo congelado <strong>' + gs(costo) + '</strong> · Ganancia real <strong>' + gs(ganancia) + '</strong>'
+      + (verCostos && !v.anterior ? '<div class="card-foot"><span class="small muted">' + (duena ? 'Solo ' + esc(BG.nombreDuena()) + ' ve esto' : 'Lo ves porque tenés «Ver costos»') + '</span><span class="small">Costo congelado <strong>' + gs(costo) + '</strong> · Ganancia real <strong>' + gs(ganancia) + '</strong>'
         + (evVenta ? ' (' + BG.fmtMargen(evVenta.margen) + ' sobre el costo)' : '') + '</span></div>'
         : cambios.length && evVenta && BG.veGanancia() ? '<div class="card-foot"><span class="small muted">Por los precios especiales</span><span class="small">' + BG.infoPrecio(evVenta, false, true) + '</span></div>' : '')
       + '</section>'
@@ -964,7 +966,7 @@
           return otras.length ? '<div class="row-sub">Parte de un pago de ' + gs(BG.cobroDe(p).entregado) + ': el resto fue a ' + otras.map((x) => 'la compra ' + BG.fmtRecibo(x.numero) + ' (' + gs(x.monto) + ')').join(' y ') + '.</div>' : '';
         })())
         + (p.anulado ? '<div class="row-sub">Anulado el ' + BG.fmtFecha(p.anulado.fecha) + ': ' + esc(p.anulado.motivo) + '</div>' : '')
-        + '</div>' + (p.anulado || v.anulada || !BG.esDuena() ? '' : '<button type="button" class="btn btn-sm btn-quiet" data-accion="anular-pago" data-id="' + p.id + '">Anular</button>')
+        + '</div>' + (p.anulado || v.anulada || !puedeAnular ? '' : '<button type="button" class="btn btn-sm btn-quiet" data-accion="anular-pago" data-id="' + p.id + '">Anular</button>')
         + '</div></li>').join('')
         + (v.aFavor ? '<li class="line line-favor"><div class="row-title">−' + gs(v.aFavor) + ' pasó a saldo a favor</div><div class="row-sub">Por la devolución: lo que había pagado de más ya no es parte de esta venta' + (devs.some((d) => d.reintegro) ? ' (y se le devolvió en plata)' : '') + '.</div></li>' : '')
         + '</ul>' : '<p class="empty">Todavía no hay pagos: la venta quedó a cuenta.</p>')

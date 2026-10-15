@@ -100,7 +100,7 @@
     const t = BG.db.config.tienda;
     return {
       tienda: { nombre: t.nombre, whatsapp: t.whatsapp, instagram: t.instagram, direccion: t.direccion, mensaje: t.mensaje },
-      titulo: destacados.length ? 'Recibo de pago' : tipo === 'v' ? (BG.esAnterior(ventas[0]) ? 'Compra anterior' : 'Recibo') : tipo === 'a' ? 'Compras anteriores' : 'Estado de cuenta',
+      titulo: destacados.length ? (pagoRecibo && pagoRecibo.anulado ? 'Pago anulado' : 'Recibo de pago') : tipo === 'v' ? (BG.esAnterior(ventas[0]) ? 'Compra anterior' : 'Recibo') : tipo === 'a' ? 'Compras anteriores' : 'Estado de cuenta',
       subtitulo: tipo === 'a' ? 'Lo que llevaste antes del sistema' : historial ? 'Todas tus compras y pagos' : tipo === 'c' && !destacados.length ? 'Lo que tenés pendiente' : '',
       historial: historial, anteriores: tipo === 'a', pago: pagoRecibo, movimientos: movimientos,
       numero: numero,
@@ -109,7 +109,14 @@
       compras: ventas.map((v) => {
         const ep = BG.estadoPlan(v);
         return {
-          numero: v.recibo, fecha: v.fecha, anulada: !!v.anulada, anterior: BG.esAnterior(v), sinDetalle: !!(v.anterior && v.anterior.sinDetalle),
+          numero: v.recibo, fecha: v.fecha, anulada: !!v.anulada, anuladaEl: v.anulada ? v.anulada.fecha : null,
+          // Lo que había pagado y que, al anular la compra, pasó a saldo a favor (público: ni motivo ni quién).
+          aFavorPorAnular: v.anulada ? Math.max(0, BG.pagadoVenta(v)) : 0,
+          // Pagos anulados de esta compra: se muestran como lo que son (con su importe original), no desaparecen ni cuentan.
+          pagosAnulados: BG.pagosDeVenta(v.id, true).filter((p) => p.anulado).sort((a, b) => a.ts.localeCompare(b.ts)).map((p) => ({
+            fecha: p.fecha, recibo: p.recibo, monto: p.partes.reduce((a, x) => a + x.monto, 0), anuladoEl: p.anulado.fecha, formas: formasPublicas(p),
+          })),
+          anterior: BG.esAnterior(v), sinDetalle: !!(v.anterior && v.anterior.sinDetalle),
           // Si se corrigió: cuándo y cuánto era el total antes (lo único público de la corrección: nada de costos ni motivos internos).
           corregida: (v.correcciones || []).length || (v.traslados || []).length ? {
             fecha: (v.correcciones || []).concat(v.traslados || []).map((x) => x.fecha).sort().pop(),
@@ -223,23 +230,34 @@
    */
   function htmlPago(d, verPuntos, opc) {
     const pg = d.pago;
-    const aplicadas = new Set(pg.aplicaciones.map((a) => a.numero));
+    // Un pago anulado ya no es un pago: se muestra con su importe original y la palabra «anulado», y lo que debe hoy es todo lo pendiente.
+    const anulado = pg.anulado;
+    const aplicadas = new Set((anulado ? [] : pg.aplicaciones).map((a) => a.numero));
     const otras = d.compras.filter((c) => c.saldo > 0 && !aplicadas.has(c.numero));
     const pendientes = d.compras.filter((c) => c.saldo > 0);
     const cuotas = [];
     pendientes.forEach((c) => c.cuotas.forEach((q) => cuotas.push(Object.assign({ compra: c.numero }, q))));
     cuotas.sort((a, b) => a.vence.localeCompare(b.vence));
     const nombreCompra = (a) => (a.anterior ? 'Compra de antes del sistema' : esc(a.detalle || 'Compra'));
-    return '<section class="r-section r-pago"><div class="r-pago-caja"><span>Pago recibido</span><strong>' + gs(pg.entregado) + '</strong></div>'
-      + '<p class="r-pago-sub"><span class="r-fecha">' + BG.fmtFecha(pg.fecha) + '</span>' + (pg.formas.length ? ' · ' + pg.formas.map((x) => esc(x.forma) + (pg.formas.length > 1 ? ' ' + gs(x.monto) : '')).join(' + ') : '') + '</p></section>'
-      + (pg.aplicaciones.length ? '<section class="r-section"><h2>' + (pg.aplicaciones.length === 1 ? 'A qué compra se aplicó' : 'Cómo se repartió') + '<span>' + pg.aplicaciones.length + (pg.aplicaciones.length === 1 ? ' compra' : ' compras') + '</span></h2>'
+    const fechaAviso = !anulado && pg.fecha !== d.emision
+      ? '<p class="r-chica">El estado de cada compra y tu saldo son los de hoy (' + BG.fmtFecha(d.emision) + '); el pago es del ' + BG.fmtFecha(pg.fecha) + '.</p>' : '';
+    return (anulado
+      ? '<section class="r-section r-pago"><div class="r-pago-caja is-anulado"><span>Pago anulado</span><strong>' + gs(anulado.entregado) + '</strong></div>'
+        + '<p class="r-pago-sub">Pago del <span class="r-fecha">' + BG.fmtFecha(pg.fecha) + '</span>, anulado el ' + BG.fmtFecha(anulado.fecha) + '. <strong>Ya no cuenta como pago</strong>: no baja lo que debés.</p></section>'
+        + (anulado.aplicaciones.length ? '<section class="r-section"><h2>Así se había aplicado<span>ya no vale</span></h2><table class="r-table"><thead><tr><th>Compra</th><th class="num">Se había aplicado</th></tr></thead><tbody>'
+          + anulado.aplicaciones.map((a) => '<tr><td><span class="r-fecha">' + BG.fmtFecha(a.fecha) + '</span> <span class="r-fecha r-nro">' + BG.fmtRecibo(a.numero) + '</span> ' + nombreCompra(a) + '</td><td class="num">' + gs(a.monto) + '</td></tr>').join('')
+          + '</tbody></table></section>' : '')
+      : '<section class="r-section r-pago"><div class="r-pago-caja"><span>Pago recibido</span><strong>' + gs(pg.entregado) + '</strong></div>'
+        + '<p class="r-pago-sub"><span class="r-fecha">' + BG.fmtFecha(pg.fecha) + '</span>' + (pg.formas.length ? ' · ' + pg.formas.map((x) => esc(x.forma) + (pg.formas.length > 1 ? ' ' + gs(x.monto) : '')).join(' + ') : '')
+        + (pg.parteAnulada ? '<br>Una parte de este cobro (' + gs(pg.parteAnulada.entregado) + ') fue anulada el ' + BG.fmtFecha(pg.parteAnulada.fecha) + ' y no cuenta.' : '') + '</p></section>')
+      + (pg.aplicaciones.length && !anulado ? '<section class="r-section"><h2>' + (pg.aplicaciones.length === 1 ? 'A qué compra se aplicó' : 'Cómo se repartió') + '<span>' + pg.aplicaciones.length + (pg.aplicaciones.length === 1 ? ' compra' : ' compras') + '</span></h2>'
         + '<table class="r-table r-aplic"><thead><tr><th>Compra</th><th class="num">Se aplicó</th><th class="num">Estado</th></tr></thead><tbody>'
         // Todo lo que se aplicó es plata ya pagada (fondo verde suave); «Saldada» lo dice con tilde y palabra, así se entiende también sin color.
         + pg.aplicaciones.map((a) => '<tr class="' + (a.saldo > 0 ? 'is-parcial' : 'is-saldada') + '"><td><span class="r-fecha">' + BG.fmtFecha(a.fecha) + '</span> <span class="r-fecha r-nro">' + BG.fmtRecibo(a.numero) + '</span> ' + nombreCompra(a) + '</td>'
           + '<td class="num">' + gs(a.monto) + '</td><td class="num"><strong>' + (a.saldo > 0 ? 'Falta ' + gs(a.saldo) : icon('check', 'i-sm') + ' Saldada') + '</strong></td></tr>').join('')
-        + '</tbody><tfoot><tr><td>Total aplicado</td><td class="num">' + gs(pg.aplicado) + '</td><td></td></tr></tfoot></table></section>' : '')
-      + (pg.excedente > 0 ? '<p class="r-account"><span>' + (pg.aplicaciones.length ? 'Lo que sobró quedó a tu favor' : 'Quedó a tu favor') + '</span><strong>' + gs(pg.excedente) + '</strong></p>' : '')
-      + (otras.length ? '<section class="r-section"><h2>Además debés<span>' + otras.length + (otras.length === 1 ? ' compra' : ' compras') + '</span></h2><table class="r-table"><tbody>'
+        + '</tbody><tfoot><tr><td>Total aplicado</td><td class="num">' + gs(pg.aplicado) + '</td><td></td></tr></tfoot></table>' + fechaAviso + '</section>' : '')
+      + (pg.excedente > 0 && !anulado ? '<p class="r-account"><span>' + (pg.aplicaciones.length ? 'Lo que sobró quedó a tu favor' : 'Quedó a tu favor') + '</span><strong>' + gs(pg.excedente) + '</strong></p>' : '')
+      + (otras.length ? '<section class="r-section"><h2>' + (anulado ? 'Lo que debés hoy' : 'Además debés') + '<span>' + otras.length + (otras.length === 1 ? ' compra' : ' compras') + '</span></h2><table class="r-table"><tbody>'
         + otras.map((c) => '<tr><td><span class="r-fecha">' + BG.fmtFecha(c.fecha) + '</span> <span class="r-fecha r-nro">' + BG.fmtRecibo(c.numero) + '</span> ' + (c.anterior ? 'Compra de antes del sistema' : detalleCorto(c))
           + '</td><td class="num"><strong>' + gs(c.saldo) + '</strong></td></tr>').join('') + '</tbody></table></section>' : '')
       + (cuotas.length ? '<section class="r-section"><h2>Tus próximas cuotas</h2><table class="r-table"><tbody>' + cuotas.map((q) => '<tr' + (q.vencida ? ' class="is-late"' : '') + '><td>Cuota ' + q.n + ' de ' + q.de
@@ -340,10 +358,14 @@
     const deUnaCompra = !d.pago && unaCompra && d.titulo !== 'Estado de cuenta' && !d.anteriores;
     const saldoPrincipal = deUnaCompra ? d.compras[0].saldo : d.anteriores ? d.saldoDocumento : d.saldoCuenta;
     // En el recibo de una compra el recuadro habla de esa compra; "cuenta al día" solo si no debe nada en ninguna.
-    const etiquetaSaldo = saldoPrincipal > 0 ? (deUnaCompra ? 'Saldo pendiente de esta compra' : d.anteriores ? 'Debés de lo de antes' : 'Saldo pendiente')
+    const anulada = deUnaCompra && d.compras[0].anulada;
+    const etiquetaSaldo = anulada ? 'Compra anulada' : saldoPrincipal > 0 ? (deUnaCompra ? 'Saldo pendiente de esta compra' : d.anteriores ? 'Debés de lo de antes' : 'Saldo pendiente')
       : (deUnaCompra ? 'Compra saldada' : d.anteriores ? 'Lo de antes está saldado' : 'Cuenta al día');
     const compra = (c) => '<section class="r-section r-compra">'
       + '<h2>' + (c.anterior ? 'Compra de antes del sistema' : 'Detalle de la compra') + '<span>' + BG.fmtFecha(c.fecha) + ' · ' + BG.fmtRecibo(c.numero) + '</span></h2>'
+      // Una compra anulada lo dice con palabras (el ticket sale en blanco y negro) y nunca figura como «saldada».
+      + (c.anulada ? '<p class="r-anulada"><strong>COMPRA ANULADA</strong>' + (c.anuladaEl ? ' el ' + BG.fmtFecha(c.anuladaEl) : '') + '. Esta compra ya no vale.'
+        + (c.aFavorPorAnular > 0 ? ' Lo que habías pagado (' + gs(c.aFavorPorAnular) + ') quedó a tu favor como saldo para otra compra.' : ' No había pagos.') + '</p>' : '')
       + (c.corregida ? '<p class="r-forms r-corregida">Comprobante corregido el ' + BG.fmtFecha(c.corregida.fecha) + (c.corregida.totalAntes !== c.total ? ' (el total era ' + gs(c.corregida.totalAntes) + ')' : '') + ': reemplaza al anterior.</p>' : '')
       + (c.sinDetalle
         // Solo el monto (no se sabe qué llevó): un renglón, sin cantidad ni precio.
@@ -359,8 +381,8 @@
           // Lo que se había pagado con puntos no vuelve en plata: queda a favor para otra compra.
           + (d.reintegro < d.aFavor ? '; los ' + gs(d.aFavor - d.reintegro) + ' que pagaste con puntos quedaron a tu favor' : '')
           : gs(d.aFavor) + ' quedaron a tu favor') + '</div>' : '') + '</td></tr>').join('') + '</tbody></table>' : '')
-      + '<h2 class="r-sub">Pagos realizados</h2>'
-      + (c.pagos.length ? '<table class="r-table"><tbody>' + c.pagos.map((p) => '<tr class="r-pagada' + (p.nuevo ? ' is-new' : '') + '"><td>' + (p.anterior ? 'Antes del sistema' : BG.fmtFecha(p.fecha)) + (p.nuevo ? ' <strong>· pago de hoy</strong>' : '')
+      + '<h2 class="r-sub">' + (c.anulada ? 'Pagos que pasaron a tu saldo a favor' : 'Pagos realizados') + '</h2>'
+      + (c.pagos.length ? '<table class="r-table"><tbody>' + c.pagos.map((p) => '<tr class="' + (c.anulada ? '' : 'r-pagada') + (p.nuevo ? ' is-new' : '') + '"><td>' + (p.anterior ? 'Antes del sistema' : BG.fmtFecha(p.fecha)) + (p.nuevo ? ' <strong>· pago de hoy</strong>' : '')
         + '<div class="r-forms">' + p.formas.map((x) => x.forma + ' ' + gs(x.monto)).join(' + ') + (p.aFavor ? ' · ' + gs(p.aFavor) + ' quedó a tu favor' : '')
         + (verPuntos && p.puntos ? ' · sumó ' + p.puntos + (p.puntos === 1 ? ' punto' : ' puntos') : '') + '</div>'
         // Parte de un pago mayor: se dice cuánto entregó en total y a qué otra compra fue el resto (así no parecen dos pagos).
@@ -368,7 +390,11 @@
         + '<td class="num">' + gs(p.monto) + '</td></tr>').join('')
         + (c.aFavorMovido ? '<tr><td>Por la devolución, pasó a tu saldo a favor</td><td class="num">−' + gs(c.aFavorMovido) + '</td></tr>' : '')
         + '</tbody><tfoot><tr><td>Total pagado</td><td class="num">' + gs(c.pagado) + '</td></tr></tfoot></table>'
-        : '<p class="r-forms">Todavía sin pagos.</p>')
+        : '<p class="r-forms">' + (c.pagosAnulados.length ? 'Sin pagos vigentes.' : 'Todavía sin pagos.') + '</p>')
+      // Pagos anulados: no cuentan, pero no desaparecen (con su importe original, para que se entienda qué pasó).
+      + (c.pagosAnulados.length ? '<h2 class="r-sub">Pagos anulados <span class="r-forms">(no cuentan como pago)</span></h2><table class="r-table"><tbody>' + c.pagosAnulados.map((p) => '<tr class="r-pago-anulado"><td>'
+        + BG.fmtFecha(p.fecha) + ' · ' + BG.fmtRecibo(p.recibo) + ' · <strong>PAGO ANULADO</strong> el ' + BG.fmtFecha(p.anuladoEl)
+        + '<div class="r-forms">' + p.formas.map((x) => x.forma + ' ' + gs(x.monto)).join(' + ') + '</div></td><td class="num">' + gs(p.monto) + '</td></tr>').join('') + '</tbody></table>' : '')
       + (c.cuotas.length ? '<h2 class="r-sub">Tus próximas cuotas</h2><table class="r-table"><tbody>' + c.cuotas.map((q) => '<tr' + (q.vencida ? ' class="is-late"' : '') + '><td>Cuota ' + q.n + ' de ' + q.de + ' · '
         + (q.vencida ? 'venció el ' : 'vence el ') + BG.fmtFecha(q.vence) + '</td><td class="num">' + gs(q.falta) + '</td></tr>').join('') + '</tbody></table>' : '')
       + (unaCompra ? '' : '<p class="r-account"><span>Saldo de esta compra</span><strong>' + gs(c.saldo) + '</strong></p>')
@@ -394,7 +420,9 @@
           : d.movimientos ? htmlCuenta(d) + (conDetalle && d.compras.length ? '<h2 class="r-sub r-det-tit">Detalle de cada compra</h2>' + d.compras.map(compra).join('') : '')
             : compacto ? htmlHistorial(d, verPuntos)
               : d.compras.length ? d.compras.map(compra).join('') : '<p class="r-section">' + (d.historial ? 'Todavía no hay compras.' : 'No hay compras con saldo pendiente.') + '</p>')
-          + '<div class="r-saldo' + (saldoPrincipal > 0 ? '' : ' is-paid') + '"><span>' + etiquetaSaldo + '</span><strong>' + gs(saldoPrincipal) + '</strong></div>'
+          + '<div class="r-saldo' + (anulada ? ' is-anulada' : saldoPrincipal > 0 ? '' : ' is-paid') + '"><span>' + etiquetaSaldo
+          // Un comprobante que se vuelve a imprimir muestra la cuenta de HOY: se dice a qué fecha (la fecha del pago no es la de la consulta).
+          + (d.pago && d.pago.fecha !== d.emision ? ' al ' + BG.fmtFecha(d.emision) : '') + '</span><strong>' + gs(saldoPrincipal) + '</strong></div>'
           + (deUnaCompra && d.saldoCuenta !== saldoPrincipal ? '<p class="r-account"><span>Saldo total de tu cuenta (todas las compras)</span><strong>' + gs(d.saldoCuenta) + '</strong></p>' : '')
           // En la cuenta entera, lo de antes del sistema se dice aparte (está sumado en el saldo, pero se ve de dónde viene).
           + (!d.anteriores && !deUnaCompra && d.saldoAnterior > 0 && saldoPrincipal > d.saldoAnterior
@@ -653,7 +681,7 @@
       + '<li><strong>Stock sin movimiento y próximo pedido:</strong> como Ariel, Reportes → «Stock y rotación»: lo que no se vende hace 30 días o más (con «Liquidar»), lo más vendido y cuánto pedir.</li>'
       + '<li><strong>Meta y comisión de Jazmín:</strong> ella ve «Tu mes» en Inicio (avance y comisión); Ariel la ve en Resumen y la cambia en Ajustes. Se calcula sobre la ganancia de lo cobrado: un descuento grande le baja la comisión.</li></ul>'
       + '<h3>Perfiles, precios especiales, envíos y resumen</h3><ul class="bullets">'
-      + '<li><strong>Perfiles:</strong> arriba, «Ver como» cambia entre Ariel (dueño: ve y cambia todo) y Jazmín (vendedora: vende, cobra, emite recibos y prepara envíos, sin costos ni dólar, y sin anular).</li>'
+      + '<li><strong>Perfiles:</strong> arriba, «Ver como» cambia entre Ariel (dueño: ve y cambia todo) y Jazmín (vendedora: vende, cobra, emite recibos y prepara envíos, ve los costos pero no puede cambiar el dólar ni anular; Ariel le habilita en Ajustes lo que quiera dejarle).</li>'
       + '<li><strong>Permisos:</strong> como Ariel, en Ajustes → Usuarios y permisos, quitale a Jazmín por ejemplo «Registrar cobros» y fijate cómo desaparece esa opción en su vista.</li>'
       + '<li><strong>Envíos:</strong> desde una venta, «Preparar envío» → completá la lista de control → «Imprimir etiqueta» → «Registrar despacho» con el número de guía → «Marcar entregado».</li>'
       + '<li><strong>Resumen gráfico:</strong> como Ariel, en el menú «Resumen»: ventas y cobros por semana, deudas por antigüedad, envíos por ciudad y la actividad de cada usuario.</li>'
