@@ -1310,13 +1310,46 @@
       v.puntosAparte = { fecha: BG.hoy(), ts: BG.ahora(), usuario: quien, motivo: limpiar(motivo) };
       if (!v.fidelidad) v.fidelidad = { cadaGs: f.cadaGs, valorPunto: f.valorPunto };
       const n = BG.puntosDeVenta(v);
-      if (BG.saldoVenta(v) <= 0) ganados += n; else pendientes += n;
+      // Con «los puntos se suman con cada pago», lo que esa clienta ya había pagado de la compra también suma: si no, pagó ₲ 390.000 de una
+      // compra de ₲ 470.000 y solo tenía los puntos del último pago (le pasó a Rocío Pérez, HANDOFF §28).
+      if (f.porPago) anotarPuntosDePagos(v);
+      const ya = BG.saldoVenta(v) <= 0 ? n : BG.puntosGanadosDeVenta(v);
+      ganados += ya;
+      pendientes += n - ya;
       detalle.push(BG.fmtRecibo(v.recibo) + ' del ' + BG.fmtFecha(v.fecha) + ' (' + n + ')');
     }
     BG.auditar('fidelidad', 'Puntos de compras anteriores', BG.cliente(cid).nombre + ' · ' + detalle.join(', ') + ' · ' + ganados + ' puntos ya disponibles'
       + (pendientes ? ' y ' + pendientes + ' al terminar de pagar' : '') + (limpiar(motivo) ? ' · ' + limpiar(motivo) : ''));
     BG.guardar();
     return { ganados: ganados, pendientes: pendientes, compras: ventas.length };
+  };
+  /** Anota en cada pago ya hecho de la compra los puntos que le tocaban y no tiene (BG.pagosSinPuntos). Devuelve cuántos puntos sumó. */
+  function anotarPuntosDePagos(v) {
+    let total = 0;
+    BG.pagosSinPuntos(v).forEach((x) => { x.pago.puntos = x.puntos; total += x.puntos; });
+    return total;
+  }
+  /**
+   * Suma los puntos de pagos que ya se hicieron y no los dieron (porque se pagaron antes de que la compra sumara puntos, o antes de pasar a «con cada
+   * pago», o se destildó «sumar los puntos de este pago»). Solo el dueño, compra por compra; queda en la auditoría. Nunca pasa de los puntos de la
+   * compra y no toca lo ya sumado. d: lista de ids de compras, motivo opcional.
+   */
+  BG.sumarPuntosDePagos = (ventaIds, motivo) => {
+    soloDuenio('sumar los puntos de pagos ya hechos');
+    const f = BG.configFidelidad();
+    if (!f.activo) throw new Error('El programa de puntos está apagado: se prende en Ajustes → Clientas frecuentes.');
+    const ventas = (ventaIds || []).map((id) => BG.venta(id)).filter(Boolean);
+    if (!ventas.length) throw new Error('Elegí al menos una compra.');
+    const cid = ventas[0].clienteId;
+    for (const v of ventas) {
+      if (v.clienteId !== cid) throw new Error('Las compras tienen que ser de la misma clienta.');
+      if (!BG.pagosSinPuntos(v).length) throw new Error('La compra ' + BG.fmtRecibo(v.recibo) + ' no tiene pagos sin sus puntos: no hay nada para sumar.');
+    }
+    let puntos = 0;
+    const detalle = ventas.map((v) => { const n = anotarPuntosDePagos(v); puntos += n; return BG.fmtRecibo(v.recibo) + ' (' + n + ')'; });
+    BG.auditar('fidelidad', 'Puntos de pagos ya hechos', BG.cliente(cid).nombre + ' · ' + detalle.join(', ') + ' · ' + puntos + (puntos === 1 ? ' punto' : ' puntos') + (limpiar(motivo) ? ' · ' + limpiar(motivo) : ''));
+    BG.guardar();
+    return { puntos: puntos, compras: ventas.length };
   };
   /** Deshace lo de arriba para una compra, salvo que esos puntos ya se hayan canjeado. */
   BG.quitarPuntosAparte = (ventaId) => {

@@ -544,25 +544,87 @@
       (v.devoluciones || []).filter((d) => d.aFavor).forEach((d) => mov.push({ ts: d.ts + ':01', fecha: d.fecha, ventaId: v.id, concepto: 'Lo pagado de más pasó a saldo a favor' + (d.reintegro ? ' (se le devolvió' + (d.reintegro < d.aFavor ? ' ' + gs(d.reintegro) : '') + ' en ' + BG.FORMAS[d.forma].toLowerCase() + ')' : ''), cargo: d.aFavor }));
       (v.correcciones || []).filter((c) => c.aFavor).forEach((c) => mov.push({ ts: c.ts + ':01', fecha: c.fecha, ventaId: v.id, concepto: 'Lo pagado de más pasó a saldo a favor', cargo: c.aFavor }));
     }
-    for (const p of BG.db.pagos.filter((x) => x.clienteId === cid && x.ventaId)) {
+    // Un cobro de ₲ 500.000 repartido entre dos compras se guarda como dos pagos (uno por compra, mismo `grupo` y mismo recibo), pero para la clienta
+    // y para quien la atiende es UN pago: acá va en una sola línea, con a qué compras se aplicó (`aplicaciones`). Un pago anulado o de una compra
+    // anulada va aparte (tachado), como siempre.
+    const pagosCli = BG.db.pagos.filter((x) => x.clienteId === cid && x.ventaId);
+    const vivo = (x) => !x.anulado && !BG.venta(x.ventaId).anulada;
+    const grupos = new Set();
+    for (const p of pagosCli) {
       const v = BG.venta(p.ventaId);
+      if (p.grupo && vivo(p)) {
+        if (grupos.has(p.grupo)) continue;
+        grupos.add(p.grupo);
+        const miembros = pagosCli.filter((x) => x.grupo === p.grupo && vivo(x)).sort((a, b) => a.ts.localeCompare(b.ts));
+        const formas = Array.from(new Set(miembros.reduce((a, x) => a.concat(x.partes.map((y) => BG.FORMAS[y.forma])), [])));
+        const conPuntos = sum(miembros, (x) => sum(x.partes, (y) => y.deCanje || 0));
+        mov.push({ ts: miembros[0].ts, fecha: miembros[0].fecha, ventaId: miembros[0].ventaId, pagoId: miembros[0].id, pagoIds: miembros.map((x) => x.id),
+          concepto: 'Pago ' + BG.fmtRecibo(p.recibo) + ' · ' + formas.join(' + ') + (conPuntos ? ' (' + gs(conPuntos) + ' con puntos)' : ''),
+          aplicaciones: miembros.map((x) => ({ pagoId: x.id, ventaId: x.ventaId, numero: BG.venta(x.ventaId).recibo, monto: x.total })),
+          abono: sum(miembros, (x) => x.total), anulado: '' });
+        continue;
+      }
       const conPuntos = sum(p.partes, (x) => x.deCanje || 0);
-      mov.push({ ts: p.ts, fecha: p.fecha, ventaId: v.id, pagoId: p.id,
+      mov.push({ ts: p.ts, fecha: p.fecha, ventaId: v.id, pagoId: p.id, pagoIds: [p.id],
         concepto: (p.anterior ? 'Pagado antes del sistema · compra ' + BG.fmtRecibo(v.recibo)
           : 'Pago ' + BG.fmtRecibo(p.recibo) + ' · ' + p.partes.map((x) => BG.FORMAS[x.forma]).join(' + ') + (conPuntos ? ' (' + gs(conPuntos) + ' con puntos)' : '')),
+        aplicaciones: [{ pagoId: p.id, ventaId: v.id, numero: v.recibo, monto: p.total }],
         abono: p.anulado || v.anulada ? 0 : p.total, anulado: p.anulado ? 'Anulado: ' + p.anulado.motivo : (v.anulada ? 'Pasó a saldo a favor' : '') });
       if (p.anulado && p.anulado.aFavorRevertido && !v.anulada) mov.push({ ts: p.anulado.ts + ':01', fecha: p.anulado.fecha, ventaId: v.id, concepto: 'Sin ese pago, la devolución ya no deja saldo a favor', abono: p.anulado.aFavorRevertido });
     }
     // Una compra que pasó de una clienta a otra: queda anotado en la cuenta de las dos (sin plata: la deuda se mudó con ella).
     for (const v of BG.db.ventas) {
       for (const t of v.traslados || []) {
-        if (t.de === cid) mov.push({ ts: t.ts, fecha: t.fecha, ventaId: v.id, concepto: 'Compra ' + BG.fmtRecibo(v.recibo) + ' pasó a ' + t.aNombre + ' (' + t.motivo + ')', cargo: 0, abono: 0 });
-        else if (t.a === cid && v.clienteId === cid) mov.push({ ts: t.ts, fecha: t.fecha, ventaId: v.id, concepto: 'Compra ' + BG.fmtRecibo(v.recibo) + ' pasó de ' + t.deNombre + ' a esta cuenta', cargo: 0, abono: 0 });
+        // `publico`: lo que puede leer la clienta (sin el nombre de otra clienta ni el motivo interno).
+        if (t.de === cid) mov.push({ ts: t.ts, fecha: t.fecha, ventaId: v.id, concepto: 'Compra ' + BG.fmtRecibo(v.recibo) + ' pasó a ' + t.aNombre + ' (' + t.motivo + ')', publico: 'Compra ' + BG.fmtRecibo(v.recibo) + ' pasó a otra cuenta', cargo: 0, abono: 0 });
+        else if (t.a === cid && v.clienteId === cid) mov.push({ ts: t.ts, fecha: t.fecha, ventaId: v.id, concepto: 'Compra ' + BG.fmtRecibo(v.recibo) + ' pasó de ' + t.deNombre + ' a esta cuenta', publico: 'Compra ' + BG.fmtRecibo(v.recibo) + ' pasó a esta cuenta', cargo: 0, abono: 0 });
       }
     }
     mov.sort((a, b) => a.ts.localeCompare(b.ts));
     let saldo = 0;
-    return mov.map((m) => { saldo += (m.cargo || 0) - (m.abono || 0); return Object.assign(m, { saldo: saldo }); });
+    return mov.map((m) => { saldo += (m.cargo || 0) - (m.abono || 0); return Object.assign(m, { publico: m.publico || m.concepto, saldo: saldo }); });
+  };
+  /**
+   * Un cobro: lo que la clienta entregó de una vez. Si se repartió entre varias compras son varios pagos con el mismo `grupo` y el mismo número
+   * de recibo (BG.registrarCobro); un pago suelto (el de una venta nueva, uno viejo sin grupo) es un cobro de un solo pago. Devuelve los pagos
+   * vivos, lo que se aplicó a cada compra, lo entregado por forma de pago y lo que quedó a favor.
+   */
+  /** Lo que se llevó una compra, en una línea: «2 × Remera · Jean» (sin lo devuelto). */
+  BG.detalleCorto = (v) => v.items.filter((it) => BG.cantidadViva(it) > 0).map((it) => (BG.cantidadViva(it) > 1 ? BG.cantidadViva(it) + ' × ' : '') + it.descripcion).join(' · ');
+  /**
+   * Lo que se le dice a la clienta de un cobro (el recibo de pago y el mensaje de WhatsApp lo leen de acá, una sola vez): cuánto entregó y cómo,
+   * a qué compras se aplicó (cuánto a cada una y cómo quedó), lo que quedó a su favor y los puntos que sumó. Solo datos públicos: nada de costos.
+   */
+  BG.resumenCobro = (p) => {
+    const c = BG.cobroDe(p);
+    const formas = [];
+    c.formas.forEach((x) => {
+      const puntos = x.forma === 'saldo' ? Math.min(x.deCanje, x.monto) : 0;
+      if (puntos) formas.push({ forma: 'Con tus puntos', monto: puntos, puntos: true });
+      if (x.monto - puntos > 0) formas.push({ forma: BG.FORMAS[x.forma], monto: x.monto - puntos });
+    });
+    return {
+      numero: c.recibo, fecha: c.fecha, entregado: c.entregado, formas: formas, aplicado: c.aplicado, excedente: c.excedente, puntos: c.puntos,
+      aplicaciones: c.aplicaciones.map((x) => {
+        const v = BG.venta(x.ventaId);
+        return { ventaId: v.id, numero: v.recibo, fecha: v.fecha, anterior: BG.esAnterior(v), sinDetalle: !!(v.anterior && v.anterior.sinDetalle), detalle: BG.detalleCorto(v), monto: x.monto, total: v.total, saldo: BG.saldoVenta(v) };
+      }),
+    };
+  };
+  BG.cobroDe = (p) => {
+    const todos = p.grupo ? BG.db.pagos.filter((x) => x.clienteId === p.clienteId && x.grupo === p.grupo) : [p];
+    const vivos = todos.filter((x) => !x.anulado).sort((a, b) => a.ts.localeCompare(b.ts));
+    const formas = [];
+    vivos.forEach((x) => x.partes.forEach((y) => {
+      const f = formas.find((z) => z.forma === y.forma);
+      if (f) { f.monto += y.monto; f.deCanje += y.deCanje || 0; } else formas.push({ forma: y.forma, monto: y.monto, deCanje: y.deCanje || 0 });
+    }));
+    return {
+      recibo: p.recibo, fecha: p.fecha, ts: (vivos[0] || p).ts, pagos: vivos, formas: formas,
+      aplicado: sum(vivos, (x) => x.total), excedente: sum(vivos, (x) => x.excedente || 0), entregado: sum(vivos, (x) => sum(x.partes, (y) => y.monto)),
+      puntos: sum(vivos, (x) => x.puntos || 0),
+      aplicaciones: vivos.filter((x) => x.ventaId).map((x) => ({ pagoId: x.id, ventaId: x.ventaId, numero: BG.venta(x.ventaId).recibo, monto: x.total })),
+    };
   };
 
   /** Clientes con saldo a favor (la tienda les debe), de mayor a menor. */
@@ -1013,14 +1075,34 @@
    * suma), sin pasar de lo que a la compra le falta por sumar. `pg` = { total, partes, id? } (el pago ya guardado, o
    * uno por guardar). La misma fórmula para el cobro, el aviso antes de cobrar y lo que muestra el recibo.
    */
-  BG.puntosDePago = (v, pg) => {
+  BG.puntosDePago = (v, pg) => BG.puntosDePagoCon(v, pg, sum(BG.pagosDeVenta(v.id).filter((p) => p.id !== pg.id), (p) => p.puntos || 0));
+  /** La misma cuenta de arriba, diciendo cuántos puntos de la compra ya dieron los demás pagos (`yaDados`): una sola fórmula (regla 6). */
+  BG.puntosDePagoCon = (v, pg, yaDados) => {
     const f = BG.configFidelidad();
     if (!f.activo || v.anulada || !BG.ventaSumaPuntos(v)) return 0;
     const cada = v.fidelidad && v.fidelidad.cadaGs > 0 ? v.fidelidad.cadaGs : f.cadaGs;
     const plata = Math.max(0, pg.total - sum(pg.partes, (x) => x.deCanje || 0));
-    const yaDados = sum(BG.pagosDeVenta(v.id).filter((p) => p.id !== pg.id), (p) => p.puntos || 0);
     const tope = Math.max(0, BG.puntosDeVenta(v) - yaDados);
     return Math.min(tope, BG.puntosDeMonto(plata, cada));
+  };
+  /**
+   * Pagos que ya se hicieron en una compra que suma puntos y que no dieron los suyos: por ejemplo los de antes de que el dueño le sumara los
+   * puntos a una compra vieja, o los de antes de pasar a «con cada pago». Devuelve [{ pago, puntos }] en el orden en que se pagaron, con lo que
+   * le corresponde a cada uno (sin pasar de los puntos de la compra). Es solo una lectura: BG.sumarPuntosDePagos es la que los anota.
+   */
+  BG.pagosSinPuntos = (v) => {
+    // Solo con «los puntos se suman con cada pago» (si no, los pagos parciales no suman por diseño: la compra da sus puntos al terminar de pagarla) y mientras la
+    // compra debe algo: pagada del todo ya da todos sus puntos (BG.puntosGanadosDeVenta) y no hay nada que anotar en cada pago.
+    if (!BG.configFidelidad().activo || !BG.configFidelidad().porPago || v.anulada || !BG.ventaSumaPuntos(v) || BG.saldoVenta(v) <= 0) return [];
+    const pagos = BG.pagosDeVenta(v.id).filter((p) => !p.anterior).sort((a, b) => a.ts.localeCompare(b.ts));
+    let ya = sum(pagos, (p) => p.puntos || 0);
+    const out = [];
+    for (const p of pagos) {
+      if ((p.puntos || 0) > 0) continue;
+      const n = BG.puntosDePagoCon(v, p, ya);
+      if (n > 0) { out.push({ pago: p, puntos: n }); ya += n; }
+    }
+    return out;
   };
   /** Lo que ganaría la clienta con esta compra si el pago `pg` se anulara (para avisar antes de anular). */
   BG.puntosGanadosSinPago = (pg) => {
@@ -1030,12 +1112,32 @@
     pg.anulado = { simulado: true };
     try { return BG.puntosGanadosDeVenta(v); } finally { pg.anulado = antes; }
   };
+  /** Compras vivas de la clienta con pagos ya hechos que no dieron sus puntos, y cuántos darían (BG.pagosSinPuntos). */
+  BG.comprasConPagosSinPuntos = (cid) => BG.ventasDeCliente(cid)
+    .map((v) => { const l = BG.pagosSinPuntos(v); return { v: v, pagos: l.length, puntos: sum(l, (x) => x.puntos), pagado: sum(l, (x) => x.pago.total) }; })
+    .filter((x) => x.pagos > 0)
+    .sort((a, b) => String(a.v.ts).localeCompare(String(b.v.ts)));
+  /**
+   * Qué pasa si el dueño le suma los puntos a una compra que no suma sola: cuántos puntos tiene ya ({ ahora }) y cuántos quedan para cuando termine de
+   * pagarla ({ despues }). Con «los puntos se suman con cada pago», lo que ya pagó cuenta desde ahora. Es una lectura: no deja nada anotado.
+   */
+  BG.puntosAlSumarAparte = (v) => {
+    const total = BG.puntosDeVenta(v, true);
+    if (BG.saldoVenta(v) <= 0) return { ahora: total, despues: 0 };
+    if (!BG.configFidelidad().porPago) return { ahora: 0, despues: total };
+    const antes = v.puntosAparte;
+    v.puntosAparte = antes || { simulado: true };
+    try {
+      const ahora = Math.min(total, BG.puntosPorPagos(v) + sum(BG.pagosSinPuntos(v), (x) => x.puntos));
+      return { ahora: ahora, despues: total - ahora };
+    } finally { v.puntosAparte = antes; }
+  };
   /** Compras vivas de la clienta que hoy no suman puntos y darían al menos uno si el dueño elige que sumen. */
   BG.comprasSinPuntos = (cid) => {
     if (!BG.configFidelidad().activo) return [];
     return BG.ventasDeCliente(cid)
       .filter((v) => !v.anulada && !BG.ventaSumaPuntos(v))
-      .map((v) => ({ v: v, puntos: BG.puntosDeVenta(v, true), pagada: BG.saldoVenta(v) <= 0 }))
+      .map((v) => Object.assign({ v: v, puntos: BG.puntosDeVenta(v, true), pagada: BG.saldoVenta(v) <= 0 }, BG.puntosAlSumarAparte(v)))
       .filter((x) => x.puntos > 0)
       .sort((a, b) => String(a.v.ts).localeCompare(String(b.v.ts)));
   };

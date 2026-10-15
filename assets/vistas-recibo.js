@@ -46,6 +46,16 @@
   /** Los términos y condiciones que la tienda escribió y que salen en este tipo de comprobante (solo lo público: título y texto). */
   const terminosPropios = (grupo) => BG.terminosDeRecibo(grupo).map((t) => ({ id: t.id, titulo: t.titulo, texto: t.texto }));
 
+  /**
+   * Si el pago de una compra es una parte de un cobro mayor (la clienta entregó ₲ 500.000 y se repartió entre dos compras), lo que hay que decirle:
+   * cuánto entregó en total, con qué recibo y a qué otras compras fue el resto. Null si el cobro fue entero para esta compra.
+   */
+  const cobroDeEsteRecibo = (p) => {
+    const c = BG.cobroDe(p);
+    const otras = c.aplicaciones.filter((x) => x.pagoId !== p.id);
+    return otras.length ? { recibo: c.recibo, entregado: c.entregado, otras: otras.map((x) => ({ numero: x.numero, monto: x.monto })) } : null;
+  };
+
   function datosRecibo(tipo, id, pagosIds, ver) {
     const destacados = pagosIds.map((pid) => BG.db.pagos.find((p) => p.id === pid)).filter(Boolean);
     let cli;
@@ -54,7 +64,8 @@
       const v = BG.venta(id);
       if (!v) return null;
       cli = BG.cliente(v.clienteId);
-      ventas = [v];
+      // El recibo de un pago habla de la cuenta (a qué compras se aplicó y qué más debe), aunque se abra desde una sola compra.
+      ventas = destacados.length ? BG.ventasDeCliente(cli.id).filter((x) => destacados.some((p) => p.ventaId === x.id) || BG.saldoVenta(x) > 0).sort((a, b) => a.ts.localeCompare(b.ts)) : [v];
     } else if (tipo === 'p') {
       // Comprobante de puntos: no lleva compras ni saldos, solo los puntos y las condiciones.
       cli = BG.cliente(id);
@@ -81,13 +92,17 @@
       else ventas = BG.ventasDeCliente(cli.id).filter((v) => ids.has(v.id) || BG.saldoVenta(v) > 0).sort(porFecha);
     }
     const historial = tipo === 'a' || (tipo === 'c' && !destacados.length && ver !== 'debe');
+    // El estado de cuenta entero se arma como la ficha de la clienta (resumen, lo que debe y los movimientos de la cuenta); el recibo de un pago, como un
+    // solo pago repartido entre sus compras. Lo demás (una compra, lo de antes, solo lo que debe) sigue como siempre.
+    const pagoRecibo = tipo !== 'a' && tipo !== 'p' && destacados.length ? BG.resumenCobro(destacados[0]) : null;
+    const movimientos = tipo === 'c' && historial ? BG.libroCliente(cli.id).filter((m) => !m.anulado) : null;
     const numero = destacados.length ? destacados[0].recibo : tipo === 'v' ? ventas[0].recibo : null;
     const t = BG.db.config.tienda;
     return {
       tienda: { nombre: t.nombre, whatsapp: t.whatsapp, instagram: t.instagram, direccion: t.direccion, mensaje: t.mensaje },
       titulo: destacados.length ? 'Recibo de pago' : tipo === 'v' ? (BG.esAnterior(ventas[0]) ? 'Compra anterior' : 'Recibo') : tipo === 'a' ? 'Compras anteriores' : 'Estado de cuenta',
       subtitulo: tipo === 'a' ? 'Lo que llevaste antes del sistema' : historial ? 'Todas tus compras y pagos' : tipo === 'c' && !destacados.length ? 'Lo que tenés pendiente' : '',
-      historial: historial, anteriores: tipo === 'a',
+      historial: historial, anteriores: tipo === 'a', pago: pagoRecibo, movimientos: movimientos,
       numero: numero,
       emision: BG.hoy(),
       cliente: { nombre: cli.nombre, documento: cli.ci ? (cli.ci.includes('-') ? 'RUC ' : 'CI ') + cli.ci : 'Sin CI/RUC' },
@@ -107,7 +122,7 @@
           pagos: BG.pagosDeVenta(v.id).sort((a, b) => a.ts.localeCompare(b.ts)).map((p) => ({
             fecha: p.fecha, monto: p.total, nuevo: pagosIds.indexOf(p.id) >= 0, recibo: p.recibo, anterior: !!p.anterior,
             formas: formasPublicas(p),
-            aFavor: p.excedente, puntos: p.puntos || 0,
+            aFavor: p.excedente, puntos: p.puntos || 0, cobro: cobroDeEsteRecibo(p),
           })),
           // Público: qué devolvió o cambió y qué pasó con la plata (sin motivos internos).
           devoluciones: (v.devoluciones || []).map((d) => ({
@@ -202,6 +217,75 @@
       + '<p class="r-chica">Este comprobante vale por los puntos que tenías al ' + BG.fmtFecha(d.emision) + '.</p>';
   }
 
+  /**
+   * Recibo de un pago. La clienta entregó una cantidad de una vez: eso es lo primero que se lee (aunque por dentro se guarde un pago por compra),
+   * después a qué compras se aplicó y cómo quedó cada una, y al final lo que todavía debe.
+   */
+  function htmlPago(d, verPuntos, opc) {
+    const pg = d.pago;
+    const aplicadas = new Set(pg.aplicaciones.map((a) => a.numero));
+    const otras = d.compras.filter((c) => c.saldo > 0 && !aplicadas.has(c.numero));
+    const pendientes = d.compras.filter((c) => c.saldo > 0);
+    const cuotas = [];
+    pendientes.forEach((c) => c.cuotas.forEach((q) => cuotas.push(Object.assign({ compra: c.numero }, q))));
+    cuotas.sort((a, b) => a.vence.localeCompare(b.vence));
+    const nombreCompra = (a) => (a.anterior ? 'Compra de antes del sistema' : esc(a.detalle || 'Compra'));
+    return '<section class="r-section r-pago"><div class="r-pago-caja"><span>Pago recibido</span><strong>' + gs(pg.entregado) + '</strong></div>'
+      + '<p class="r-pago-sub"><span class="r-fecha">' + BG.fmtFecha(pg.fecha) + '</span>' + (pg.formas.length ? ' · ' + pg.formas.map((x) => esc(x.forma) + (pg.formas.length > 1 ? ' ' + gs(x.monto) : '')).join(' + ') : '') + '</p></section>'
+      + (pg.aplicaciones.length ? '<section class="r-section"><h2>' + (pg.aplicaciones.length === 1 ? 'A qué compra se aplicó' : 'Cómo se repartió') + '<span>' + pg.aplicaciones.length + (pg.aplicaciones.length === 1 ? ' compra' : ' compras') + '</span></h2>'
+        + '<table class="r-table r-aplic"><thead><tr><th>Compra</th><th class="num">Se aplicó</th><th class="num">Estado</th></tr></thead><tbody>'
+        // Todo lo que se aplicó es plata ya pagada (fondo verde suave); «Saldada» lo dice con tilde y palabra, así se entiende también sin color.
+        + pg.aplicaciones.map((a) => '<tr class="' + (a.saldo > 0 ? 'is-parcial' : 'is-saldada') + '"><td><span class="r-fecha">' + BG.fmtFecha(a.fecha) + '</span> <span class="r-fecha r-nro">' + BG.fmtRecibo(a.numero) + '</span> ' + nombreCompra(a) + '</td>'
+          + '<td class="num">' + gs(a.monto) + '</td><td class="num"><strong>' + (a.saldo > 0 ? 'Falta ' + gs(a.saldo) : icon('check', 'i-sm') + ' Saldada') + '</strong></td></tr>').join('')
+        + '</tbody><tfoot><tr><td>Total aplicado</td><td class="num">' + gs(pg.aplicado) + '</td><td></td></tr></tfoot></table></section>' : '')
+      + (pg.excedente > 0 ? '<p class="r-account"><span>' + (pg.aplicaciones.length ? 'Lo que sobró quedó a tu favor' : 'Quedó a tu favor') + '</span><strong>' + gs(pg.excedente) + '</strong></p>' : '')
+      + (otras.length ? '<section class="r-section"><h2>Además debés<span>' + otras.length + (otras.length === 1 ? ' compra' : ' compras') + '</span></h2><table class="r-table"><tbody>'
+        + otras.map((c) => '<tr><td><span class="r-fecha">' + BG.fmtFecha(c.fecha) + '</span> <span class="r-fecha r-nro">' + BG.fmtRecibo(c.numero) + '</span> ' + (c.anterior ? 'Compra de antes del sistema' : detalleCorto(c))
+          + '</td><td class="num"><strong>' + gs(c.saldo) + '</strong></td></tr>').join('') + '</tbody></table></section>' : '')
+      + (cuotas.length ? '<section class="r-section"><h2>Tus próximas cuotas</h2><table class="r-table"><tbody>' + cuotas.map((q) => '<tr' + (q.vencida ? ' class="is-late"' : '') + '><td>Cuota ' + q.n + ' de ' + q.de
+        + ' · compra ' + BG.fmtRecibo(q.compra) + ' · ' + (q.vencida ? 'venció el ' : 'vence el ') + BG.fmtFecha(q.vence) + '</td><td class="num">' + gs(q.falta) + '</td></tr>').join('') + '</tbody></table></section>' : '');
+  }
+
+  /**
+   * Los movimientos de la cuenta, como en la ficha de la clienta: cada compra suma, cada pago resta y la última columna es lo que debe en ese momento.
+   * Un cobro repartido entre varias compras es UNA línea, y debajo dice a cuáles se aplicó. En el ticket (angosto) van la fecha dentro del texto y
+   * una sola columna de importe.
+   */
+  function htmlMovimientos(d) {
+    const aplicacion = (m) => {
+      if (!m.pagoIds || !(m.abono > 0) || /^Pagado antes/.test(m.concepto) || !m.aplicaciones || !m.aplicaciones.length) return '';
+      return m.aplicaciones.length === 1 ? 'Se aplicó a la compra ' + BG.fmtRecibo(m.aplicaciones[0].numero)
+        : 'Se repartió: ' + m.aplicaciones.map((a) => 'compra ' + BG.fmtRecibo(a.numero) + ' ' + gs(a.monto)).join(' · ');
+    };
+    return '<section class="r-section"><h2>Movimientos de tu cuenta<span>' + d.movimientos.length + (d.movimientos.length === 1 ? ' movimiento' : ' movimientos') + '</span></h2>'
+      + '<table class="r-table r-libro"><thead><tr><th class="l-fecha">Fecha</th><th>Qué pasó</th><th class="num l-cargo">Compra</th><th class="num l-abono">Pago</th><th class="num l-imp">Importe</th><th class="num">Saldo</th></tr></thead><tbody>'
+      + d.movimientos.map((m) => '<tr class="' + (m.pagoIds && m.abono > 0 ? 'l-pago' : 'l-compra') + '"><td class="l-fecha r-fecha">' + BG.fmtFecha(m.fecha) + '</td>'
+        + '<td class="l-que"><span class="l-fechat r-forms">' + BG.fmtFecha(m.fecha) + '</span>' + esc(m.publico) + (aplicacion(m) ? '<div class="r-forms">' + esc(aplicacion(m)) + '</div>' : '') + '</td>'
+        + '<td class="num l-cargo">' + (m.cargo ? gs(m.cargo) : '') + '</td><td class="num l-abono">' + (m.abono ? gs(m.abono) : '') + '</td>'
+        + '<td class="num l-imp">' + (m.cargo || m.abono ? gs(m.cargo || m.abono) : '') + '</td><td class="num"><strong>' + gs(m.saldo) + '</strong></td></tr>').join('')
+      + '</tbody></table><p class="r-chica">Cada compra suma a lo que debés y cada pago lo baja. En «Saldo» ves cuánto debías después de cada movimiento.</p></section>';
+  }
+
+  /** Estado de cuenta entero: primero cuánto compró, cuánto pagó y cuánto le falta; después lo que debe compra por compra; y los movimientos. */
+  function htmlCuenta(d) {
+    const total = d.compras.reduce((a, c) => a + c.total, 0);
+    const pagado = d.compras.reduce((a, c) => a + c.pagado, 0);
+    const pendientes = d.compras.filter((c) => c.saldo > 0);
+    const cuotas = [];
+    d.compras.forEach((c) => c.cuotas.forEach((q) => cuotas.push(Object.assign({ compra: c.numero }, q))));
+    cuotas.sort((a, b) => a.vence.localeCompare(b.vence));
+    return (d.compras.length ? '<div class="r-resumen"><div><span>Compraste</span><strong>' + gs(total) + '</strong></div><div class="r-res-pagado"><span>Pagaste</span><strong>' + gs(pagado) + '</strong></div>'
+      + '<div class="r-res-falta"><span>Te falta</span><strong>' + gs(d.saldoCuenta) + '</strong></div></div>' : '')
+      + (pendientes.length ? '<section class="r-section"><h2>Lo que todavía debés<span>' + pendientes.length + (pendientes.length === 1 ? ' compra' : ' compras') + '</span></h2>'
+        + '<table class="r-table r-debe"><thead><tr><th>Compra</th><th class="num">Total</th><th class="num col-pagado">Pagaste</th><th class="num">Falta</th></tr></thead><tbody>'
+        + pendientes.map((c) => '<tr><td><span class="r-fecha">' + BG.fmtFecha(c.fecha) + '</span> <span class="r-fecha r-nro">' + BG.fmtRecibo(c.numero) + '</span> ' + (c.anterior ? 'Compra de antes del sistema' : detalleCorto(c)) + '</td>'
+          + '<td class="num">' + gs(c.total) + '</td><td class="num col-pagado' + (c.pagado > 0 ? ' is-ok' : '') + '">' + gs(c.pagado) + '</td><td class="num"><strong>' + gs(c.saldo) + '</strong></td></tr>').join('')
+        + '</tbody><tfoot><tr><td>Total que debés</td><td class="num"></td><td class="num col-pagado"></td><td class="num">' + gs(pendientes.reduce((a, c) => a + c.saldo, 0)) + '</td></tr></tfoot></table></section>' : '')
+      + (cuotas.length ? '<section class="r-section"><h2>Tus próximas cuotas</h2><table class="r-table"><tbody>' + cuotas.map((q) => '<tr' + (q.vencida ? ' class="is-late"' : '') + '><td>Cuota ' + q.n + ' de ' + q.de
+        + ' · compra ' + BG.fmtRecibo(q.compra) + ' · ' + (q.vencida ? 'venció el ' : 'vence el ') + BG.fmtFecha(q.vence) + '</td><td class="num">' + gs(q.falta) + '</td></tr>').join('') + '</tbody></table></section>' : '')
+      + (d.movimientos.length ? htmlMovimientos(d) : '<p class="r-section">Todavía no hay movimientos.</p>');
+  }
+
   /** Una línea de la compra para el historial: «2 × Remera · 1 × Jean» (lo que se quedó). */
   const detalleCorto = (c) => c.items.map((it) => (it.cantidad > 1 ? it.cantidad + ' × ' : '') + esc(it.descripcion)).join(' · ');
 
@@ -216,12 +300,12 @@
       return '<section class="r-section"><h2>' + titulo + '<span>' + compras.length + (compras.length === 1 ? ' compra' : ' compras') + '</span></h2>'
         + '<table class="r-table r-hist"><thead><tr><th>Compra</th><th class="num">Total</th><th class="num col-pagado">Pagado</th><th class="num">Saldo</th></tr></thead><tbody>'
         // Fecha y número por separado: en el ticket (angosto) van en renglones distintos y no empujan los montos afuera.
-        + compras.map((c) => '<tr><td><span class="r-fecha">' + BG.fmtFecha(c.fecha) + '</span> <span class="r-fecha r-nro">' + BG.fmtRecibo(c.numero) + '</span> ' + detalleCorto(c)
+        + compras.map((c) => '<tr' + (c.saldo > 0 ? '' : ' class="is-saldada"') + '><td><span class="r-fecha">' + BG.fmtFecha(c.fecha) + '</span> <span class="r-fecha r-nro">' + BG.fmtRecibo(c.numero) + '</span> ' + detalleCorto(c)
           + (c.agregados.length ? '<div class="r-forms">' + c.agregados.map((a) => 'el ' + BG.fmtFechaCorta(a.fecha) + ' se sumó: ' + esc(a.texto)).join(' · ') + '</div>' : '')
           + (c.devoluciones.length ? '<div class="r-forms">' + c.devoluciones.map((x) => BG.fmtFechaCorta(x.fecha) + ' · ' + esc(x.texto)).join(' · ') + '</div>' : '')
           + (c.descuento ? '<div class="r-forms">Descuento ' + gs(c.descuento) + '</div>' : '')
           + (c.corregida ? '<div class="r-forms">Corregida el ' + BG.fmtFechaCorta(c.corregida.fecha) + '</div>' : '') + '</td>'
-          + '<td class="num">' + gs(c.total) + '</td><td class="num col-pagado">' + gs(c.pagado) + '</td><td class="num"><strong>' + (c.saldo > 0 ? gs(c.saldo) : '—') + '</strong></td></tr>').join('')
+          + '<td class="num">' + gs(c.total) + '</td><td class="num col-pagado' + (c.pagado > 0 ? ' is-ok' : '') + '">' + gs(c.pagado) + '</td><td class="num"><strong>' + (c.saldo > 0 ? gs(c.saldo) : '—') + '</strong></td></tr>').join('')
         + '</tbody><tfoot><tr><td>Total</td><td class="num">' + gs(tot.total) + '</td><td class="num col-pagado">' + gs(tot.pagado) + '</td><td class="num">' + gs(tot.saldo) + '</td></tr></tfoot></table></section>';
     };
     const actuales = d.compras.filter((c) => !c.anterior);
@@ -253,12 +337,12 @@
     const m = BG.configMarca();
     const t = d.tienda;
     const unaCompra = d.compras.length === 1;
-    const deUnaCompra = unaCompra && d.titulo !== 'Estado de cuenta' && !d.anteriores;
+    const deUnaCompra = !d.pago && unaCompra && d.titulo !== 'Estado de cuenta' && !d.anteriores;
     const saldoPrincipal = deUnaCompra ? d.compras[0].saldo : d.anteriores ? d.saldoDocumento : d.saldoCuenta;
     // En el recibo de una compra el recuadro habla de esa compra; "cuenta al día" solo si no debe nada en ninguna.
     const etiquetaSaldo = saldoPrincipal > 0 ? (deUnaCompra ? 'Saldo pendiente de esta compra' : d.anteriores ? 'Debés de lo de antes' : 'Saldo pendiente')
       : (deUnaCompra ? 'Compra saldada' : d.anteriores ? 'Lo de antes está saldado' : 'Cuenta al día');
-    const compra = (c) => '<section class="r-section">'
+    const compra = (c) => '<section class="r-section r-compra">'
       + '<h2>' + (c.anterior ? 'Compra de antes del sistema' : 'Detalle de la compra') + '<span>' + BG.fmtFecha(c.fecha) + ' · ' + BG.fmtRecibo(c.numero) + '</span></h2>'
       + (c.corregida ? '<p class="r-forms r-corregida">Comprobante corregido el ' + BG.fmtFecha(c.corregida.fecha) + (c.corregida.totalAntes !== c.total ? ' (el total era ' + gs(c.corregida.totalAntes) + ')' : '') + ': reemplaza al anterior.</p>' : '')
       + (c.sinDetalle
@@ -276,9 +360,11 @@
           + (d.reintegro < d.aFavor ? '; los ' + gs(d.aFavor - d.reintegro) + ' que pagaste con puntos quedaron a tu favor' : '')
           : gs(d.aFavor) + ' quedaron a tu favor') + '</div>' : '') + '</td></tr>').join('') + '</tbody></table>' : '')
       + '<h2 class="r-sub">Pagos realizados</h2>'
-      + (c.pagos.length ? '<table class="r-table"><tbody>' + c.pagos.map((p) => '<tr' + (p.nuevo ? ' class="is-new"' : '') + '><td>' + (p.anterior ? 'Antes del sistema' : BG.fmtFecha(p.fecha)) + (p.nuevo ? ' <strong>· pago de hoy</strong>' : '')
+      + (c.pagos.length ? '<table class="r-table"><tbody>' + c.pagos.map((p) => '<tr class="r-pagada' + (p.nuevo ? ' is-new' : '') + '"><td>' + (p.anterior ? 'Antes del sistema' : BG.fmtFecha(p.fecha)) + (p.nuevo ? ' <strong>· pago de hoy</strong>' : '')
         + '<div class="r-forms">' + p.formas.map((x) => x.forma + ' ' + gs(x.monto)).join(' + ') + (p.aFavor ? ' · ' + gs(p.aFavor) + ' quedó a tu favor' : '')
-        + (verPuntos && p.puntos ? ' · sumó ' + p.puntos + (p.puntos === 1 ? ' punto' : ' puntos') : '') + '</div></td>'
+        + (verPuntos && p.puntos ? ' · sumó ' + p.puntos + (p.puntos === 1 ? ' punto' : ' puntos') : '') + '</div>'
+        // Parte de un pago mayor: se dice cuánto entregó en total y a qué otra compra fue el resto (así no parecen dos pagos).
+        + (p.cobro ? '<div class="r-forms r-cobro">Parte de un pago de ' + gs(p.cobro.entregado) + ' (recibo ' + BG.fmtRecibo(p.cobro.recibo) + '): el resto fue a ' + p.cobro.otras.map((o) => 'la compra ' + BG.fmtRecibo(o.numero) + ' (' + gs(o.monto) + ')').join(' y ') + '.</div>' : '') + '</td>'
         + '<td class="num">' + gs(p.monto) + '</td></tr>').join('')
         + (c.aFavorMovido ? '<tr><td>Por la devolución, pasó a tu saldo a favor</td><td class="num">−' + gs(c.aFavorMovido) + '</td></tr>' : '')
         + '</tbody><tfoot><tr><td>Total pagado</td><td class="num">' + gs(c.pagado) + '</td></tr></tfoot></table>'
@@ -292,7 +378,10 @@
       + (d.soloPuntos ? d.detallePuntos.ganadas.length + d.detallePuntos.canjes.length + (d.detallePuntos.manuales.length ? d.detallePuntos.manuales.length + 3 : 0) + 4 : 0);
     const largo = filas > 16;
     const compacto = d.historial && !conDetalle;
-    return '<article class="receipt' + (formato === 'ticket' ? ' is-ticket' : '') + (largo ? ' is-largo' : '')
+    // Con la ficha (resumen + movimientos) y con el recibo de un pago, el largo lo dan los movimientos o las compras aplicadas.
+    const largoFicha = d.pago ? d.pago.aplicaciones.length + d.compras.length * 2 + 6 : d.movimientos ? d.movimientos.length + d.compras.length + 8 + (conDetalle ? filas : 0) : 0;
+    const esLargo = d.pago || d.movimientos ? largoFicha > 16 : largo;
+    return '<article class="receipt' + (formato === 'ticket' ? ' is-ticket' : '') + (esLargo ? ' is-largo' : '')
       + (m.fondoCabecera === false ? '' : ' cab-color') + '" id="recibo"'
       + ' style="--r-zoom:' + (escala / 100) + ';--r-brand:' + esc(m.principal) + ';--r-accent:' + esc(m.acento) + ';--mark-berry:' + esc(m.principal) + ';--mark-glow:' + esc(m.acento) + ';--logo-escala:' + BG.escalaLogo() + '">'
       + '<header class="r-head"><div class="r-logo">' + BG.logo(true) + '</div>'
@@ -301,8 +390,10 @@
       + '<p class="r-contact">' + [t.whatsapp && 'WhatsApp ' + esc(t.whatsapp), t.instagram && 'Instagram ' + esc(t.instagram), t.direccion && esc(t.direccion)].filter(Boolean).map((x) => '<span>' + x + '</span>').join('') + '</p>'
       + '<div class="r-client"><div><span>Cliente</span><strong>' + esc(d.cliente.nombre) + '</strong></div><div><span>Documento</span><strong>' + esc(d.cliente.documento) + '</strong></div></div>'
       + (d.soloPuntos ? htmlSoloPuntos(d, opc)
-        : (compacto ? htmlHistorial(d, verPuntos)
-          : d.compras.length ? d.compras.map(compra).join('') : '<p class="r-section">' + (d.historial ? 'Todavía no hay compras.' : 'No hay compras con saldo pendiente.') + '</p>')
+        : (d.pago ? htmlPago(d, verPuntos, opc)
+          : d.movimientos ? htmlCuenta(d) + (conDetalle && d.compras.length ? '<h2 class="r-sub r-det-tit">Detalle de cada compra</h2>' + d.compras.map(compra).join('') : '')
+            : compacto ? htmlHistorial(d, verPuntos)
+              : d.compras.length ? d.compras.map(compra).join('') : '<p class="r-section">' + (d.historial ? 'Todavía no hay compras.' : 'No hay compras con saldo pendiente.') + '</p>')
           + '<div class="r-saldo' + (saldoPrincipal > 0 ? '' : ' is-paid') + '"><span>' + etiquetaSaldo + '</span><strong>' + gs(saldoPrincipal) + '</strong></div>'
           + (deUnaCompra && d.saldoCuenta !== saldoPrincipal ? '<p class="r-account"><span>Saldo total de tu cuenta (todas las compras)</span><strong>' + gs(d.saldoCuenta) + '</strong></p>' : '')
           // En la cuenta entera, lo de antes del sistema se dice aparte (está sumado en el saldo, pero se ve de dónde viene).
@@ -357,11 +448,13 @@
     let margen = leerPref(KEY_MARGEN, 'normal', (x) => x === 'normal' || x === 'angosto');
     let conDetalle = leerPref(KEY_DETALLE, '0', (x) => x === '0' || x === '1') === '1';
     const cli = d.clienteRef;
-    const ventasOrig = tipo === 'v' ? [BG.venta(args[1])] : BG.ventasDeCliente(cli.id);
+    const ventasOrig = tipo === 'v' && !d.pago ? [BG.venta(args[1])] : BG.ventasDeCliente(cli.id);
     const prox = d.compras.length === 1 && d.compras[0].cuotas.length ? d.compras[0].cuotas[0] : null;
     // Lo que se imprime del programa: viene de Ajustes y en cada emisión se cambia solo para esa vez (también en el mensaje de WhatsApp).
     const opc = { condiciones: BG.configFidelidad().condicionesEnRecibo !== false, comoFunciona: BG.configFidelidad().comoFuncionaEnRecibo !== false };
-    const textoWaDe = () => (d.soloPuntos ? BG.textosWa.puntos(cli, d.detallePuntos, { condiciones: opc.condiciones }) : BG.textosWa.recibo(cli, d, prox));
+    // Con los puntos a la vista (verPuntos) el mensaje del pago los cuenta; tildando o destildando se rearma.
+    const textoWaDe = () => (d.soloPuntos ? BG.textosWa.puntos(cli, d.detallePuntos, { condiciones: opc.condiciones })
+      : d.pago ? BG.textosWa.pago(cli, d.pago, { puntos: verPuntos }) : BG.textosWa.recibo(cli, d, prox));
     // Los puntos en el recibo: viene lo que eligió el dueño en Ajustes, y acá se puede cambiar solo para esta emisión.
     let verPuntos = BG.configFidelidad().activo && (d.verPuntosPago != null ? d.verPuntosPago : BG.configFidelidad().enRecibo);
     const volver = tipo === 'v' ? '#/ventas/' + args[1] : '#/clientes/' + cli.id;
@@ -452,6 +545,8 @@
             verPuntos = t.checked;
             const cb = $('#r-cond-puntos', root);
             if (cb) cb.disabled = !verPuntos;
+            const wa = $('[data-accion="whatsapp"]', root);
+            if (wa) wa.href = BG.waLink(cli, textoWaDe());
             repintar();
             return;
           }

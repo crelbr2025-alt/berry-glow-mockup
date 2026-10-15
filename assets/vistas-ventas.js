@@ -664,9 +664,10 @@
       return true;
     }
     const n = BG.puntosDeVenta(v, true);
-    const ok = await BG.modal({ titulo: 'Sumar puntos con esta compra', cuerpo: '<p>Esta compra no suma sola porque es ' + (BG.esAnterior(v) ? 'de antes del sistema' : 'de antes del ' + BG.fmtFecha(BG.configFidelidad().desde) + ', cuando empezó el programa')
+    const al = BG.puntosAlSumarAparte(v);
+    const ok = await BG.modal({ titulo: 'Sumar puntos con esta compra', cuerpo: '<p>Esta compra no suma sola porque ' + (BG.esAnterior(v) ? 'es de antes del sistema' : v.fecha >= BG.configFidelidad().desde && v.fidelidad && v.fidelidad.sinPuntos ? 'se hizo con descuento' : 'es de antes del ' + BG.fmtFecha(BG.configFidelidad().desde) + ', cuando empezó el programa')
       + '. Si la sumás, ' + esc(cli.nombre.split(' ')[0]) + ' gana <strong>' + n + (n === 1 ? ' punto' : ' puntos') + '</strong>'
-      + (BG.saldoVenta(v) > 0 ? ' cuando termine de pagarla (debe ' + gs(BG.saldoVenta(v)) + ').' : ', que puede usar enseguida.') + ' Queda anotado que lo decidiste vos.</p>',
+      + (BG.saldoVenta(v) > 0 ? (al.ahora ? ': ' + al.ahora + (al.ahora === 1 ? ' ya' : ' ya') + ' por lo que pagó' + (al.despues ? ' y ' + al.despues + ' más cuando termine de pagarla' : '') : ' cuando termine de pagarla') + ' (debe ' + gs(BG.saldoVenta(v)) + ').' : ', que puede usar enseguida.') + ' Queda anotado que lo decidiste vos.</p>',
       acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Sumar puntos', valor: 'ok', clase: 'btn-primary' }] });
     if (ok !== 'ok') return false;
     const res = BG.sumarPuntosAparte([v.id], 'Elegido en la compra ' + BG.fmtRecibo(v.recibo));
@@ -887,6 +888,13 @@
     const ptsSi = fid.activo && !v.anulada ? BG.puntosDeVenta(v) : 0;
     const ptsYa = ptsSi ? BG.puntosGanadosDeVenta(v) : 0;
     const ptsDarian = fid.activo && !v.anulada && !BG.ventaSumaPuntos(v) ? BG.puntosDeVenta(v, true) : 0;
+    // Pagos de esta compra que ya se hicieron y no sumaron sus puntos: el dueño puede sumárselos.
+    const pagosSinSus = fid.activo && !v.anulada ? BG.pagosSinPuntos(v) : [];
+    const ptsSinSus = pagosSinSus.reduce((a, x) => a + x.puntos, 0);
+    const lineaPagosSinPuntos = !pagosSinSus.length ? ''
+      : '<div class="callout callout-soft">' + icon('star') + '<div class="grow"><span class="small">' + (pagosSinSus.length === 1 ? 'Un pago de esta compra no sumó sus puntos' : pagosSinSus.length + ' pagos de esta compra no sumaron sus puntos')
+        + (duena ? ': sumándolos, ' + esc(cli.nombre.split(' ')[0]) + ' gana <strong>' + ptsSinSus + (ptsSinSus === 1 ? ' punto' : ' puntos') + '</strong>.' : '. Si corresponde, lo suma ' + esc(BG.nombreDuena()) + '.') + '</span></div>'
+        + (duena ? '<button type="button" class="btn btn-sm" data-accion="puntos-pagos">' + icon('star', 'i-sm') + 'Sumar los puntos de lo ya pagado</button>' : '') + '</div>';
     const lineaPuntos = !fid.activo || v.anulada || (!ptsSi && !ptsDarian) ? ''
       : '<div class="callout callout-soft">' + icon('star') + '<div class="grow"><span class="small">'
         + (ptsSi ? (saldo > 0 ? (ptsYa ? 'Ya sumó <strong>' + ptsYa + (ptsYa === 1 ? ' punto' : ' puntos') + '</strong> con sus pagos y suma ' + (ptsSi - ptsYa) + ' más cuando termine de pagarla.'
@@ -922,6 +930,7 @@
       + (v.anterior ? '<div class="callout">' + icon('file') + '<div><strong>Compra de antes del sistema.</strong> Se anotó el ' + BG.fmtFecha(v.anterior.ts.slice(0, 10)) + ' por ' + esc(v.anterior.usuario)
         + (v.anterior.nota ? ' (' + esc(v.anterior.nota) + ')' : '') + '. No movió el stock ni entra en la caja ni en los reportes; lo que debe de acá se cobra como cualquier deuda.</div></div>' : '')
       + lineaPuntos
+      + lineaPagosSinPuntos
       + (corregidas.length ? '<div class="callout callout-soft">' + icon('edit') + '<div class="grow"><span class="small">Esta compra se <strong>corrigió</strong> ' + (corregidas.length === 1 ? 'el ' + BG.fmtFecha(corregidas[0].fecha) : corregidas.length + ' veces (la última el ' + BG.fmtFecha(corregidas[corregidas.length - 1].fecha) + ')')
         + (duena ? '. El ticket anterior está más abajo, en «Correcciones».' : '.') + '</span></div></div>' : '')
       + (v.traslados || []).map((t) => '<div class="callout callout-soft">' + icon('users') + '<div class="grow"><span class="small">Esta compra <strong>pasó de ' + esc(t.deNombre) + ' a ' + esc(t.aNombre) + '</strong> el '
@@ -949,6 +958,11 @@
           : BG.fmtFecha(p.fecha) + ' ' + BG.fmtHora(p.ts) + ' · ' + BG.fmtRecibo(p.recibo) + (p.inicial ? ' · pago inicial' : '') + ' · por ' + esc(p.usuario)) + '</div>'
         + (p.anterior ? '' : '<div class="row-sub">' + p.partes.map((x) => BG.FORMAS[x.forma] + ' ' + gs(x.monto) + (x.deCanje ? ' (' + gs(x.deCanje) + ' con puntos)' : '')).join(' + ')
           + (p.puntos ? ' · <span class="t-favor">sumó ' + p.puntos + (p.puntos === 1 ? ' punto' : ' puntos') + '</span>' : '') + '</div>')
+        // Parte de un cobro mayor: se dice cuánto entregó en total y a qué otras compras fue el resto (así no parece que pagó dos veces).
+        + (p.anterior || p.anulado || !p.grupo ? '' : (() => {
+          const otras = BG.cobroDe(p).aplicaciones.filter((x) => x.pagoId !== p.id);
+          return otras.length ? '<div class="row-sub">Parte de un pago de ' + gs(BG.cobroDe(p).entregado) + ': el resto fue a ' + otras.map((x) => 'la compra ' + BG.fmtRecibo(x.numero) + ' (' + gs(x.monto) + ')').join(' y ') + '.</div>' : '';
+        })())
         + (p.anulado ? '<div class="row-sub">Anulado el ' + BG.fmtFecha(p.anulado.fecha) + ': ' + esc(p.anulado.motivo) + '</div>' : '')
         + '</div>' + (p.anulado || v.anulada || !BG.esDuena() ? '' : '<button type="button" class="btn btn-sm btn-quiet" data-accion="anular-pago" data-id="' + p.id + '">Anular</button>')
         + '</div></li>').join('')
@@ -980,6 +994,7 @@
             if (b.dataset.accion === 'plan' && (await BG.planUI(v))) BG.render();
             if (b.dataset.accion === 'agregar' && (await BG.agregarArticulosUI(v))) BG.render();
             if (b.dataset.accion === 'puntos-sumar' && (await BG.puntosCompraUI(v, 'sumar'))) BG.render();
+            if (b.dataset.accion === 'puntos-pagos' && (await BG.puntosDePagosUI(cli, v))) BG.render();
             if (b.dataset.accion === 'puntos-quitar' && (await BG.puntosCompraUI(v, 'quitar'))) BG.render();
             if (b.dataset.accion === 'anular-pago') {
               const pg = BG.db.pagos.find((x) => x.id === b.dataset.id);

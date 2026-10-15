@@ -95,6 +95,30 @@
       ]);
     },
 
+    /**
+     * Recibo de un pago (BG.resumenCobro): lo que entregó de una vez, cómo se repartió entre sus compras y qué le queda. Un cobro es un solo pago aunque
+     * se haya repartido: nunca se le dice «dos pagos de ₲ 250.000» cuando entregó ₲ 500.000. `opciones.puntos: false` saca lo de los puntos.
+     */
+    pago: (cli, r, opciones) => {
+      const saldo = BG.saldoCliente(cli.id);
+      const conPuntos = !(opciones && opciones.puntos === false);
+      const formas = r.formas.map((x) => x.forma.toLowerCase()).join(' + ');
+      const reparto = r.aplicaciones.map((a) => 'la compra ' + BG.fmtRecibo(a.numero) + ' (' + gs(a.monto) + (a.saldo > 0 ? ', te faltan ' + gs(a.saldo) : ', quedó saldada') + ')');
+      return unir([
+        saludo() + ', ' + nombreCorto(cli) + '! Te escribimos de ' + tienda() + ' 💗',
+        '',
+        '✔️ Recibimos tu pago de ' + gs(r.entregado) + (formas ? ' (' + formas + ')' : '') + '.',
+        reparto.length === 1 ? 'Se aplicó a ' + reparto[0] + '.' : reparto.length ? 'Se repartió así: ' + reparto.join(' · ') + '.' : null,
+        r.excedente > 0 ? (reparto.length ? 'Lo que sobró (' + gs(r.excedente) + ') quedó a tu favor para tu próxima compra.' : 'Quedó a tu favor ' + gs(r.excedente) + ' para tu próxima compra.') : null,
+        saldo > 0 ? 'Saldo pendiente de tu cuenta: ' + gs(saldo) + '.' : '✔️ ¡Tu cuenta está al día!',
+        conPuntos && r.puntos ? '🌟 Con este pago sumaste ' + r.puntos + (r.puntos === 1 ? ' punto.' : ' puntos.') : null,
+        conPuntos ? lineaPuntos(cli.id) : null,
+        'Comprobante ' + BG.fmtRecibo(r.numero) + '.',
+        '',
+        '¡Gracias por elegirnos! Cualquier consulta, escribinos por acá. ✨',
+      ]);
+    },
+
     /** Recibo o estado de cuenta que se manda desde la pantalla del comprobante. */
     recibo: (cli, d, prox) => {
       const unaCompra = d.compras.length === 1 && d.titulo !== 'Estado de cuenta' && !d.anteriores;

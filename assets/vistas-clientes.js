@@ -557,6 +557,14 @@
         + '. ' + (BG.esDuena() ? 'Si querés, se los sumás: darían <strong>' + darian + (darian === 1 ? ' punto' : ' puntos') + '</strong>.' : 'Si corresponde sumárselos, lo hace ' + esc(BG.nombreDuena()) + '.') + '</p>'
         + (BG.esDuena() ? '<button type="button" class="btn btn-sm" data-accion="puntos-aparte">' + icon('star', 'i-sm') + 'Sumar puntos de esas compras</button>' : '') + '</div></div>'
       : '';
+    // Pagos ya hechos que no dieron sus puntos (compras que empezaron a sumar después, o pagos de antes de pasar a «con cada pago»).
+    const sinSusPuntos = BG.comprasConPagosSinPuntos(c.id);
+    const ptsSinSus = sinSusPuntos.reduce((a, x) => a + x.puntos, 0);
+    const lineaPagosSinPuntos = sinSusPuntos.length
+      ? '<div class="callout callout-soft">' + icon('info') + '<div><p class="small">' + (sinSusPuntos.length === 1 ? 'Una compra tiene' : sinSusPuntos.length + ' compras tienen') + ' pagos ya hechos que no sumaron sus puntos. '
+        + (BG.esDuena() ? 'Si querés, se los sumás: darían <strong>' + ptsSinSus + (ptsSinSus === 1 ? ' punto' : ' puntos') + '</strong>.' : 'Si corresponde sumárselos, lo hace ' + esc(BG.nombreDuena()) + '.') + '</p>'
+        + (BG.esDuena() ? '<button type="button" class="btn btn-sm" data-accion="puntos-pagos">' + icon('star', 'i-sm') + 'Sumar los puntos de lo ya pagado</button>' : '') + '</div></div>'
+      : '';
     // Solo el dueño puede darle puntos a mano (sin una compra): botón aparte, con alerta y PIN (BG.darPuntosUI).
     const botonDar = BG.esDuena() ? '<button type="button" class="btn btn-sm" data-accion="dar-puntos">' + icon('star', 'i-sm') + 'Darle puntos a mano</button>' : '';
     // Lo que le dio la tienda: el dueño ve el motivo y puede anularlo; la vendedora solo ve que lo tiene.
@@ -566,8 +574,8 @@
         + '<button type="button" class="btn btn-sm btn-quiet" data-accion="quitar-puntos-manuales" data-id="' + esc(x.id) + '">Quitar</button></div></li>').join('') + '</ul></div>'
       : '<p class="small muted">Incluye ' + p.deLaTienda + ' puntos que le dio la tienda.</p>';
     if (!p.ganados && !p.pendientes && !p.canjeados) {
-      return lineaSinPuntos || botonDar ? '<section class="card stack card-puntos" aria-labelledby="t-pts"><div class="card-head"><h2 id="t-pts">' + icon('star') + 'Sus puntos</h2>'
-        + '<span class="small muted">1 punto cada ' + gs(p.cadaGs) + ' · cada punto ' + gs(p.valorPunto) + '</span></div>' + lineaSinPuntos + (botonDar ? '<div class="balance-actions">' + botonDar + '</div>' : '') + '</section>' : '';
+      return lineaSinPuntos || lineaPagosSinPuntos || botonDar ? '<section class="card stack card-puntos" aria-labelledby="t-pts"><div class="card-head"><h2 id="t-pts">' + icon('star') + 'Sus puntos</h2>'
+        + '<span class="small muted">1 punto cada ' + gs(p.cadaGs) + ' · cada punto ' + gs(p.valorPunto) + '</span></div>' + lineaSinPuntos + lineaPagosSinPuntos + (botonDar ? '<div class="balance-actions">' + botonDar + '</div>' : '') + '</section>' : '';
     }
     const wa = BG.textosWa.puntos(c, p);
     return '<section class="card stack card-puntos" aria-labelledby="t-pts">'
@@ -587,6 +595,7 @@
       + '</div></div>'
       + dadosAMano
       + lineaSinPuntos
+      + lineaPagosSinPuntos
       + '<details class="terminos"><summary>Cómo se usan los puntos y condiciones</summary>'
       + '<p><strong>Para usarlos:</strong> cuando llega a ' + p.minimo + ' puntos, tocás «Canjear» (acá o al venderle). Los puntos pasan a su saldo a favor y se descuentan en esa compra; '
       + 'en el recibo sale «Con tus puntos», cuándo los usó y en qué compra. Lo pagado con puntos no suma puntos y no se devuelve en plata.</p>'
@@ -701,8 +710,8 @@
     let motivo = '';
     const resumen = () => {
       const sel = lista.filter((x) => elegidas.has(x.v.id));
-      const ya = sel.filter((x) => x.pagada).reduce((a, x) => a + x.puntos, 0);
-      const luego = sel.filter((x) => !x.pagada).reduce((a, x) => a + x.puntos, 0);
+      const ya = sel.reduce((a, x) => a + x.ahora, 0);
+      const luego = sel.reduce((a, x) => a + x.despues, 0);
       return sel.length ? 'Suma <strong>' + ya + (ya === 1 ? ' punto' : ' puntos') + '</strong> ahora' + (luego ? ' y <strong>' + luego + '</strong> más cuando termine de pagar' : '') + '.' : 'Elegí al menos una compra.';
     };
     const r = await BG.modal({
@@ -712,7 +721,7 @@
         + '<div class="motivos" role="group" aria-label="Compras">'
         + lista.map((x) => '<label class="motivo"><input type="checkbox" name="pa-v" value="' + x.v.id + '" checked>'
           + '<span class="grow"><span class="row-title">' + BG.fmtFecha(x.v.fecha) + ' · ' + BG.fmtRecibo(x.v.recibo) + (BG.esAnterior(x.v) ? ' · antes del sistema' : '') + ' · ' + gs(x.v.total) + '</span>'
-          + '<span class="row-sub">' + x.puntos + (x.puntos === 1 ? ' punto' : ' puntos') + (x.pagada ? ' · está pagada: se pueden usar enseguida' : ' · debe ' + gs(BG.saldoVenta(x.v)) + ': se suman al terminar de pagar') + '</span></span></label>').join('')
+          + '<span class="row-sub">' + x.puntos + (x.puntos === 1 ? ' punto' : ' puntos') + (x.pagada ? ' · está pagada: se pueden usar enseguida' : x.ahora ? ' · debe ' + gs(BG.saldoVenta(x.v)) + ': ' + x.ahora + (x.ahora === 1 ? ' ya por lo que pagó' : ' ya por lo que pagó') + (x.despues ? ' y ' + x.despues + ' al terminar de pagar' : '') : ' · debe ' + gs(BG.saldoVenta(x.v)) + ': se suman al terminar de pagar') + '</span></span></label>').join('')
         + '</div><p class="small" id="pa-res" aria-live="polite">' + resumen() + '</p>'
         + '<div class="field"><label for="pa-motivo">Por qué <span class="small muted">(opcional, queda en la auditoría)</span></label>'
         + '<input id="pa-motivo" class="input" maxlength="120" autocomplete="off" placeholder="Ej.: clienta de antes del sistema"></div>'
@@ -737,6 +746,56 @@
     if (r !== 'ok') return false;
     const res = BG.sumarPuntosAparte(Array.from(elegidas), motivo);
     BG.toast('Listo: ' + c.nombre.split(' ')[0] + ' sumó ' + res.ganados + (res.ganados === 1 ? ' punto' : ' puntos') + (res.pendientes ? ' (y ' + res.pendientes + ' más al terminar de pagar)' : '') + '. Ahora tiene ' + BG.puntosDe(c.id).puntos + '.');
+    return true;
+  };
+
+  /**
+   * Sumar los puntos de pagos que ya se hicieron y no los dieron (se pagaron antes de que la compra sumara puntos, o antes de pasar a «con cada pago»,
+   * o se destildó «sumar los puntos de este pago»). El dueño elige las compras (vienen todas marcadas) y ve cuántos puntos da cada una antes de confirmar.
+   */
+  BG.puntosDePagosUI = async (c, soloCompra) => {
+    const todas = BG.comprasConPagosSinPuntos(c.id).filter((x) => !soloCompra || x.v.id === soloCompra.id);
+    if (!todas.length) { BG.toast('No hay pagos sin sus puntos: todo lo que pagó ya los sumó.'); return false; }
+    const elegidas = new Set(todas.map((x) => x.v.id));
+    let motivo = '';
+    const resumen = () => {
+      const sel = todas.filter((x) => elegidas.has(x.v.id));
+      const n = sel.reduce((a, x) => a + x.puntos, 0);
+      return sel.length ? 'Suma <strong>' + n + (n === 1 ? ' punto' : ' puntos') + '</strong> ahora.' : 'Elegí al menos una compra.';
+    };
+    const r = await BG.modal({
+      titulo: 'Sumar los puntos de lo ya pagado',
+      cuerpo: '<p class="small">Estos pagos de <strong>' + esc(c.nombre) + '</strong> se hicieron y no sumaron los puntos de lo que se pagó (1 punto cada ' + gs(BG.configFidelidad().cadaGs)
+        + '). Si destildaste «sumar los puntos de este pago» a propósito, no marques esa compra. Queda anotado que lo hiciste vos.</p>'
+        + '<div class="motivos" role="group" aria-label="Compras">'
+        + todas.map((x) => '<label class="motivo"><input type="checkbox" name="pp-v" value="' + x.v.id + '" checked>'
+          + '<span class="grow"><span class="row-title">' + BG.fmtFecha(x.v.fecha) + ' · ' + BG.fmtRecibo(x.v.recibo) + ' · ' + gs(x.v.total) + '</span>'
+          + '<span class="row-sub">' + x.pagos + (x.pagos === 1 ? ' pago' : ' pagos') + ' sin puntos (' + gs(x.pagado) + ') · suma ' + x.puntos + (x.puntos === 1 ? ' punto' : ' puntos')
+          + (BG.saldoVenta(x.v) > 0 ? ' · debe ' + gs(BG.saldoVenta(x.v)) : '') + '</span></span></label>').join('')
+        + '</div><p class="small" id="pp-res" aria-live="polite">' + resumen() + '</p>'
+        + '<div class="field"><label for="pp-motivo">Por qué <span class="small muted">(opcional, queda en la auditoría)</span></label>'
+        + '<input id="pp-motivo" class="input" maxlength="120" autocomplete="off" placeholder="Ej.: se le habían sumado los puntos de la compra después"></div>'
+        + '<span class="error-text" id="pp-err" hidden></span>',
+      acciones: [{ texto: 'Cancelar', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Sumar puntos', valor: 'ok', clase: 'btn-primary' }],
+      onMount: (dlg) => {
+        dlg.addEventListener('change', (ev) => {
+          if (ev.target.name !== 'pp-v') return;
+          if (ev.target.checked) elegidas.add(ev.target.value); else elegidas.delete(ev.target.value);
+          $('#pp-res', dlg).innerHTML = resumen();
+        });
+      },
+      validar: (v, dlg) => {
+        motivo = $('#pp-motivo', dlg).value;
+        if (elegidas.size) return true;
+        const er = $('#pp-err', dlg);
+        er.textContent = 'Marcá al menos una compra.';
+        er.hidden = false;
+        return false;
+      },
+    });
+    if (r !== 'ok') return false;
+    const res = BG.sumarPuntosDePagos(Array.from(elegidas), motivo);
+    BG.toast('Listo: ' + c.nombre.split(' ')[0] + ' sumó ' + res.puntos + (res.puntos === 1 ? ' punto' : ' puntos') + '. Ahora tiene ' + BG.puntosDe(c.id).puntos + '.');
     return true;
   };
 
@@ -1007,7 +1066,11 @@
         : '<p class="empty">' + (anuladasSuyas ? 'Sus compras están todas anuladas.' : 'Todavía no compró nada.') + '</p>') + '</div>'
       + '<div data-panel="movs" hidden><div class="table-wrap list-top"><table class="table"><thead><tr><th>Fecha</th><th>Concepto</th><th class="num">Compra</th><th class="num">Pago</th><th class="num">Saldo</th></tr></thead><tbody>'
       + libro.map((m) => '<tr><td class="nowrap">' + BG.fmtFecha(m.fecha) + '</td><td><span class="' + (m.anulado ? 'strike' : '') + '">' + esc(m.concepto) + '</span>'
-        + (m.anulado ? '<div class="t-sub">' + esc(m.anulado) + '</div>' : '') + '</td><td class="num">' + (m.cargo ? gs(m.cargo) : '') + '</td><td class="num">' + (m.abono ? gs(m.abono) : '') + '</td><td class="num"><strong>' + gs(m.saldo) + '</strong></td></tr>').join('')
+        + (m.anulado ? '<div class="t-sub">' + esc(m.anulado) + '</div>' : '')
+        // Un cobro repartido entre varias compras es una sola línea: debajo dice a cuáles se aplicó.
+        + (m.pagoIds && m.abono > 0 && m.aplicaciones && !/^Pagado antes/.test(m.concepto) ? '<div class="t-sub">' + (m.aplicaciones.length === 1 ? 'Se aplicó a la compra ' + BG.fmtRecibo(m.aplicaciones[0].numero)
+          : 'Se repartió: ' + m.aplicaciones.map((a) => 'compra ' + BG.fmtRecibo(a.numero) + ' ' + gs(a.monto)).join(' · ')) + '</div>' : '')
+        + '</td><td class="num">' + (m.cargo ? gs(m.cargo) : '') + '</td><td class="num">' + (m.abono ? gs(m.abono) : '') + '</td><td class="num"><strong>' + gs(m.saldo) + '</strong></td></tr>').join('')
       + '</tbody></table></div>' + (BG.esDuena() ? '<p class="hint list-top">En «Pago» también van las devoluciones y rebajas; lo que pasó a saldo a favor figura como cargo porque sale de esta cuenta y queda en la de saldo a favor.</p>' : '') + '</div>'
       + (creditos.length ? '<div data-panel="favor" hidden><div class="table-wrap list-top"><table class="table"><thead><tr><th>Fecha</th><th>Motivo</th><th class="num">Monto</th></tr></thead><tbody>'
         + creditos.map((x) => '<tr><td class="nowrap">' + BG.fmtFecha(x.fecha) + '</td><td>' + esc(x.motivo) + '</td><td class="num ' + (x.monto > 0 ? 't-favor' : '') + '">' + (x.monto > 0 ? '+' : '') + gs(x.monto) + '</td></tr>').join('')
@@ -1029,6 +1092,7 @@
             if (b.dataset.accion === 'devolver-favor' && (await BG.devolverFavorUI(c))) BG.render();
             else if (b.dataset.accion === 'canjear-puntos' && (await BG.canjeUI(c.id))) BG.render();
             else if (b.dataset.accion === 'puntos-aparte' && (await BG.puntosAparteUI(c))) BG.render();
+            else if (b.dataset.accion === 'puntos-pagos' && (await BG.puntosDePagosUI(c))) BG.render();
             else if (b.dataset.accion === 'dar-puntos' && (await BG.darPuntosUI(c))) BG.render();
             else if (b.dataset.accion === 'quitar-puntos-manuales' && (await BG.quitarPuntosManualesUI(c, (BG.db.puntosManuales || []).find((x) => x.id === b.dataset.id)))) BG.render();
             else if (b.dataset.accion === 'compra-anterior' && (await BG.compraAnteriorUI(c))) BG.render();

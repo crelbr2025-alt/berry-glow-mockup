@@ -1489,3 +1489,70 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 .costo-puntos { margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--line); }
 .costo-titulo { font-size: 15px; font-weight: 700; color: var(--ink); }
 .table tr.is-late td { color: var(--bad); font-weight: 700; }
+
+/* ── Estado de cuenta como ficha y recibo de un pago (HANDOFF §28) ── */
+.r-resumen { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+.r-resumen > div { padding: 10px 12px; border-radius: 8px; background: var(--r-soft); border: 1px solid var(--r-line); }
+.r-resumen span { display: block; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--r-muted); }
+.r-resumen strong { display: block; font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.r-resumen .r-res-falta { background: var(--r-brand); border-color: var(--r-brand); }
+.r-resumen .r-res-falta span, .r-resumen .r-res-falta strong { color: #fff; }
+.r-det-tit { margin: 18px 0 8px; font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--r-brand); }
+.r-libro td { vertical-align: top; }
+/* Verde = lo que ya se pagó (fondo suave y una barra al costado). Solo refuerza: cada cosa también lo dice con palabras y tildes,
+   porque el ticket de 80 mm sale en blanco y negro. El rosa de la marca queda para lo que falta. */
+.receipt { --r-ok: #1E7A4C; --r-ok-soft: #EDF7F1; --r-ok-line: #BFE0CC; }
+.r-resumen .r-res-pagado { background: var(--r-ok-soft); border-color: var(--r-ok-line); box-shadow: inset 4px 0 0 var(--r-ok); }
+.r-resumen .r-res-pagado span, .r-resumen .r-res-pagado strong { color: var(--r-ok); }
+.r-libro tr.l-pago td { background: var(--r-ok-soft); border-bottom-color: var(--r-ok-line); }
+.r-libro tr.l-pago td.l-fecha { box-shadow: inset 4px 0 0 var(--r-ok); padding-left: 10px; }
+.r-libro tr.l-pago .l-abono, .r-libro tr.l-pago .l-imp { color: var(--r-ok); font-weight: 700; }
+.r-aplic tr.is-saldada td, .r-aplic tr.is-parcial td { background: var(--r-ok-soft); border-bottom-color: var(--r-ok-line); }
+.r-aplic tr.is-saldada td:first-child, .r-aplic tr.is-parcial td:first-child { box-shadow: inset 4px 0 0 var(--r-ok); padding-left: 10px; }
+.r-aplic tr.is-saldada td:last-child { color: var(--r-ok); }
+.r-aplic tr.is-parcial td:last-child { color: var(--r-brand); }
+.r-table tr.r-pagada td { background: var(--r-ok-soft); border-bottom-color: var(--r-ok-line); }
+.r-table tr.r-pagada td:first-child { box-shadow: inset 4px 0 0 var(--r-ok); padding-left: 10px; }
+.r-table tr.r-pagada.is-new td { background: #DBEFE3; }
+.r-table td.is-ok { background: var(--r-ok-soft); color: var(--r-ok); font-weight: 700; }
+.r-hist tr.is-saldada td { background: var(--r-ok-soft); border-bottom-color: var(--r-ok-line); }
+.r-hist tr.is-saldada td:first-child { box-shadow: inset 4px 0 0 var(--r-ok); padding-left: 10px; }
+.r-pagos li { background: var(--r-ok-soft); border-bottom-color: var(--r-ok-line); box-shadow: inset 4px 0 0 var(--r-ok); padding-left: 10px; }
+.r-libro .l-imp, .r-libro .l-fechat { display: none; }
+.r-libro .l-fecha { white-space: nowrap; }
+.r-debe .col-pagado { white-space: nowrap; }
+.r-cobro { margin-top: 2px; }
+/* Recibo de un pago: lo entregado, bien grande, y debajo a qué compras se aplicó. */
+.r-pago-caja { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 18px; border-radius: 10px; border: 2px solid var(--r-ok); background: var(--r-ok-soft); }
+.r-pago-caja span { font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--r-ok); }
+.r-pago-caja strong { font-size: 28px; font-weight: 800; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--r-ok); }
+.r-pago-sub { margin-top: 6px; font-size: 13px; color: var(--r-muted); }
+.r-aplic .i { width: 13px; height: 13px; stroke-width: 3; vertical-align: -1px; }
+.r-aplic tbody td { vertical-align: top; }
+/* Ticket de 80 mm: la fecha va dentro del texto, una sola columna de importe y el resumen en renglones. */
+.receipt.is-ticket .r-libro .l-fecha, .receipt.is-ticket .r-libro .l-cargo, .receipt.is-ticket .r-libro .l-abono { display: none; }
+.receipt.is-ticket .r-libro .l-imp, .receipt.is-ticket .r-libro .l-fechat { display: table-cell; }
+.receipt.is-ticket .r-libro .l-fechat { display: block; }
+.receipt.is-ticket .r-libro tr.l-pago td.l-que { box-shadow: inset 3px 0 0 var(--r-ok); padding-left: 8px; }
+.receipt.is-ticket .r-resumen { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.receipt.is-ticket .r-resumen > div { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 6px 10px; }
+.receipt.is-ticket .r-resumen strong { font-size: 15px; }
+.receipt.is-ticket .r-pago-caja { flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px 12px; }
+.receipt.is-ticket .r-pago-caja strong { font-size: 22px; }
+.receipt.is-ticket .r-debe .col-pagado { display: none; }
+@media (max-width: 560px) {
+  .receipt:not(.is-ticket) .r-resumen { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .receipt:not(.is-ticket) .r-resumen > div { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .receipt:not(.is-ticket) .r-libro .l-fecha, .receipt:not(.is-ticket) .r-libro .l-cargo, .receipt:not(.is-ticket) .r-libro .l-abono { display: none; }
+  .receipt:not(.is-ticket) .r-libro .l-imp { display: table-cell; }
+  .receipt:not(.is-ticket) .r-libro .l-fechat { display: block; }
+  .receipt:not(.is-ticket) .r-libro tr.l-pago td.l-que { box-shadow: inset 4px 0 0 var(--r-ok); padding-left: 10px; }
+  .receipt:not(.is-ticket) .r-pago-caja strong { font-size: 24px; }
+}
+@media print {
+  .receipt .r-resumen > div,
+  .receipt .r-pago-caja { break-inside: avoid; page-break-inside: avoid; }
+}
+/* Un botón con texto largo dentro de un aviso (por ejemplo «Sumar los puntos de lo ya pagado») pasa a dos renglones en vez de salirse en celulares angostos. */
+.callout > div { min-width: 0; }
+.callout .btn { white-space: normal; text-align: left; max-width: 100%; height: auto; min-height: 36px; }
