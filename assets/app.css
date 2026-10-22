@@ -1557,7 +1557,7 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 .callout > div { min-width: 0; }
 .callout .btn { white-space: normal; text-align: left; max-width: 100%; height: auto; min-height: 36px; }
 
-/* ── Lo anulado en los comprobantes (HANDOFF §29) ──
+/* ── Lo anulado en los comprobantes (HANDOFF §29) ── */
    Se dice con palabras («COMPRA ANULADA», «PAGO ANULADO»): el ticket sale en blanco y negro. El gris, el borde punteado y el importe tachado solo refuerzan. */
 .r-anulada { margin: 0 0 10px; padding: 9px 12px; border: 2px dashed var(--r-muted); border-radius: 8px; font-size: 13px; }
 .r-pago-caja.is-anulado { border: 2px dashed var(--r-muted); background: #fff; }
@@ -1569,3 +1569,60 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 
 /* Ajustes → Usuarios y permisos: los permisos agrupados por tarea (HANDOFF §29). */
 .perm-grupo { margin: 16px 0 4px; font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+
+/* ── Comprobantes compactos (HANDOFF §30, 21/10/2026): menos aire entre secciones y filas, el resumen en una sola fila de tres,
+   las compras pagadas plegadas en una línea, los movimientos plegados y los puntos en un aviso de dos renglones. ── */
+.receipt { padding: 24px 28px; line-height: 1.38; }
+.r-head { padding-bottom: 10px; gap: 14px; }
+.r-client { padding: 8px 12px; margin-bottom: 10px; gap: 8px; }
+.r-section { margin-bottom: 11px; }
+.r-section h2 { margin-bottom: 4px; }
+.r-sub { margin-top: 7px; }
+.r-table th { padding: 4px 4px; }
+.r-table td { padding: 4px 4px; }
+.r-table tfoot td { padding-top: 4px; }
+.r-saldo { padding: 11px 14px; margin: 6px 0 9px; }
+.r-saldo strong { font-size: 22px; }
+.r-account { padding: 0 4px 5px; }
+.r-det-tit { margin: 10px 0 5px; }
+.receipt.is-largo .r-table td, .receipt.is-largo .r-table th { padding: 3px 4px; }
+.receipt.is-largo .r-section { margin-bottom: 8px; }
+/* Compraste · Pagaste · Te falta: siempre en una fila de tres columnas (también en el celular y en el ticket). El monto se achica con el ancho
+   (unidades del contenedor) en lugar de partirse en dos renglones. */
+.r-resumen { container-type: inline-size; gap: 6px; margin-bottom: 10px; }
+.receipt .r-resumen, .receipt.is-ticket .r-resumen { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.receipt .r-resumen > div, .receipt.is-ticket .r-resumen > div { display: block; padding: 6px 8px; }
+.r-resumen span { font-size: 10px; }
+.r-resumen strong { font-size: min(16px, 5.4cqw); }
+@media (max-width: 560px) {
+  .receipt:not(.is-ticket) .r-resumen { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .receipt:not(.is-ticket) .r-resumen > div { display: block; }
+  .receipt:not(.is-ticket) { padding: 18px 14px; }
+}
+/* Una compra ya pagada, plegada en una línea («✓ Compra N° … · Total … — Pagada»); se abre con un toque. */
+.r-compra-cerrada > summary { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; cursor: pointer; list-style: none;
+  padding: 6px 10px; border-radius: 6px; background: var(--r-ok-soft); box-shadow: inset 4px 0 0 var(--r-ok); color: var(--r-ok); font-weight: 700; font-size: 12.5px; }
+.r-compra-cerrada > summary::-webkit-details-marker { display: none; }
+.r-compra-cerrada > summary .num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.r-compra-cerrada > summary .r-fecha { color: var(--r-muted); font-weight: 600; }
+.r-compra-cerrada[open] > summary { margin-bottom: 6px; }
+/* El historial de movimientos, plegado: un botón chico. */
+.r-mov > summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--r-brand); padding: 4px 0; }
+.r-mov[open] > summary { margin-bottom: 4px; }
+/* Cada pago en un renglón; los puntos del pago, destacados pero chicos. */
+.r-pagos-compra td { font-size: 12.5px; }
+.r-pts { color: var(--r-ok); font-weight: 700; white-space: nowrap; }
+.r-compra-cuenta { padding-top: 3px; }
+/* Puntos: un aviso de dos renglones como máximo. */
+.r-puntos-banner { font-size: 12px; line-height: 1.4; padding: 6px 10px; margin: 4px 0 8px; border-radius: 6px; background: var(--r-soft); color: var(--r-ink); }
+@media print {
+  /* Lo plegado no se imprime desplegado: el historial cerrado no sale y una compra pagada sale en su sola línea. */
+  .receipt .r-mov:not([open]) { display: none; }
+  .receipt .r-compra-cerrada > summary { break-inside: avoid; page-break-inside: avoid; }
+}
+/* Cliente y documento en una sola fila también en el celular y en el ticket (ahorra un renglón). */
+.receipt .r-client, .receipt.is-ticket .r-client { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+@media (max-width: 560px) { .receipt:not(.is-ticket) .r-client { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); } }
+/* El encabezado de color va de borde a borde: sus márgenes negativos siguen al relleno nuevo (más chico) del comprobante. */
+.receipt.cab-color .r-head { margin: -24px -28px 0; padding: 16px 28px 12px; }
+@media (max-width: 560px) { .receipt:not(.is-ticket).cab-color .r-head { margin: -18px -14px 0; padding: 14px 14px 10px; } }

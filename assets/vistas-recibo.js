@@ -53,7 +53,7 @@
   const cobroDeEsteRecibo = (p) => {
     const c = BG.cobroDe(p);
     const otras = c.aplicaciones.filter((x) => x.pagoId !== p.id);
-    return otras.length ? { recibo: c.recibo, entregado: c.entregado, otras: otras.map((x) => ({ numero: x.numero, monto: x.monto })) } : null;
+    return otras.length ? { recibo: c.recibo, entregado: c.entregado, formas: c.formas.map((f) => BG.FORMAS[f.forma]), otras: otras.map((x) => ({ numero: x.numero, monto: x.monto })) } : null;
   };
 
   function datosRecibo(tipo, id, pagosIds, ver) {
@@ -97,6 +97,9 @@
     const pagoRecibo = tipo !== 'a' && tipo !== 'p' && destacados.length ? BG.resumenCobro(destacados[0]) : null;
     const movimientos = tipo === 'c' && historial ? BG.libroCliente(cli.id).filter((m) => !m.anulado) : null;
     const numero = destacados.length ? destacados[0].recibo : tipo === 'v' ? ventas[0].recibo : null;
+    // Lo que sumó cada pago, mirando la historia de la clienta (los puntos se cuentan sobre todo lo que pagó junto: un pago repartido no pierde puntos).
+    const puntosMapa = BG.configFidelidad().activo ? BG.puntosPorPagoDe(cli.id) : new Map();
+    const ptsCli = BG.puntosDe(cli.id);
     const t = BG.db.config.tienda;
     return {
       tienda: { nombre: t.nombre, whatsapp: t.whatsapp, instagram: t.instagram, direccion: t.direccion, mensaje: t.mensaje },
@@ -129,7 +132,7 @@
           pagos: BG.pagosDeVenta(v.id).sort((a, b) => a.ts.localeCompare(b.ts)).map((p) => ({
             fecha: p.fecha, monto: p.total, nuevo: pagosIds.indexOf(p.id) >= 0, recibo: p.recibo, anterior: !!p.anterior,
             formas: formasPublicas(p),
-            aFavor: p.excedente, puntos: p.puntos || 0, cobro: cobroDeEsteRecibo(p),
+            aFavor: p.excedente, puntos: p.anulado ? 0 : BG.puntosDelPago(p, puntosMapa), cobro: cobroDeEsteRecibo(p),
           })),
           // Público: qué devolvió o cambió y qué pasó con la plata (sin motivos internos).
           devoluciones: (v.devoluciones || []).map((d) => ({
@@ -149,21 +152,15 @@
       saldoDocumento: ventas.reduce((a, v) => a + BG.saldoVenta(v), 0),
       saldoAnterior: BG.saldoAnterior(cli.id),
       aFavor: BG.creditoCliente(cli.id),
-      puntos: BG.puntosDe(cli.id),
+      puntos: ptsCli,
       // Cuándo usó sus puntos y en qué compra: en el recibo de una compra, lo de esa compra; en el estado de
       // cuenta con todo el historial, todos los canjes.
       usosPuntos: !BG.configFidelidad().activo || tipo === 'a' ? []
         : usosDePuntos(cli.id, historial ? null : new Set(ventas.map((v) => v.id))),
-      // En el recibo de una compra que todavía debe: cuántos puntos le faltan por sumar y va a sumar cuando la termine de pagar.
-      puntosAlPagar: tipo === 'v' && BG.configFidelidad().activo && BG.saldoVenta(ventas[0]) > 0 ? BG.puntosDeVenta(ventas[0]) - BG.puntosGanadosDeVenta(ventas[0]) : 0,
-      // Compras de este recibo que YA quedaron pagadas: los puntos que sumaron (es lo que la clienta quiere ver).
-      puntosGanados: BG.configFidelidad().activo
-        ? ventas.filter((v) => !v.anulada && BG.saldoVenta(v) <= 0).reduce((a, v) => a + BG.puntosGanadosDeVenta(v), 0) : 0,
-      // Compras que todavía debe pero que ya sumaron algo con sus pagos, y lo que sumaron los pagos de ESTE recibo.
-      puntosPorPagos: BG.configFidelidad().activo
-        ? ventas.filter((v) => !v.anulada && BG.saldoVenta(v) > 0).reduce((a, v) => a + BG.puntosGanadosDeVenta(v), 0) : 0,
-      puntosDeEstePago: BG.configFidelidad().activo
-        ? destacados.filter((p) => !p.anulado && p.ventaId && BG.saldoVenta(BG.venta(p.ventaId)) > 0).reduce((a, p) => a + (p.puntos || 0), 0) : 0,
+      // En el recibo de una compra que todavía debe: cuántos puntos más suma la clienta cuando la termine de pagar.
+      puntosAlPagar: tipo === 'v' && ptsCli && BG.saldoVenta(ventas[0]) > 0 ? ((ptsCli.porGanar.find((x) => x.v.id === ventas[0].id) || {}).puntos || 0) : 0,
+      // Lo que sumó el pago de este recibo (el cobro entero).
+      puntosDeEstePago: ptsCli && destacados.length && !destacados[0].anulado ? BG.puntosDelPago(destacados[0], puntosMapa) : 0,
       // Lo que el dueño eligió al cobrar sobre mostrar los puntos en el recibo de ese pago (null = lo que dice Ajustes).
       verPuntosPago: destacados.some((p) => p.puntosEnRecibo === false) ? false : destacados.some((p) => p.puntosEnRecibo === true) ? true : null,
       terminosPuntos: BG.configFidelidad().activo ? BG.configFidelidad().terminos : '',
@@ -179,21 +176,26 @@
    */
   function bloquePuntos(d, opc) {
     const usos = d.usosPuntos || [];
-    const tieneAlgo = d.puntosGanados || d.puntosAlPagar || d.puntosPorPagos || d.puntosDeEstePago || (d.puntos && d.puntos.puntos > 0) || usos.length;
+    const p = d.puntos;
+    const tieneAlgo = (p && (p.puntos > 0 || p.pendientes > 0)) || d.puntosDeEstePago || d.puntosAlPagar || usos.length;
     if (!tieneAlgo) return '';
-    // Puntos usados: cada canje con su fecha y en qué compra se usó (o lo que todavía le queda de ese canje).
-    const lineaUso = (k) => '<tr><td>' + BG.fmtFecha(k.fecha) + ' · usaste ' + k.puntos + (k.puntos === 1 ? ' punto' : ' puntos')
-      + '<div class="r-forms">' + (k.usos.length ? k.usos.map((u) => gs(u.monto) + ' en la compra ' + BG.fmtRecibo(u.recibo) + ' del ' + BG.fmtFecha(u.fecha)).join(' · ') : 'Todavía no lo usaste en una compra')
-      + (d.historial && k.sinUsar > 0 && k.usos.length ? ' · te quedan ' + gs(k.sinUsar) + ' para la próxima' : '') + '</div></td>'
+    const pts = (n) => n + (n === 1 ? ' punto' : ' puntos');
+    // Puntos usados: cada canje con su fecha y en qué compra se usó (una línea por canje).
+    const lineaUso = (k) => '<tr><td>' + BG.fmtFecha(k.fecha) + ' · usaste ' + pts(k.puntos)
+      + ' · ' + (k.usos.length ? k.usos.map((u) => gs(u.monto) + ' en la compra ' + BG.fmtRecibo(u.recibo)).join(' · ') : 'todavía sin usar')
+      + (d.historial && k.sinUsar > 0 && k.usos.length ? ' · te quedan ' + gs(k.sinUsar) : '') + '</td>'
       + '<td class="num">' + gs(d.historial ? k.monto : k.usos.reduce((a, u) => a + u.monto, 0)) + '</td></tr>';
+    const porPago = BG.configFidelidad().porPago;
+    // Primer renglón: cuántos tiene y cuánto valen. Segundo (si hace falta): lo de este pago o lo que le falta sumar.
+    const linea1 = p ? '🎁 Puntos acumulados: <strong>' + pts(p.puntos) + '</strong> (= ' + gs(p.valor) + ')' + (p.canjeable && p.puntos > 0 ? ' · ya los podés usar' : '')
+      + ' · ' + (porPago ? 'Se suman con cada pago.' : 'Se suman al terminar de pagar cada compra.') : '';
+    const extra = [d.puntosDeEstePago ? 'Con este pago sumaste ' + pts(d.puntosDeEstePago) + '.' : '',
+      d.puntosAlPagar ? 'Al terminar de pagar esta compra sumás ' + pts(d.puntosAlPagar) + ' más.'
+        : (p && p.pendientes && !d.puntosDeEstePago ? 'Al terminar de pagar lo que debés sumás ' + pts(p.pendientes) + ' más.' : '')].filter(Boolean).join(' ');
     return (usos.length ? '<h2 class="r-sub r-sub-puntos">' + (d.historial ? 'Tus puntos usados' : 'Puntos que usaste en esta compra') + '</h2><table class="r-table"><tbody>' + usos.map(lineaUso).join('') + '</tbody></table>' : '')
-      + (d.puntosGanados ? '<p class="r-account r-puntos"><span>' + (d.compras.length === 1 ? 'Esta compra te sumó' : 'Estas compras te sumaron') + '</span><strong>' + d.puntosGanados + (d.puntosGanados === 1 ? ' punto' : ' puntos') + '</strong></p>' : '')
-      + (d.puntosDeEstePago ? '<p class="r-account r-puntos"><span>Con este pago sumaste</span><strong>' + d.puntosDeEstePago + (d.puntosDeEstePago === 1 ? ' punto' : ' puntos') + '</strong></p>'
-        : d.puntosPorPagos ? '<p class="r-account"><span>Con tus pagos ya sumaste</span><strong>' + d.puntosPorPagos + (d.puntosPorPagos === 1 ? ' punto' : ' puntos') + '</strong></p>' : '')
-      + (d.puntos && d.puntos.puntos > 0 ? '<p class="r-account"><span>Tus puntos acumulados: ' + d.puntos.puntos + (d.puntos.canjeable ? ' · ya los podés usar' : '') + '</span><strong>' + gs(d.puntos.valor) + '</strong></p>' : '')
-      + (d.puntosAlPagar ? '<p class="r-account"><span>Al terminar de pagar esta compra sumás' + (d.puntosPorPagos ? ' otros' : '') + '</span><strong>' + d.puntosAlPagar + (d.puntosAlPagar === 1 ? ' punto' : ' puntos') + '</strong></p>'
-        + '<p class="r-chica">' + (d.puntosPorPagos ? 'Parte de los puntos ya se acreditó con tus pagos; el resto se acredita cuando quede pagada del todo.' : 'Esta compra todavía no suma puntos: se acreditan cuando quede pagada del todo.') + '</p>' : '')
-      + (d.terminosPuntos && opc.condiciones ? '<p class="r-terminos"><strong>Programa de clientas frecuentes:</strong> ' + esc(d.terminosPuntos) + '</p>' : '');
+      + (linea1 || extra ? '<p class="r-puntos-banner">' + linea1 + (extra ? (linea1 ? '<br>' : '') + extra : '') + '</p>' : '')
+      // Las condiciones del programa, solo si el dueño las dejó tildadas y no en el estado de cuenta (ahí va solo el aviso; están en el comprobante de puntos).
+      + (d.terminosPuntos && opc.condiciones && !d.movimientos ? '<p class="r-terminos"><strong>Programa de clientas frecuentes:</strong> ' + esc(d.terminosPuntos) + '</p>' : '');
   }
 
   /** Comprobante de puntos: cuántos tiene, de dónde salieron, qué canjeó y las condiciones. */
@@ -207,7 +209,8 @@
       + (p.pendientes ? '<p class="r-account"><span>Vas a sumar, al terminar de pagar tus compras en cuotas</span><strong>' + p.pendientes + ' puntos</strong></p>' : '')
       + '</section>'
       + (p.ganadas.length ? '<section class="r-section"><h2 class="r-sub">De dónde salieron</h2><table class="r-table"><thead><tr><th>Compra</th><th class="num">Importe</th><th class="num">Puntos</th></tr></thead><tbody>'
-        + p.ganadas.map((x) => '<tr><td>' + BG.fmtFecha(x.fecha) + ' · ' + BG.fmtRecibo(x.recibo) + (x.parcial ? '<div class="r-forms">Con lo que ya pagaste de esta compra</div>' : '') + '</td><td class="num">' + gs(x.total) + '</td><td class="num">' + x.puntos + '</td></tr>').join('')
+        + p.ganadas.map((x) => '<tr><td>' + BG.fmtFecha(x.fecha) + ' · ' + BG.fmtRecibo(x.recibo) + (x.parcial ? '<div class="r-forms">Con lo que ya pagaste de esta compra</div>' : '') + '</td><td class="num">' + gs(x.aporte) + '</td><td class="num">' + x.puntos + '</td></tr>').join('')
+        + (p.sobras ? '<tr><td>Lo que sobraba de cada compra, sumado<div class="r-forms">Los puntos se cuentan sobre todo lo que pagaste junto: lo que no llegaba a un punto en una compra se suma con lo de las otras</div></td><td class="num"></td><td class="num">' + p.sobras + '</td></tr>' : '')
         + '</tbody><tfoot><tr><td colspan="2">Puntos ganados</td><td class="num">' + (p.ganados - (p.deLaTienda || 0)) + '</td></tr></tfoot></table></section>' : '')
       // Lo que le dio la tienda a mano: fecha y cantidad, sin el motivo interno.
       + (p.manuales && p.manuales.length ? '<section class="r-section"><h2 class="r-sub">Puntos que te dio la tienda</h2><table class="r-table"><tbody>'
@@ -275,17 +278,18 @@
       return m.aplicaciones.length === 1 ? 'Se aplicó a la compra ' + BG.fmtRecibo(m.aplicaciones[0].numero)
         : 'Se repartió: ' + m.aplicaciones.map((a) => 'compra ' + BG.fmtRecibo(a.numero) + ' ' + gs(a.monto)).join(' · ');
     };
-    return '<section class="r-section"><h2>Movimientos de tu cuenta<span>' + d.movimientos.length + (d.movimientos.length === 1 ? ' movimiento' : ' movimientos') + '</span></h2>'
+    // Plegado: así no repite los pagos que ya se ven en cada compra. Al imprimir, si quedó cerrado no sale (CSS: .r-mov:not([open])).
+    return '<details class="r-section r-mov"><summary>Ver historial de movimientos (' + d.movimientos.length + ')</summary>'
       + '<table class="r-table r-libro"><thead><tr><th class="l-fecha">Fecha</th><th>Qué pasó</th><th class="num l-cargo">Compra</th><th class="num l-abono">Pago</th><th class="num l-imp">Importe</th><th class="num">Saldo</th></tr></thead><tbody>'
       + d.movimientos.map((m) => '<tr class="' + (m.pagoIds && m.abono > 0 ? 'l-pago' : 'l-compra') + '"><td class="l-fecha r-fecha">' + BG.fmtFecha(m.fecha) + '</td>'
         + '<td class="l-que"><span class="l-fechat r-forms">' + BG.fmtFecha(m.fecha) + '</span>' + esc(m.publico) + (aplicacion(m) ? '<div class="r-forms">' + esc(aplicacion(m)) + '</div>' : '') + '</td>'
         + '<td class="num l-cargo">' + (m.cargo ? gs(m.cargo) : '') + '</td><td class="num l-abono">' + (m.abono ? gs(m.abono) : '') + '</td>'
         + '<td class="num l-imp">' + (m.cargo || m.abono ? gs(m.cargo || m.abono) : '') + '</td><td class="num"><strong>' + gs(m.saldo) + '</strong></td></tr>').join('')
-      + '</tbody></table><p class="r-chica">Cada compra suma a lo que debés y cada pago lo baja. En «Saldo» ves cuánto debías después de cada movimiento.</p></section>';
+      + '</tbody></table><p class="r-chica">Cada compra suma a lo que debés y cada pago lo baja. En «Saldo» ves cuánto debías después de cada movimiento.</p></details>';
   }
 
   /** Estado de cuenta entero: primero cuánto compró, cuánto pagó y cuánto le falta; después lo que debe compra por compra; y los movimientos. */
-  function htmlCuenta(d) {
+  function htmlCuenta(d, conDetalle) {
     const total = d.compras.reduce((a, c) => a + c.total, 0);
     const pagado = d.compras.reduce((a, c) => a + c.pagado, 0);
     const pendientes = d.compras.filter((c) => c.saldo > 0);
@@ -294,7 +298,8 @@
     cuotas.sort((a, b) => a.vence.localeCompare(b.vence));
     return (d.compras.length ? '<div class="r-resumen"><div><span>Compraste</span><strong>' + gs(total) + '</strong></div><div class="r-res-pagado"><span>Pagaste</span><strong>' + gs(pagado) + '</strong></div>'
       + '<div class="r-res-falta"><span>Te falta</span><strong>' + gs(d.saldoCuenta) + '</strong></div></div>' : '')
-      + (pendientes.length ? '<section class="r-section"><h2>Lo que todavía debés<span>' + pendientes.length + (pendientes.length === 1 ? ' compra' : ' compras') + '</span></h2>'
+      // Con el detalle de cada compra, lo que debe ya se ve en cada compra pendiente (no se repite).
+      + (pendientes.length && !conDetalle ? '<section class="r-section"><h2>Lo que todavía debés<span>' + pendientes.length + (pendientes.length === 1 ? ' compra' : ' compras') + '</span></h2>'
         + '<table class="r-table r-debe"><thead><tr><th>Compra</th><th class="num">Total</th><th class="num col-pagado">Pagaste</th><th class="num">Falta</th></tr></thead><tbody>'
         + pendientes.map((c) => '<tr><td><span class="r-fecha">' + BG.fmtFecha(c.fecha) + '</span> <span class="r-fecha r-nro">' + BG.fmtRecibo(c.numero) + '</span> ' + (c.anterior ? 'Compra de antes del sistema' : detalleCorto(c)) + '</td>'
           + '<td class="num">' + gs(c.total) + '</td><td class="num col-pagado' + (c.pagado > 0 ? ' is-ok' : '') + '">' + gs(c.pagado) + '</td><td class="num"><strong>' + gs(c.saldo) + '</strong></td></tr>').join('')
@@ -361,44 +366,55 @@
     const anulada = deUnaCompra && d.compras[0].anulada;
     const etiquetaSaldo = anulada ? 'Compra anulada' : saldoPrincipal > 0 ? (deUnaCompra ? 'Saldo pendiente de esta compra' : d.anteriores ? 'Debés de lo de antes' : 'Saldo pendiente')
       : (deUnaCompra ? 'Compra saldada' : d.anteriores ? 'Lo de antes está saldado' : 'Cuenta al día');
-    const compra = (c) => '<section class="r-section r-compra">'
-      + '<h2>' + (c.anterior ? 'Compra de antes del sistema' : 'Detalle de la compra') + '<span>' + BG.fmtFecha(c.fecha) + ' · ' + BG.fmtRecibo(c.numero) + '</span></h2>'
-      // Una compra anulada lo dice con palabras (el ticket sale en blanco y negro) y nunca figura como «saldada».
-      + (c.anulada ? '<p class="r-anulada"><strong>COMPRA ANULADA</strong>' + (c.anuladaEl ? ' el ' + BG.fmtFecha(c.anuladaEl) : '') + '. Esta compra ya no vale.'
+    const pts = (n) => n + (n === 1 ? ' pt' : ' pts');
+    // Un pago, un renglón. Si fue parte de un pago repartido entre compras: «Aplicado de tu pago de ₲ 100.000 (transferencia · recibo N° …)» y el monto de
+    // la derecha es lo que se aplicó a esta compra (así no parece que pagó dos veces). Los puntos son los del pago entero.
+    const lineaPago = (c, p) => {
+      const formas = p.cobro ? p.cobro.formas : p.formas.map((x) => x.forma);
+      const como = formas.length === 1 ? formas[0].toLowerCase() : formas.join(' + ').toLowerCase();
+      const que = p.anterior ? 'Pagado antes del sistema'
+        : p.cobro ? 'Aplicado de tu pago de ' + gs(p.cobro.entregado) + ' (' + esc(como) + ' · recibo ' + BG.fmtRecibo(p.cobro.recibo) + ')'
+          : p.formas.map((x) => x.forma + (p.formas.length > 1 ? ' ' + gs(x.monto) : '')).join(' + ') + ' · recibo ' + BG.fmtRecibo(p.recibo);
+      return '<tr class="' + (c.anulada ? '' : 'r-pagada') + (p.nuevo ? ' is-new' : '') + '"><td>' + (p.anterior ? '' : '<span class="r-fecha">' + BG.fmtFecha(p.fecha) + '</span> · ') + que
+        + (p.aFavor ? ' · ' + gs(p.aFavor) + ' quedó a tu favor' : '') + (verPuntos && p.puntos ? ' · <span class="r-pts">+' + pts(p.puntos) + '</span>' : '')
+        + (p.nuevo ? ' · <strong>pago de hoy</strong>' : '') + '</td><td class="num">' + gs(p.monto) + '</td></tr>';
+    };
+    const cuerpoCompra = (c) => (c.anulada ? '<p class="r-anulada"><strong>COMPRA ANULADA</strong>' + (c.anuladaEl ? ' el ' + BG.fmtFecha(c.anuladaEl) : '') + '. Esta compra ya no vale.'
         + (c.aFavorPorAnular > 0 ? ' Lo que habías pagado (' + gs(c.aFavorPorAnular) + ') quedó a tu favor como saldo para otra compra.' : ' No había pagos.') + '</p>' : '')
       + (c.corregida ? '<p class="r-forms r-corregida">Comprobante corregido el ' + BG.fmtFecha(c.corregida.fecha) + (c.corregida.totalAntes !== c.total ? ' (el total era ' + gs(c.corregida.totalAntes) + ')' : '') + ': reemplaza al anterior.</p>' : '')
-      + (c.sinDetalle
-        // Solo el monto (no se sabe qué llevó): un renglón, sin cantidad ni precio.
-        ? '<table class="r-table"><thead><tr><th colspan="3">Concepto</th><th class="num">Importe</th></tr></thead><tbody><tr><td colspan="3">Compra de antes del sistema</td><td class="num">' + gs(c.total) + '</td></tr>'
-        : '<table class="r-table"><thead><tr><th>Artículo</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Importe</th></tr></thead><tbody>'
-        + c.items.map((it) => '<tr><td>' + esc(it.descripcion) + '</td><td class="num">' + it.cantidad + '</td><td class="num">' + gs(it.precio) + '</td><td class="num">' + gs(it.precio * it.cantidad) + '</td></tr>').join(''))
-      + (c.agregados.length ? '<tr><td colspan="4" class="r-forms">' + c.agregados.map((a) => 'El ' + BG.fmtFecha(a.fecha) + ' se sumó a esta compra: ' + esc(a.texto)).join('<br>') + '</td></tr>' : '')
+      // Artículos en dos columnas: «2 × Remera (₲ 50.000 c/u)» y el importe. Si es uno solo, solo el nombre.
+      + '<table class="r-table r-items"><thead><tr><th>' + (c.sinDetalle ? 'Concepto' : 'Artículo') + '</th><th class="num">Importe</th></tr></thead><tbody>'
+      + (c.sinDetalle ? '<tr><td>Compra de antes del sistema</td><td class="num">' + gs(c.total) + '</td></tr>'
+        : c.items.map((it) => '<tr><td>' + (it.cantidad > 1 ? it.cantidad + ' × ' : '') + esc(it.descripcion) + (it.cantidad > 1 ? ' <span class="r-forms">(' + gs(it.precio) + ' c/u)</span>' : '') + '</td><td class="num">' + gs(it.precio * it.cantidad) + '</td></tr>').join(''))
+      + (c.agregados.length ? '<tr><td colspan="2" class="r-forms">' + c.agregados.map((a) => 'El ' + BG.fmtFecha(a.fecha) + ' se sumó a esta compra: ' + esc(a.texto)).join('<br>') + '</td></tr>' : '')
       + '</tbody><tfoot>'
-      + (c.descuento ? '<tr><td colspan="3">Subtotal</td><td class="num">' + gs(c.subtotal) + '</td></tr><tr><td colspan="3">Descuento</td><td class="num">−' + gs(c.descuento) + '</td></tr>' : '')
-      + '<tr><td colspan="3">Total de la compra</td><td class="num">' + gs(c.total) + '</td></tr></tfoot></table>'
+      + (c.descuento ? '<tr><td>Subtotal</td><td class="num">' + gs(c.subtotal) + '</td></tr><tr><td>Descuento</td><td class="num">−' + gs(c.descuento) + '</td></tr>' : '')
+      + '<tr><td>Total de la compra</td><td class="num">' + gs(c.total) + '</td></tr></tfoot></table>'
       + (c.devoluciones.length ? '<h2 class="r-sub">Cambios y devoluciones</h2><table class="r-table"><tbody>' + c.devoluciones.map((d) => '<tr><td>' + BG.fmtFecha(d.fecha) + ' · ' + esc(d.texto)
         + (d.aFavor ? '<div class="r-forms">' + (d.reintegro ? 'Se te devolvieron ' + gs(d.reintegro) + ' en ' + esc(d.forma)
           // Lo que se había pagado con puntos no vuelve en plata: queda a favor para otra compra.
           + (d.reintegro < d.aFavor ? '; los ' + gs(d.aFavor - d.reintegro) + ' que pagaste con puntos quedaron a tu favor' : '')
           : gs(d.aFavor) + ' quedaron a tu favor') + '</div>' : '') + '</td></tr>').join('') + '</tbody></table>' : '')
       + '<h2 class="r-sub">' + (c.anulada ? 'Pagos que pasaron a tu saldo a favor' : 'Pagos realizados') + '</h2>'
-      + (c.pagos.length ? '<table class="r-table"><tbody>' + c.pagos.map((p) => '<tr class="' + (c.anulada ? '' : 'r-pagada') + (p.nuevo ? ' is-new' : '') + '"><td>' + (p.anterior ? 'Antes del sistema' : BG.fmtFecha(p.fecha)) + (p.nuevo ? ' <strong>· pago de hoy</strong>' : '')
-        + '<div class="r-forms">' + p.formas.map((x) => x.forma + ' ' + gs(x.monto)).join(' + ') + (p.aFavor ? ' · ' + gs(p.aFavor) + ' quedó a tu favor' : '')
-        + (verPuntos && p.puntos ? ' · sumó ' + p.puntos + (p.puntos === 1 ? ' punto' : ' puntos') : '') + '</div>'
-        // Parte de un pago mayor: se dice cuánto entregó en total y a qué otra compra fue el resto (así no parecen dos pagos).
-        + (p.cobro ? '<div class="r-forms r-cobro">Parte de un pago de ' + gs(p.cobro.entregado) + ' (recibo ' + BG.fmtRecibo(p.cobro.recibo) + '): el resto fue a ' + p.cobro.otras.map((o) => 'la compra ' + BG.fmtRecibo(o.numero) + ' (' + gs(o.monto) + ')').join(' y ') + '.</div>' : '') + '</td>'
-        + '<td class="num">' + gs(p.monto) + '</td></tr>').join('')
+      + (c.pagos.length ? '<table class="r-table r-pagos-compra"><tbody>' + c.pagos.map((pg) => lineaPago(c, pg)).join('')
         + (c.aFavorMovido ? '<tr><td>Por la devolución, pasó a tu saldo a favor</td><td class="num">−' + gs(c.aFavorMovido) + '</td></tr>' : '')
-        + '</tbody><tfoot><tr><td>Total pagado</td><td class="num">' + gs(c.pagado) + '</td></tr></tfoot></table>'
+        + '</tbody></table>'
         : '<p class="r-forms">' + (c.pagosAnulados.length ? 'Sin pagos vigentes.' : 'Todavía sin pagos.') + '</p>')
       // Pagos anulados: no cuentan, pero no desaparecen (con su importe original, para que se entienda qué pasó).
       + (c.pagosAnulados.length ? '<h2 class="r-sub">Pagos anulados <span class="r-forms">(no cuentan como pago)</span></h2><table class="r-table"><tbody>' + c.pagosAnulados.map((p) => '<tr class="r-pago-anulado"><td>'
         + BG.fmtFecha(p.fecha) + ' · ' + BG.fmtRecibo(p.recibo) + ' · <strong>PAGO ANULADO</strong> el ' + BG.fmtFecha(p.anuladoEl)
-        + '<div class="r-forms">' + p.formas.map((x) => x.forma + ' ' + gs(x.monto)).join(' + ') + '</div></td><td class="num">' + gs(p.monto) + '</td></tr>').join('') + '</tbody></table>' : '')
+        + ' · ' + p.formas.map((x) => x.forma + ' ' + gs(x.monto)).join(' + ') + '</td><td class="num">' + gs(p.monto) + '</td></tr>').join('') + '</tbody></table>' : '')
       + (c.cuotas.length ? '<h2 class="r-sub">Tus próximas cuotas</h2><table class="r-table"><tbody>' + c.cuotas.map((q) => '<tr' + (q.vencida ? ' class="is-late"' : '') + '><td>Cuota ' + q.n + ' de ' + q.de + ' · '
         + (q.vencida ? 'venció el ' : 'vence el ') + BG.fmtFecha(q.vence) + '</td><td class="num">' + gs(q.falta) + '</td></tr>').join('') + '</tbody></table>' : '')
-      + (unaCompra ? '' : '<p class="r-account"><span>Saldo de esta compra</span><strong>' + gs(c.saldo) + '</strong></p>')
-      + '</section>';
+      // Lo pagado y lo que falta, en un solo renglón (con palabras: el ticket sale en blanco y negro).
+      + (c.anulada ? '' : '<p class="r-account r-compra-cuenta"><span>Pagaste ' + gs(c.pagado) + '</span><strong>' + (c.saldo > 0 ? 'Falta ' + gs(c.saldo) : '✓ Saldada') + '</strong></p>');
+    // Una compra pagada del todo, cuando hay varias: una sola línea plegada (se abre con un toque; al imprimir sale solo esa línea).
+    const compra = (c) => (!unaCompra && !c.anulada && c.saldo <= 0
+      ? '<details class="r-section r-compra r-compra-cerrada"><summary><span>✓ Compra ' + BG.fmtRecibo(c.numero) + ' <span class="r-fecha">(' + BG.fmtFecha(c.fecha) + ')</span></span>'
+        + '<span class="num">Total ' + gs(c.total) + ' — Pagada</span></summary>' + cuerpoCompra(c) + '</details>'
+      : '<section class="r-section r-compra">'
+        + '<h2>' + (c.anterior ? 'Compra de antes del sistema' : 'Detalle de la compra') + '<span>' + BG.fmtFecha(c.fecha) + ' · ' + BG.fmtRecibo(c.numero) + '</span></h2>'
+        + cuerpoCompra(c) + '</section>');
     const legales = (d.terminos || []).filter((t) => !(terminosOff && terminosOff.has(t.id)));
     const filas = d.compras.reduce((a, c) => a + c.items.length + c.pagos.length + c.cuotas.length + c.devoluciones.length + 3, 0)
       + (d.soloPuntos ? d.detallePuntos.ganadas.length + d.detallePuntos.canjes.length + (d.detallePuntos.manuales.length ? d.detallePuntos.manuales.length + 3 : 0) + 4 : 0);
@@ -417,7 +433,7 @@
       + '<div class="r-client"><div><span>Cliente</span><strong>' + esc(d.cliente.nombre) + '</strong></div><div><span>Documento</span><strong>' + esc(d.cliente.documento) + '</strong></div></div>'
       + (d.soloPuntos ? htmlSoloPuntos(d, opc)
         : (d.pago ? htmlPago(d, verPuntos, opc)
-          : d.movimientos ? htmlCuenta(d) + (conDetalle && d.compras.length ? '<h2 class="r-sub r-det-tit">Detalle de cada compra</h2>' + d.compras.map(compra).join('') : '')
+          : d.movimientos ? htmlCuenta(d, conDetalle && d.compras.length > 0) + (conDetalle && d.compras.length ? '<h2 class="r-sub r-det-tit">Detalle de cada compra</h2>' + d.compras.map(compra).join('') : '')
             : compacto ? htmlHistorial(d, verPuntos)
               : d.compras.length ? d.compras.map(compra).join('') : '<p class="r-section">' + (d.historial ? 'Todavía no hay compras.' : 'No hay compras con saldo pendiente.') + '</p>')
           + '<div class="r-saldo' + (anulada ? ' is-anulada' : saldoPrincipal > 0 ? '' : ' is-paid') + '"><span>' + etiquetaSaldo

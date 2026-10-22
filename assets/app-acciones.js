@@ -514,6 +514,16 @@
     }
     const entregado = sum(cola, (x) => x.monto);
     if (!(entregado > 0)) throw new Error('Escribí cuánto paga.');
+    // Un pago no puede ser de antes de la compra a la que va (pasó: 16/09 en vez de 16/10). Se mira antes de gastar el número de recibo.
+    if (d.destino !== 'sena') {
+      let queda = entregado - (d.excedenteACredito || 0);
+      for (const v of d.destino === 'todas' ? BG.pendientesDe(d.clienteId) : [BG.venta(d.destino)]) {
+        const aplicar = Math.min(queda, BG.saldoVenta(v));
+        if (aplicar <= 0) continue;
+        queda -= aplicar;
+        if (d.fecha < v.fecha) throw new Error(fechaAntesDeCompra(d.fecha, v));
+      }
+    }
     const recibo = BG.nuevoRecibo();
     const grupo = BG.uid('g');
     if (usar > 0) credito(d.clienteId, -usar, 'Aplicado al recibo ' + BG.fmtRecibo(recibo), { ventaId: d.destino === 'todas' ? null : d.destino });
@@ -735,6 +745,11 @@
     const fecha = d.fecha || v.fecha;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha) || isNaN(new Date(fecha + 'T00:00:00').getTime())) return { error: 'La fecha de la compra no es válida.' };
     if (fecha > BG.hoy()) return { error: 'La fecha de la compra no puede ser futura.' };
+    // Si se cambia la fecha, la compra no puede quedar después de sus propios pagos.
+    if (fecha !== v.fecha) {
+      const primero = BG.pagosDeVenta(v.id).filter((p) => !p.anterior).map((p) => p.fecha).sort()[0];
+      if (primero && fecha > primero) return { error: 'La compra ya tiene un pago del ' + BG.fmtFecha(primero) + ': no puede quedar con una fecha posterior a ese pago.' };
+    }
     if (!BG.MOTIVOS_CORRECCION.includes(d.motivo)) return { error: 'Elegí el motivo de la corrección.' };
     const nota = limpiar(d.nota);
     if (d.motivo === 'Otro' && nota.length < 5) return { error: 'Contá qué se corrige en «Detalle» (queda en el historial).' };
@@ -1366,8 +1381,8 @@
       if (BG.ventaSumaPuntos(v)) throw new Error('La compra ' + BG.fmtRecibo(v.recibo) + ' ya suma puntos.');
     }
     const quien = BG.usuario().nombre;
-    let ganados = 0;
-    let pendientes = 0;
+    // Los puntos son de la clienta (se cuentan sobre todo lo que pagó junto): lo que suma es lo que cambia su cuenta, antes y después.
+    const antes = BG.puntosDe(cid);
     const detalle = [];
     for (const v of ventas) {
       v.puntosAparte = { fecha: BG.hoy(), ts: BG.ahora(), usuario: quien, motivo: limpiar(motivo) };
@@ -1376,11 +1391,11 @@
       // Con «los puntos se suman con cada pago», lo que esa clienta ya había pagado de la compra también suma: si no, podía haber pagado la
       // mayor parte de una compra y tener solo los puntos del último pago (HANDOFF §28).
       if (f.porPago) anotarPuntosDePagos(v);
-      const ya = BG.saldoVenta(v) <= 0 ? n : BG.puntosGanadosDeVenta(v);
-      ganados += ya;
-      pendientes += n - ya;
       detalle.push(BG.fmtRecibo(v.recibo) + ' del ' + BG.fmtFecha(v.fecha) + ' (' + n + ')');
     }
+    const despues = BG.puntosDe(cid);
+    const ganados = despues.ganados - antes.ganados;
+    const pendientes = Math.max(0, (despues.ganados + despues.pendientes) - (antes.ganados + antes.pendientes) - ganados);
     BG.auditar('fidelidad', 'Puntos de compras anteriores', BG.cliente(cid).nombre + ' · ' + detalle.join(', ') + ' · ' + ganados + ' puntos ya disponibles'
       + (pendientes ? ' y ' + pendientes + ' al terminar de pagar' : '') + (limpiar(motivo) ? ' · ' + limpiar(motivo) : ''));
     BG.guardar();
@@ -1836,11 +1851,11 @@
       return 'El saldo a favor que generó este pago ya se usó en otra compra (o se devolvió): anularlo dejaría el saldo a favor en negativo.';
     }
     // Un pago que sumó sus puntos en el momento: si la clienta ya los canjeó, anularlo dejaría puntos usados sin respaldo.
-    if (pg.puntos > 0 && v && BG.configFidelidad().activo) {
+    if (v && BG.configFidelidad().activo) {
       const p = BG.puntosDe(pg.clienteId);
-      const pierde = BG.puntosGanadosDeVenta(v) - BG.puntosGanadosSinPago(pg);
+      const pierde = BG.puntosQuePierdeSinPago(pg);
       if (p && pierde > 0 && p.ganados - pierde < p.canjeados) {
-        return 'Con este pago sumó ' + pg.puntos + (pg.puntos === 1 ? ' punto' : ' puntos') + ' y ya los canjeó: anularlo dejaría puntos usados sin respaldo.';
+        return 'Con este pago sumó ' + pierde + (pierde === 1 ? ' punto' : ' puntos') + ' y ya los canjeó: anularlo dejaría puntos usados sin respaldo.';
       }
     }
     return null;
@@ -1970,6 +1985,48 @@
     const r = C.calcularProducto({ costoUSD: p.costoUSD, envioUnitUSD: p.envioUnitUSD, cotizacion: cotizacion, redondeo: BG.db.config.redondeo });
     const m = p.margen || BG.db.config.margenDefecto;
     return Number(r.precios.find((x) => x.margen === m).redondeado);
+  };
+
+  /* ── Corregir la fecha de un pago ───────────────────────────────────── */
+
+  /** Texto del rechazo cuando un pago quedaría antes de su compra. */
+  function fechaAntesDeCompra(fecha, v) {
+    return 'El pago sería del ' + BG.fmtFecha(fecha) + ', antes de la compra ' + BG.fmtRecibo(v.recibo) + ' (del ' + BG.fmtFecha(v.fecha) + '). Revisá la fecha: un pago no puede ser de antes de la compra.';
+  }
+  BG.MOTIVOS_FECHA_PAGO = ['Se anotó con otra fecha por error', 'Otro'];
+  /**
+   * Cambia la fecha de un pago que se cargó con la fecha equivocada (pasó: 16/09 en vez de 16/10). Un cobro es un solo pago (regla 22): si fue repartido entre
+   * varias compras, cambia la fecha de todas sus partes. No cambia ningún monto: solo en qué día cuenta (la caja de ese día, los reportes). Lo anterior queda
+   * guardado en el pago (`fechasAnteriores`) y en la auditoría. La nueva fecha no puede ser futura ni de antes de ninguna de sus compras. Lo hace el dueño o
+   * quien tenga «Corregir una compra»; si toca un día de caja cerrado, solo el dueño.
+   */
+  BG.corregirFechaPago = (pagoId, fecha, motivo, nota) => {
+    delegable('corregirCompras', 'corregir la fecha de un pago');
+    const pg = BG.db.pagos.find((x) => x.id === pagoId);
+    if (!pg || pg.anulado) throw new Error('Ese pago no existe o está anulado.');
+    if (pg.anterior) throw new Error('Es un pago de antes del sistema: no tiene fecha propia.');
+    if (!fechaValida(fecha)) throw new Error('La fecha no es válida.');
+    if (fecha > BG.hoy()) throw new Error('La fecha no puede ser futura.');
+    if (!BG.MOTIVOS_FECHA_PAGO.includes(motivo)) throw new Error('Elegí el motivo.');
+    const detalle = limpiar(nota);
+    if (motivo === 'Otro' && detalle.length < 5) throw new Error('Contá por qué se cambia la fecha (queda en el historial).');
+    const partes = pg.grupo ? BG.db.pagos.filter((x) => x.grupo === pg.grupo && x.clienteId === pg.clienteId && !x.anulado) : [pg];
+    const antes = pg.fecha;
+    if (fecha === antes) throw new Error('El pago ya tiene esa fecha: no hay nada que cambiar.');
+    for (const x of partes) { const v = x.ventaId ? BG.venta(x.ventaId) : null; if (v && fecha < v.fecha) throw new Error(fechaAntesDeCompra(fecha, v)); }
+    const cerrada = BG.db.config.cajaCerradaHasta;
+    const tocaCerrada = cerrada && (antes <= cerrada || fecha <= cerrada);
+    if (tocaCerrada && !BG.esDuena()) throw new Error('La caja de ese día está cerrada: la fecha la cambia ' + BG.nombreDuena() + '.');
+    const reg = { fecha: antes, ts: BG.ahora(), usuario: BG.usuario().nombre, motivo: motivo, nota: detalle };
+    for (const x of partes) {
+      x.fechasAnteriores = (x.fechasAnteriores || []).concat([reg]);
+      x.fecha = fecha;
+    }
+    const cli = BG.cliente(pg.clienteId);
+    BG.auditar('cobros', 'Fecha de pago corregida', 'Recibo ' + BG.fmtRecibo(pg.recibo) + ' · ' + (cli ? cli.nombre : '') + ' · ' + BG.fmtFecha(antes) + ' → ' + BG.fmtFecha(fecha)
+      + ' · ' + motivo + (detalle ? ': ' + detalle : '') + (tocaCerrada ? ' · toca un día de caja cerrado' : ''));
+    BG.guardar();
+    return { partes: partes.length, antes: antes, fecha: fecha };
   };
 
   /* ── Parámetros ──────────────────────────────────────────────────────── */

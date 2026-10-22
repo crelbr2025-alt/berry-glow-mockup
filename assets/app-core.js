@@ -488,6 +488,11 @@
         else if (v.clienteId !== p.clienteId) mal('cliente', d + ': es de otra clienta que la compra a la que se aplicó');
       }
       if (!fechaOk(p.fecha)) mal('fecha', d + ': fecha inválida (' + p.fecha + ')');
+      // Un pago no puede ser de antes de su compra (pasó con una fecha mal tipeada: 16/09 en vez de 16/10). No es grave (la plata cuadra), pero se avisa
+      // para corregirlo con «Cambiar la fecha» del pago (BG.corregirFechaPago).
+      else if (p.ventaId && !p.anulado && !p.anterior && BG.venta(p.ventaId) && p.fecha < BG.venta(p.ventaId).fecha) {
+        mal('fecha', d + ': es del ' + BG.fmtFecha(p.fecha) + ', antes que su compra ' + BG.fmtRecibo(BG.venta(p.ventaId).recibo) + ' (' + BG.fmtFecha(BG.venta(p.ventaId).fecha) + ')', false);
+      }
       monto(d, 'total', p.total); monto(d, 'excedente', p.excedente || 0);
       let suma = 0;
       for (const x of p.partes || []) {
@@ -669,7 +674,8 @@
       recibo: p.recibo, fecha: p.fecha, ts: (vivos[0] || p).ts, pagos: vivos, formas: formas,
       anulados: anulados, anuladoFecha: anulados.map((x) => x.anulado.fecha).sort().pop() || null, entregadoAnulado: sum(anulados, (x) => sum(x.partes, (y) => y.monto)),
       aplicado: sum(vivos, (x) => x.total), excedente: sum(vivos, (x) => x.excedente || 0), entregado: sum(vivos, (x) => sum(x.partes, (y) => y.monto)),
-      puntos: sum(vivos, (x) => x.puntos || 0),
+      // Los puntos del cobro entero (se cuentan sobre todo lo que pagó la clienta junto: un pago repartido no pierde puntos, HANDOFF §30).
+      puntos: vivos.length ? BG.puntosDelPago(vivos[0]) : 0,
       aplicaciones: vivos.filter((x) => x.ventaId).map((x) => ({ pagoId: x.id, ventaId: x.ventaId, numero: BG.venta(x.ventaId).recibo, monto: x.total })),
     };
   };
@@ -1042,33 +1048,79 @@
     return Math.max(0, Math.min(BG.creditoCliente(cid), canjeado - usado));
   };
   /**
-   * Puntos: cada compra suma 1 punto cada `cadaGs` de su total, sin contar lo que se pagó con puntos. Por defecto
-   * suma recién cuando queda pagada del todo (en contado al momento, en cuotas al pagar la última) y los pagos
-   * parciales no suman nada. Si el dueño lo elige (Ajustes, o pago por pago al cobrar), un pago también suma
-   * sus puntos en el momento (`p.puntos`), sin esperar a que termine de pagar; al terminar, la compra completa su
-   * total (BG.puntosGanadosDeVenta). Si la compra se anula no suma; si una devolución baja el total, suma sobre el total nuevo.
-   * Devuelve { puntos (disponibles), valor, canjeable, ganados, canjeados, pendientes (de compras sin terminar de pagar), porGanar }.
+   * Puntos (regla del 21/10/2026, HANDOFF §30): se cuenta la PLATA que suma de todas las compras de la clienta y recién ahí se divide (1 punto cada
+   * `cadaGs`). Así lo que sobra de una compra se junta con lo de la otra y un pago repartido entre dos compras no pierde puntos: con ₲ 400.000 pagados son
+   * 20 puntos, aunque ₲ 205.000 hayan ido a una compra y ₲ 195.000 a otra (antes se redondeaba compra por compra y daba 19).
+   * Una compra aporta (BG.aportePuntos): pagada del todo, su total sin lo pagado con puntos; si debe, lo que ya pagaron los pagos que suman en el momento
+   * (`p.puntos` anotado al cobrar: lo dice Ajustes o el dueño pago por pago). Si se anula no aporta; si una devolución baja el total, aporta sobre el total nuevo.
+   * Devuelve { puntos (disponibles), valor, canjeable, ganados, canjeados, pendientes (al terminar de pagar lo que debe), porGanar }.
    */
   BG.puntosDe = (cid) => {
     const f = BG.configFidelidad();
     if (!f.activo) return null;
     // Los que el dueño le dio a mano (sin compra de por medio) cuentan como ganados: se canjean igual que los demás.
     const deLaTienda = BG.totalPuntosManuales(cid);
-    let ganados = deLaTienda;
-    let pendientes = 0;
-    const porGanar = [];
-    for (const v of BG.ventasDeCliente(cid)) {
-      // Una sola fórmula para los puntos de una venta: BG.puntosDeVenta. Tenerla escrita dos veces hacía que
-      // arreglar una dejara la otra mal (y los puntos de la clienta cambiaban solos).
-      const pts = BG.puntosDeVenta(v);
-      if (!pts) continue;
-      const ya = BG.puntosGanadosDeVenta(v);
-      ganados += ya;
-      if (ya < pts) { pendientes += pts - ya; porGanar.push({ v: v, puntos: pts - ya, total: pts }); }
-    }
+    const ahora = BG.cuentaPuntos(cid).puntos;
+    const alTerminar = BG.cuentaPuntos(cid, topePuntos).puntos;
+    const ganados = deLaTienda + ahora;
+    const pendientes = Math.max(0, alTerminar - ahora);
+    // Compra por compra, cuántos puntos más suma la clienta si termina de pagar ESA compra (para los avisos).
+    const porGanar = pendientes ? BG.ventasDeCliente(cid).filter((v) => topePuntos(v) > BG.aportePuntos(v))
+      .map((v) => ({ v: v, puntos: BG.cuentaPuntos(cid, (x) => (x === v ? topePuntos(x) : BG.aportePuntos(x))).puntos - ahora, total: BG.puntosDeVenta(v) }))
+      .filter((x) => x.puntos > 0) : [];
     const canjeados = sum((BG.db.canjes || []).filter((k) => k.clienteId === cid), (k) => k.puntos);
     const puntos = Math.max(0, ganados - canjeados);
     return { puntos: puntos, valor: puntos * f.valorPunto, canjeable: puntos >= f.minimo, ganados: ganados, canjeados: canjeados, pendientes: pendientes, porGanar: porGanar, deLaTienda: deLaTienda };
+  };
+  /** Cada cuántos guaraníes suma un punto esta compra: la regla del día de la venta (las viejas, sin regla guardada, usan la de hoy). */
+  BG.cadaDeVenta = (v) => (v.fidelidad && v.fidelidad.cadaGs > 0 ? v.fidelidad.cadaGs : BG.configFidelidad().cadaGs);
+  /** ¿Este pago suma puntos en el momento? Sí, si al cobrarlo se eligió que sume: queda `p.puntos` anotado (aunque sea 0, por un pago chico). */
+  BG.pagoSumaPuntos = (p) => typeof p.puntos === 'number';
+  /** La plata de un pago, sin lo que se pagó con puntos canjeados (eso no vuelve a sumar puntos). */
+  const plataDePago = (p) => Math.max(0, p.total - sum(p.partes, (x) => x.deCanje || 0));
+  /** Lo máximo que una compra puede aportar: su total sin lo pagado con puntos (0 si no suma puntos). */
+  const topePuntos = (v) => {
+    const f = BG.configFidelidad();
+    if (!f.activo || v.anulada || !BG.ventaSumaPuntos(v)) return 0;
+    return Math.max(0, v.total - BG.canjeAplicado(v));
+  };
+  /** Cuánta plata de esta compra cuenta hoy para los puntos de la clienta (en guaraníes, no en puntos). */
+  BG.aportePuntos = (v) => {
+    const tope = topePuntos(v);
+    if (!tope) return 0;
+    if (BG.saldoVenta(v) <= 0) return tope;
+    return Math.min(tope, sum(BG.pagosDeVenta(v.id).filter(BG.pagoSumaPuntos), plataDePago));
+  };
+  /**
+   * La cuenta de los puntos de las compras de una clienta: junta la plata que aporta cada compra (`aporteDe`, por defecto BG.aportePuntos; se cambia para
+   * simular «si termina de pagar», «sin esta compra»…) y divide una sola vez. Compras con distinta regla (`cadaGs`) se juntan aparte. `porCompra` dice cuánto
+   * daría cada una sola (`puntos`) y `sobras` los puntos que salen de juntar lo que sobraba de cada una: la suma de las dos es `puntos`.
+   */
+  BG.cuentaPuntos = (cid, aporteDe) => {
+    const grupos = new Map();
+    const porCompra = [];
+    for (const v of BG.ventasDeCliente(cid)) {
+      const a = (aporteDe || BG.aportePuntos)(v);
+      if (!(a > 0)) continue;
+      const cada = BG.cadaDeVenta(v);
+      grupos.set(cada, (grupos.get(cada) || 0) + a);
+      porCompra.push({ v: v, aporte: a, cada: cada, puntos: BG.puntosDeMonto(a, cada) });
+    }
+    let puntos = 0;
+    for (const [cada, monto] of grupos) puntos += BG.puntosDeMonto(monto, cada);
+    return { puntos: puntos, porCompra: porCompra, sobras: puntos - sum(porCompra, (x) => x.puntos), aporte: sum(porCompra, (x) => x.aporte) };
+  };
+  /**
+   * Puntos que suma un cobro que todavía no se registró: `partes` = [{ v, total, deCanje }] (lo que se aplicaría a cada compra). Se simula con pagos de
+   * mentira que se sacan enseguida: la misma cuenta que va a hacer el cobro de verdad (regla 6), con todo lo que se aplica junto.
+   */
+  BG.puntosDeCobroPrevisto = (cid, partes) => {
+    if (!BG.configFidelidad().activo || !partes.length) return 0;
+    const antes = BG.cuentaPuntos(cid).puntos;
+    const falsos = partes.filter((x) => x.v && x.total > 0).map((x) => ({ id: 'simulado-' + Math.random(), ventaId: x.v.id, clienteId: cid, fecha: BG.hoy(), ts: BG.ahora(),
+      partes: [{ forma: 'efectivo', monto: x.total, deCanje: x.deCanje || 0 }], total: x.total, excedente: 0, anulado: null, puntos: 0 }));
+    BG.db.pagos.push.apply(BG.db.pagos, falsos);
+    try { return BG.cuentaPuntos(cid).puntos - antes; } finally { falsos.forEach((p) => { const i = BG.db.pagos.indexOf(p); if (i >= 0) BG.db.pagos.splice(i, 1); }); }
   };
   /**
    * Puntos que el dueño le da a una clienta a mano, sin que haya comprado nada (de 10 en 10): se anotan en `db.puntosManuales`
@@ -1106,77 +1158,120 @@
   };
   /** La única división de los puntos: 1 punto cada `cada` guaraníes (lo que sobra no suma). Compra, pago y avisos usan esta. */
   BG.puntosDeMonto = (monto, cada) => Math.floor(Math.max(0, monto) / cada);
-  /** Puntos que ya sumaron los pagos vivos de la compra (los que se acreditaron en el momento, sin esperar a terminar de pagar). */
+  /** Lo que se anotó en los pagos de la compra al cobrarlos (`p.puntos`): es informativo; la cuenta de verdad es BG.cuentaPuntos. */
   BG.puntosPorPagos = (v) => sum(BG.pagosDeVenta(v.id), (p) => p.puntos || 0);
   /**
-   * Puntos que la compra ya le dio a la clienta: todos (BG.puntosDeVenta) si está pagada del todo; si todavía debe,
-   * solo los que sumaron sus pagos (nunca más que los de la compra). Es lo único que cuenta como «ganado».
+   * Puntos que esta compra le dio a la clienta: lo que tiene ahora menos lo que tendría sin esta compra (la cuenta es de todas juntas, así que es lo que
+   * perdería si se anula). Es lo único que cuenta como «ganado» de una compra.
    */
   BG.puntosGanadosDeVenta = (v) => {
-    const pts = BG.puntosDeVenta(v);
-    if (!pts) return 0;
-    return BG.saldoVenta(v) <= 0 ? pts : Math.min(pts, BG.puntosPorPagos(v));
+    if (!BG.aportePuntos(v)) return 0;
+    return BG.cuentaPuntos(v.clienteId).puntos - BG.cuentaPuntos(v.clienteId, (x) => (x === v ? 0 : BG.aportePuntos(x))).puntos;
   };
   /**
-   * Puntos que daría un pago de esta compra: 1 cada `cadaGs` de lo que se paga en plata (lo pagado con puntos no
-   * suma), sin pasar de lo que a la compra le falta por sumar. `pg` = { total, partes, id? } (el pago ya guardado, o
-   * uno por guardar). La misma fórmula para el cobro, el aviso antes de cobrar y lo que muestra el recibo.
+   * Puntos que suma un pago YA GUARDADO de esta compra: lo que tiene la clienta con ese pago sumando, menos lo que tendría sin él. Al cobrar se anota en el
+   * pago (`p.puntos`); en un cobro repartido se calcula parte por parte, en orden, y entre todas dan lo del cobro entero.
    */
-  BG.puntosDePago = (v, pg) => BG.puntosDePagoCon(v, pg, sum(BG.pagosDeVenta(v.id).filter((p) => p.id !== pg.id), (p) => p.puntos || 0));
-  /** La misma cuenta de arriba, diciendo cuántos puntos de la compra ya dieron los demás pagos (`yaDados`): una sola fórmula (regla 6). */
-  BG.puntosDePagoCon = (v, pg, yaDados) => {
+  BG.puntosDePago = (v, pg) => {
     const f = BG.configFidelidad();
     if (!f.activo || v.anulada || !BG.ventaSumaPuntos(v)) return 0;
-    const cada = v.fidelidad && v.fidelidad.cadaGs > 0 ? v.fidelidad.cadaGs : f.cadaGs;
-    const plata = Math.max(0, pg.total - sum(pg.partes, (x) => x.deCanje || 0));
-    const tope = Math.max(0, BG.puntosDeVenta(v) - yaDados);
-    return Math.min(tope, BG.puntosDeMonto(plata, cada));
+    const antesP = pg.puntos;
+    const antesA = pg.anulado;
+    try {
+      pg.puntos = 0;
+      const con = BG.cuentaPuntos(v.clienteId).puntos;
+      pg.anulado = { simulado: true };
+      const sin = BG.cuentaPuntos(v.clienteId).puntos;
+      return Math.max(0, con - sin);
+    } finally { pg.anulado = antesA; if (antesP === undefined) delete pg.puntos; else pg.puntos = antesP; }
   };
   /**
-   * Pagos que ya se hicieron en una compra que suma puntos y que no dieron los suyos: por ejemplo los de antes de que el dueño le sumara los
-   * puntos a una compra vieja, o los de antes de pasar a «con cada pago». Devuelve [{ pago, puntos }] en el orden en que se pagaron, con lo que
-   * le corresponde a cada uno (sin pasar de los puntos de la compra). Es solo una lectura: BG.sumarPuntosDePagos es la que los anota.
+   * Lo que sumó cada pago de la clienta, mirando su historia en orden (para decir «sumó N puntos» en los recibos y en la ficha). Recorre los pagos vivos
+   * como se fueron haciendo y en cada uno mira cuánto subió la cuenta. Devuelve un Map pagoId → puntos. Es una lectura: no cambia nada.
+   */
+  BG.puntosPorPagoDe = (cid) => {
+    const res = new Map();
+    if (!BG.configFidelidad().activo) return res;
+    const pagos = BG.db.pagos.filter((p) => p.clienteId === cid && !p.anulado && p.ventaId).sort((a, b) => String(a.ts).localeCompare(String(b.ts)) || String(a.id).localeCompare(String(b.id)));
+    const vistos = new Set();
+    // Aporte de cada compra contando solo los pagos ya «vistos» (hasta este momento de la historia).
+    const aporteHasta = (v) => {
+      const tope = topePuntos(v);
+      if (!tope) return 0;
+      const suyos = BG.pagosDeVenta(v.id).filter((p) => vistos.has(p.id));
+      const pagado = sum(suyos, (p) => p.total) - (v.aFavor || 0);
+      if (suyos.length && pagado >= v.total) return tope;
+      return Math.min(tope, sum(suyos.filter(BG.pagoSumaPuntos), plataDePago));
+    };
+    let antes = 0;
+    for (const p of pagos) {
+      vistos.add(p.id);
+      const ahora = BG.cuentaPuntos(cid, aporteHasta).puntos;
+      res.set(p.id, Math.max(0, ahora - antes));
+      antes = ahora;
+    }
+    return res;
+  };
+  /** Lo que sumó un pago; si fue parte de un cobro repartido, lo del cobro entero (así se le dice a la clienta: un cobro es un solo pago, regla 22). */
+  BG.puntosDelPago = (p, mapa) => {
+    const m = mapa || BG.puntosPorPagoDe(p.clienteId);
+    const partes = p.grupo ? BG.db.pagos.filter((x) => x.grupo === p.grupo && x.clienteId === p.clienteId && !x.anulado) : [p];
+    return sum(partes, (x) => m.get(x.id) || 0);
+  };
+  /**
+   * Pagos ya hechos en una compra que suma puntos y que no suman en el momento: por ejemplo los de antes de que el dueño le sumara los puntos a una compra
+   * vieja, o los de antes de pasar a «con cada pago». Devuelve [{ pago, puntos }] en el orden en que se pagaron, con lo que sumaría cada uno (puede ser 0
+   * si todavía no llega a un punto: igual conviene anotarlo, porque su plata se junta con la de los pagos que vengan). Es solo una lectura:
+   * BG.sumarPuntosDePagos es la que los anota.
    */
   BG.pagosSinPuntos = (v) => {
-    // Solo con «los puntos se suman con cada pago» (si no, los pagos parciales no suman por diseño: la compra da sus puntos al terminar de pagarla) y mientras la
-    // compra debe algo: pagada del todo ya da todos sus puntos (BG.puntosGanadosDeVenta) y no hay nada que anotar en cada pago.
+    // Solo con «los puntos se suman con cada pago» (si no, los pagos parciales no suman por diseño: la compra aporta todo al terminar de pagarla) y mientras la
+    // compra debe algo: pagada del todo ya aporta todo (BG.aportePuntos) y no hay nada que anotar en cada pago.
     if (!BG.configFidelidad().activo || !BG.configFidelidad().porPago || v.anulada || !BG.ventaSumaPuntos(v) || BG.saldoVenta(v) <= 0) return [];
-    const pagos = BG.pagosDeVenta(v.id).filter((p) => !p.anterior).sort((a, b) => a.ts.localeCompare(b.ts));
-    let ya = sum(pagos, (p) => p.puntos || 0);
-    const out = [];
-    for (const p of pagos) {
-      if ((p.puntos || 0) > 0) continue;
-      const n = BG.puntosDePagoCon(v, p, ya);
-      if (n > 0) { out.push({ pago: p, puntos: n }); ya += n; }
-    }
-    return out;
+    const pagos = BG.pagosDeVenta(v.id).filter((p) => !p.anterior && !BG.pagoSumaPuntos(p)).sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+    if (!pagos.length) return [];
+    const tope = topePuntos(v);
+    const ya = BG.aportePuntos(v);
+    let extra = 0;
+    let prev = BG.cuentaPuntos(v.clienteId).puntos;
+    return pagos.map((p) => {
+      extra += plataDePago(p);
+      const n = BG.cuentaPuntos(v.clienteId, (x) => (x === v ? Math.min(tope, ya + extra) : BG.aportePuntos(x))).puntos;
+      const r = { pago: p, puntos: n - prev };
+      prev = n;
+      return r;
+    });
   };
-  /** Lo que ganaría la clienta con esta compra si el pago `pg` se anulara (para avisar antes de anular). */
-  BG.puntosGanadosSinPago = (pg) => {
+  /** Puntos que la clienta perdería si el pago `pg` se anulara (para avisar antes de anular). */
+  BG.puntosQuePierdeSinPago = (pg) => {
     const v = pg.ventaId ? BG.venta(pg.ventaId) : null;
-    if (!v) return 0;
+    if (!v || !BG.configFidelidad().activo) return 0;
+    const ahora = BG.cuentaPuntos(v.clienteId).puntos;
     const antes = pg.anulado;
     pg.anulado = { simulado: true };
-    try { return BG.puntosGanadosDeVenta(v); } finally { pg.anulado = antes; }
+    try { return Math.max(0, ahora - BG.cuentaPuntos(v.clienteId).puntos); } finally { pg.anulado = antes; }
   };
-  /** Compras vivas de la clienta con pagos ya hechos que no dieron sus puntos, y cuántos darían (BG.pagosSinPuntos). */
+  /** Compras vivas de la clienta con pagos ya hechos que no suman sus puntos, y cuántos darían (BG.pagosSinPuntos). */
   BG.comprasConPagosSinPuntos = (cid) => BG.ventasDeCliente(cid)
     .map((v) => { const l = BG.pagosSinPuntos(v); return { v: v, pagos: l.length, puntos: sum(l, (x) => x.puntos), pagado: sum(l, (x) => x.pago.total) }; })
     .filter((x) => x.pagos > 0)
     .sort((a, b) => String(a.v.ts).localeCompare(String(b.v.ts)));
   /**
-   * Qué pasa si el dueño le suma los puntos a una compra que no suma sola: cuántos puntos tiene ya ({ ahora }) y cuántos quedan para cuando termine de
+   * Qué pasa si el dueño le suma los puntos a una compra que no suma sola: cuántos puntos más tiene ya ({ ahora }) y cuántos quedan para cuando termine de
    * pagarla ({ despues }). Con «los puntos se suman con cada pago», lo que ya pagó cuenta desde ahora. Es una lectura: no deja nada anotado.
    */
   BG.puntosAlSumarAparte = (v) => {
-    const total = BG.puntosDeVenta(v, true);
-    if (BG.saldoVenta(v) <= 0) return { ahora: total, despues: 0 };
-    if (!BG.configFidelidad().porPago) return { ahora: 0, despues: total };
+    const cid = v.clienteId;
+    const base = BG.cuentaPuntos(cid).puntos;
     const antes = v.puntosAparte;
     v.puntosAparte = antes || { simulado: true };
     try {
-      const ahora = Math.min(total, BG.puntosPorPagos(v) + sum(BG.pagosSinPuntos(v), (x) => x.puntos));
-      return { ahora: ahora, despues: total - ahora };
+      const tope = topePuntos(v);
+      const pagado = BG.saldoVenta(v) <= 0 ? tope
+        : BG.configFidelidad().porPago ? Math.min(tope, sum(BG.pagosDeVenta(v.id).filter((p) => !p.anterior), plataDePago)) : 0;
+      const ahora = BG.cuentaPuntos(cid, (x) => (x === v ? pagado : BG.aportePuntos(x))).puntos - base;
+      const fin = BG.cuentaPuntos(cid, (x) => (x === v ? tope : BG.aportePuntos(x))).puntos - base;
+      return { ahora: ahora, despues: Math.max(0, fin - ahora) };
     } finally { v.puntosAparte = antes; }
   };
   /** Compras vivas de la clienta que hoy no suman puntos y darían al menos uno si el dueño elige que sumen. */
@@ -1225,13 +1320,14 @@
     const f = BG.configFidelidad();
     const p = BG.puntosDe(cid);
     if (!p) return null;
-    const ganadas = BG.ventasDeCliente(cid)
-      .filter((v) => !v.anulada && BG.puntosGanadosDeVenta(v) > 0)
-      .sort((a, b) => String(b.ts).localeCompare(String(a.ts)))
-      .map((v) => ({ recibo: v.recibo, fecha: v.fecha, total: v.total, puntos: BG.puntosGanadosDeVenta(v), parcial: BG.saldoVenta(v) > 0 }));
+    // Compra por compra: la plata que cuenta y los puntos que daría sola; lo que sobraba de cada una se junta (`sobras`) y entre las dos cosas dan lo ganado.
+    const cuenta = BG.cuentaPuntos(cid);
+    const ganadas = cuenta.porCompra.slice()
+      .sort((a, b) => String(b.v.ts).localeCompare(String(a.v.ts)))
+      .map((x) => ({ recibo: x.v.recibo, fecha: x.v.fecha, total: x.v.total, aporte: x.aporte, puntos: x.puntos, parcial: BG.saldoVenta(x.v) > 0 }));
     return Object.assign({}, p, {
       minimo: f.minimo, valorPunto: f.valorPunto, cadaGs: f.cadaGs, terminos: f.terminos,
-      ganadas: ganadas, canjes: BG.canjesDe(cid),
+      ganadas: ganadas, sobras: cuenta.sobras, canjes: BG.canjesDe(cid),
       /** Lo que le dio la tienda a mano (en el comprobante sale como «Puntos que te dio la tienda», sin el motivo interno). */
       manuales: BG.puntosManualesDe(cid),
       /** Puntos que le faltan para llegar al mínimo de canje (0 si ya puede). */

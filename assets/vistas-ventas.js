@@ -110,7 +110,7 @@
     if (BG.cajaCerrada(pg.fecha) && !(await BG.pedirPin('El pago es del ' + BG.fmtFecha(pg.fecha) + ' y la caja de ese día ya está cerrada.'))) return false;
     const v = pg.ventaId ? BG.venta(pg.ventaId) : null;
     // Los puntos que la compra deja de tener sin este pago (si estaba saldada, vuelven a quedar pendientes; si sumó con el pago, se pierden).
-    const puntos = v ? BG.puntosGanadosDeVenta(v) - BG.puntosGanadosSinPago(pg) : 0;
+    const puntos = v ? BG.puntosQuePierdeSinPago(pg) : 0;
     const efecto = () => '<div class="callout callout-warn efecto">' + icon('info') + '<div><strong>Al anular este pago:</strong><ul class="efecto-lista">'
       + '<li>El saldo vuelve a subir <strong>' + gs(pg.total) + '</strong>' + (pg.excedente ? ' y se le quitan los ' + gs(pg.excedente) + ' que habían quedado a favor' : '') + '.</li>'
       + (puntos > 0 ? '<li>' + (pg.puntos ? 'Pierde los <strong>' + puntos + (puntos === 1 ? ' punto' : ' puntos') + '</strong> que sumó con este pago; vuelven a quedar pendientes hasta que termine de pagar la compra.'
@@ -122,6 +122,34 @@
     if (!m) return false;
     BG.anularPago(pg.id, m.texto, m.tipo);
     BG.toast('Pago anulado. El saldo se actualizó.');
+    return true;
+  };
+
+  /* ── Cambiar la fecha de un pago ──────────────────────────────────────── */
+
+  /** Diálogo para corregir la fecha de un pago cargado con la fecha equivocada (BG.corregirFechaPago). Si fue parte de un cobro repartido, cambia todo el cobro. */
+  BG.fechaPagoUI = async (pg) => {
+    const partes = pg.grupo ? BG.db.pagos.filter((x) => x.grupo === pg.grupo && x.clienteId === pg.clienteId && !x.anulado) : [pg];
+    const compras = partes.map((x) => (x.ventaId ? BG.venta(x.ventaId) : null)).filter(Boolean);
+    const desde = compras.map((v) => v.fecha).sort().pop() || '';
+    const entregado = BG.cobroDe(pg).entregado;
+    let datos = null;
+    const r = await BG.modal({
+      titulo: 'Cambiar la fecha del pago ' + BG.fmtRecibo(pg.recibo),
+      cuerpo: '<p>Pago de <strong>' + gs(entregado) + '</strong> anotado el <strong>' + BG.fmtFecha(pg.fecha) + '</strong>'
+        + (compras.length ? ' para ' + compras.map((v) => 'la compra ' + BG.fmtRecibo(v.recibo) + ' (del ' + BG.fmtFecha(v.fecha) + ')').join(' y ') : '') + '.</p>'
+        + (partes.length > 1 ? '<p class="hint">Fue un solo pago repartido entre ' + partes.length + ' compras: cambia la fecha del pago entero.</p>' : '')
+        + '<p class="hint">No cambia ningún monto: solo en qué día cuenta (la caja de ese día y los reportes). La fecha anterior queda guardada en el historial.</p>'
+        + '<div class="field"><label for="fp-fecha">Fecha correcta</label><input id="fp-fecha" class="input input-date" type="date" value="' + pg.fecha + '"' + (desde ? ' min="' + desde + '"' : '') + ' max="' + BG.hoy() + '"></div>'
+        + '<div class="field"><label for="fp-motivo">Motivo</label><select id="fp-motivo" class="input">' + BG.MOTIVOS_FECHA_PAGO.map((m) => '<option>' + esc(m) + '</option>').join('') + '</select></div>'
+        + '<div class="field"><label for="fp-nota">Detalle <span class="small muted">(obligatorio si elegís «Otro»)</span></label><input id="fp-nota" class="input" maxlength="140" autocomplete="off"></div>',
+      acciones: [{ texto: 'Volver', valor: 'cancelar', clase: 'btn-quiet' }, { texto: 'Cambiar la fecha', valor: 'ok', clase: 'btn-primary' }],
+      validar: (v, dlg) => { datos = { fecha: $('#fp-fecha', dlg).value, motivo: $('#fp-motivo', dlg).value, nota: $('#fp-nota', dlg).value }; return true; },
+    });
+    if (r !== 'ok' || !datos) return false;
+    if (BG.esDuena() && (BG.cajaCerrada(pg.fecha) || BG.cajaCerrada(datos.fecha)) && !(await BG.pedirPin('Cambia un día de caja ya cerrado (' + BG.fmtFecha(pg.fecha) + ' → ' + BG.fmtFecha(datos.fecha) + ').'))) return false;
+    const res = BG.corregirFechaPago(pg.id, datos.fecha, datos.motivo, datos.nota);
+    BG.toast('Listo: el pago ' + BG.fmtRecibo(pg.recibo) + ' pasó del ' + BG.fmtFecha(res.antes) + ' al ' + BG.fmtFecha(res.fecha) + '.');
     return true;
   };
 
@@ -809,6 +837,7 @@
     const duena = BG.esDuena();
     // Lo que el dueño puede dejar en manos de la vendedora (Ajustes → Usuarios y permisos): cada botón sale según el permiso efectivo, no según el rol.
     const verCostos = BG.veCostos(), puedeCorregir = BG.puede('corregirCompras'), puedeDarPuntos = BG.puede('darPuntos'), puedeAnular = BG.puede('anularVentas');
+    const puntosPagos = BG.puntosPorPagoDe(v.clienteId);
     const saldo = BG.saldoVenta(v);
     const pagado = BG.pagadoVenta(v);
     const pagos = BG.pagosDeVenta(v.id, true).sort((a, b) => a.ts.localeCompare(b.ts));
@@ -959,14 +988,17 @@
         + '<div class="row-sub">' + (p.anterior ? 'Pagado antes del sistema · anotado por ' + esc(p.usuario)
           : BG.fmtFecha(p.fecha) + ' ' + BG.fmtHora(p.ts) + ' · ' + BG.fmtRecibo(p.recibo) + (p.inicial ? ' · pago inicial' : '') + ' · por ' + esc(p.usuario)) + '</div>'
         + (p.anterior ? '' : '<div class="row-sub">' + p.partes.map((x) => BG.FORMAS[x.forma] + ' ' + gs(x.monto) + (x.deCanje ? ' (' + gs(x.deCanje) + ' con puntos)' : '')).join(' + ')
-          + (p.puntos ? ' · <span class="t-favor">sumó ' + p.puntos + (p.puntos === 1 ? ' punto' : ' puntos') + '</span>' : '') + '</div>')
+          + (() => { const n = p.anulado ? 0 : BG.puntosDelPago(p, puntosPagos); return n ? ' · <span class="t-favor">' + (BG.cobroDe(p).aplicaciones.length > 1 ? 'el pago sumó ' : 'sumó ') + n + (n === 1 ? ' punto' : ' puntos') + '</span>' : ''; })() + '</div>')
         // Parte de un cobro mayor: se dice cuánto entregó en total y a qué otras compras fue el resto (así no parece que pagó dos veces).
         + (p.anterior || p.anulado || !p.grupo ? '' : (() => {
           const otras = BG.cobroDe(p).aplicaciones.filter((x) => x.pagoId !== p.id);
           return otras.length ? '<div class="row-sub">Parte de un pago de ' + gs(BG.cobroDe(p).entregado) + ': el resto fue a ' + otras.map((x) => 'la compra ' + BG.fmtRecibo(x.numero) + ' (' + gs(x.monto) + ')').join(' y ') + '.</div>' : '';
         })())
         + (p.anulado ? '<div class="row-sub">Anulado el ' + BG.fmtFecha(p.anulado.fecha) + ': ' + esc(p.anulado.motivo) + '</div>' : '')
-        + '</div>' + (p.anulado || v.anulada || !puedeAnular ? '' : '<button type="button" class="btn btn-sm btn-quiet" data-accion="anular-pago" data-id="' + p.id + '">Anular</button>')
+        + (!p.anulado && !p.anterior && p.fecha < v.fecha ? '<div class="row-sub t-due">' + icon('alert', 'i-sm') + ' Este pago figura del ' + BG.fmtFecha(p.fecha) + ', antes de la compra (' + BG.fmtFecha(v.fecha) + '): cambiale la fecha.</div>' : '')
+        + ((p.fechasAnteriores || []).length ? '<div class="row-sub">Fecha corregida (antes: ' + p.fechasAnteriores.map((x) => BG.fmtFecha(x.fecha)).join(', ') + ')</div>' : '')
+        + '</div>' + (p.anulado || p.anterior || v.anulada || !puedeCorregir ? '' : '<button type="button" class="btn btn-sm btn-quiet" data-accion="fecha-pago" data-id="' + p.id + '">Cambiar fecha</button>')
+        + (p.anulado || v.anulada || !puedeAnular ? '' : '<button type="button" class="btn btn-sm btn-quiet" data-accion="anular-pago" data-id="' + p.id + '">Anular</button>')
         + '</div></li>').join('')
         + (v.aFavor ? '<li class="line line-favor"><div class="row-title">−' + gs(v.aFavor) + ' pasó a saldo a favor</div><div class="row-sub">Por la devolución: lo que había pagado de más ya no es parte de esta venta' + (devs.some((d) => d.reintegro) ? ' (y se le devolvió en plata)' : '') + '.</div></li>' : '')
         + '</ul>' : '<p class="empty">Todavía no hay pagos: la venta quedó a cuenta.</p>')
@@ -998,6 +1030,10 @@
             if (b.dataset.accion === 'puntos-sumar' && (await BG.puntosCompraUI(v, 'sumar'))) BG.render();
             if (b.dataset.accion === 'puntos-pagos' && (await BG.puntosDePagosUI(cli, v))) BG.render();
             if (b.dataset.accion === 'puntos-quitar' && (await BG.puntosCompraUI(v, 'quitar'))) BG.render();
+            if (b.dataset.accion === 'fecha-pago') {
+              const pg = BG.db.pagos.find((x) => x.id === b.dataset.id);
+              if (await BG.fechaPagoUI(pg)) BG.render();
+            }
             if (b.dataset.accion === 'anular-pago') {
               const pg = BG.db.pagos.find((x) => x.id === b.dataset.id);
               if (await BG.anularPagoUI(pg)) BG.render();

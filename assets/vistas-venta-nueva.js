@@ -769,22 +769,22 @@
       $('#cs-total', root).textContent = gs(recibido);
       pintarPuntos(recibido, u);
     };
-    // Puntos de este cobro (solo el dueño): lo que sumaría repartido en las compras a las que se aplica, con la fórmula de siempre.
+    // Puntos de este cobro (solo el dueño): lo que sumaría todo junto, repartido en las compras a las que se aplica (BG.puntosDeCobroPrevisto: la misma cuenta del cobro).
     const puntosPrevistos = (recibido, u) => {
       if (!BG.configFidelidad().activo || !e.clienteId || !e.destino || e.destino === 'sena') return null;
       const ventas = e.destino === 'todas' ? BG.pendientesDe(e.clienteId) : [BG.venta(e.destino)].filter(Boolean);
       let restante = recibido + u;
       let deCanje = Math.min(u, BG.canjeDisponible(e.clienteId));
-      let n = 0;
+      const partes = [];
       for (const v of ventas) {
         const aplicar = Math.min(restante, BG.saldoVenta(v));
         if (aplicar <= 0) continue;
         const dc = Math.min(deCanje, aplicar);
         deCanje -= dc;
-        n += BG.puntosDePago(v, { total: aplicar, partes: [{ forma: 'efectivo', monto: aplicar, deCanje: dc }] });
+        partes.push({ v: v, total: aplicar, deCanje: dc });
         restante -= aplicar;
       }
-      return n;
+      return BG.puntosDeCobroPrevisto(e.clienteId, partes);
     };
     const pintarPuntos = (recibido, u) => {
       const host = $('#c-puntos', root);
