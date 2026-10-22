@@ -581,7 +581,7 @@
       const agregadas = new Set();
       (v.agregados || []).forEach((a) => a.items.forEach((i) => agregadas.add(i)));
       const originales = v.items.filter((it, i) => !it.cambioDe && !agregadas.has(i));
-      mov.push({ ts: v.ts, fecha: v.fecha, ventaId: v.id, anterior: !!v.anterior,
+      mov.push({ ts: v.ts, fecha: v.fecha, ventaId: v.id, anterior: !!v.anterior, compra: true,
         concepto: (v.anterior ? 'Compra anterior al sistema ' : 'Compra ') + num + ' · ' + originales.map((it) => it.descripcion).join(', '),
         cargo: v.anulada ? 0 : totalOriginal, anulado: v.anulada ? 'Anulada: ' + v.anulada.motivo : '' });
       if (v.anulada) continue;
@@ -628,6 +628,54 @@
     mov.sort((a, b) => a.ts.localeCompare(b.ts));
     let saldo = 0;
     return mov.map((m) => { saldo += (m.cargo || 0) - (m.abono || 0); return Object.assign(m, { publico: m.publico || m.concepto, saldo: saldo }); });
+  };
+  /**
+   * La cuenta de la clienta en tramos (21/10/2026, HANDOFF §31). Cada compra ocupa desde su fecha hasta la fecha de su último movimiento (el pago que la terminó, una
+   * devolución…) o hasta hoy si todavía debe; las compras que se pisan forman un tramo, y cuando una compra empieza después de que terminó todo lo anterior,
+   * empieza un tramo nuevo (la clienta había quedado al día). El estado de cuenta muestra el tramo ACTUAL (el último: si hoy no debe nada, el que terminó de
+   * pagar) y lo de antes —todo pagado— queda como historial interno (la ficha lo lista; el estado de cuenta lo incluye solo con «Todo el historial»).
+   * No cambia ningún número: es solo qué parte del libro se muestra; el saldo de cada línea se cuenta dentro del tramo (lo de antes estaba pagado: arranca en 0).
+   * Se agrupa por compras y por FECHA (la de la compra y la de cada pago), no buscando el ₲ 0 en el libro: la hora se guarda al minuto y lo cargado hoy de algo
+   * de hace meses tiene la hora de hoy. Lo del mismo día queda en el mismo tramo.
+   * Devuelve { actual, anteriores } (anteriores, del más viejo al más nuevo); cada tramo: { lineas, ventaIds, desde, hasta, total, pagado }.
+   */
+  BG.tramosDeCuenta = (cid) => {
+    const libro = BG.libroCliente(cid);
+    const vivas = BG.ventasDeCliente(cid).filter((v) => !v.anulada).sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)) || String(a.ts).localeCompare(String(b.ts)));
+    // Hasta cuándo ocupa cada compra: el último movimiento del libro que la toca (o «abierta» si debe).
+    const ultimo = new Map();
+    for (const m of libro) {
+      const toca = [m.ventaId].concat((m.aplicaciones || []).map((x) => x.ventaId));
+      toca.forEach((id) => { if (id && (!ultimo.has(id) || String(m.fecha) > ultimo.get(id))) ultimo.set(id, String(m.fecha)); });
+    }
+    const ABIERTA = '\uffff';
+    const grupos = [];
+    let g = null;
+    for (const v of vivas) {
+      const fin = BG.saldoVenta(v) > 0 ? ABIERTA : (ultimo.get(v.id) || String(v.fecha));
+      if (!g || String(v.fecha) > g.fin) { g = { ids: new Set(), fin: fin }; grupos.push(g); }
+      g.ids.add(v.id);
+      if (fin > g.fin) g.fin = fin;
+    }
+    const grupoDe = new Map();
+    grupos.forEach((x, k) => x.ids.forEach((id) => grupoDe.set(id, k)));
+    const lineas = grupos.map(() => []);
+    if (!grupos.length) lineas.push([]);
+    // Cada línea va al tramo de su compra (un cobro repartido toca compras de un mismo tramo); lo de una compra anulada, al tramo de su fecha.
+    for (const m of libro) {
+      let k = grupoDe.has(m.ventaId) ? grupoDe.get(m.ventaId) : -1;
+      if (k < 0) { k = grupos.findIndex((x) => x.fin >= String(m.fecha)); if (k < 0) k = lineas.length - 1; }
+      lineas[k].push(m);
+    }
+    const armar = (ls, k) => {
+      let saldo = 0;
+      const conSaldo = ls.map((m) => { saldo += (m.cargo || 0) - (m.abono || 0); return Object.assign({}, m, { saldo: saldo }); });
+      const ventas = grupos[k] ? Array.from(grupos[k].ids).map((id) => BG.venta(id)) : [];
+      return { lineas: conSaldo, ventaIds: grupos[k] ? grupos[k].ids : new Set(), desde: ls.length ? ls[0].fecha : null, hasta: ls.length ? ls[ls.length - 1].fecha : null,
+        total: sum(ventas, (v) => v.total), pagado: sum(ventas, (v) => BG.pagadoVenta(v)) };
+    };
+    const lista = lineas.map(armar);
+    return { actual: lista[lista.length - 1], anteriores: lista.slice(0, -1) };
   };
   /**
    * Un cobro: lo que la clienta entregó de una vez. Si se repartió entre varias compras son varios pagos con el mismo `grupo` y el mismo número

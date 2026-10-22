@@ -1097,8 +1097,20 @@
         + '<span class="row-sub">' + esc(x.empresa) + (x.guia ? ' · guía ' + esc(x.guia) : '') + ' · ' + BG.fmtFecha(x.creado.slice(0, 10)) + '</span></span>'
         + '<span class="row-end">' + BG.pillEnvio(x) + '</span></a></li>').join('') + '</ul></div>' : '')
       + '<div data-panel="compras">' + BG.htmlVerAnulados(anuladasSuyas, 'la compra anulada', 'las ' + anuladasSuyas + ' compras anuladas')
-      + (ventas.length ? '<ul class="list list-top">' + ventas.map(filaVenta).join('') + '</ul>'
-        : '<p class="empty">' + (anuladasSuyas ? 'Sus compras están todas anuladas.' : 'Todavía no compró nada.') + '</p>') + '</div>'
+      // La cuenta actual arriba; lo ya pagado de antes (cada vez que quedó al día se cierra un tramo), plegado abajo como historial interno (HANDOFF §31).
+      + (() => {
+        if (!ventas.length) return '<p class="empty">' + (anuladasSuyas ? 'Sus compras están todas anuladas.' : 'Todavía no compró nada.') + '</p>';
+        const tramos = BG.tramosDeCuenta(c.id).anteriores;
+        const viejas = new Set();
+        tramos.forEach((t) => t.ventaIds.forEach((id) => viejas.add(id)));
+        const actuales = ventas.filter((v) => !viejas.has(v.id));
+        const grupos = tramos.slice().reverse().map((t) => ({ t: t, vs: ventas.filter((v) => t.ventaIds.has(v.id)) })).filter((g) => g.vs.length);
+        return (actuales.length ? '<ul class="list list-top">' + actuales.map(filaVenta).join('') + '</ul>' : '<p class="empty">No tiene compras en la cuenta actual: lo anterior ya está pagado.</p>')
+          + (grupos.length ? '<details class="hist-cuenta list-top"><summary>Historial ya pagado · ' + grupos.reduce((n, g) => n + g.vs.length, 0) + (grupos.reduce((n, g) => n + g.vs.length, 0) === 1 ? ' compra' : ' compras')
+            + ' <span class="small muted">(control interno: no sale en el estado de cuenta)</span></summary>'
+            + grupos.map((g) => '<p class="small muted hist-tramo">Del ' + BG.fmtFecha(g.t.desde) + ' al ' + BG.fmtFecha(g.t.hasta) + ' · ' + g.vs.length + (g.vs.length === 1 ? ' compra' : ' compras') + ' · ' + gs(g.t.total) + ' · pagado del todo</p>'
+              + '<ul class="list">' + g.vs.map(filaVenta).join('') + '</ul>').join('') + '</details>' : '');
+      })() + '</div>'
       + '<div data-panel="movs" hidden><div class="table-wrap list-top"><table class="table"><thead><tr><th>Fecha</th><th>Concepto</th><th class="num">Compra</th><th class="num">Pago</th><th class="num">Saldo</th></tr></thead><tbody>'
       + libro.map((m) => '<tr><td class="nowrap">' + BG.fmtFecha(m.fecha) + '</td><td><span class="' + (m.anulado ? 'strike' : '') + '">' + esc(m.concepto) + '</span>'
         + (m.anulado ? '<div class="t-sub">' + esc(m.anulado) + '</div>' : '')

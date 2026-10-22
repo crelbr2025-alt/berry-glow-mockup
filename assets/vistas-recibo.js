@@ -86,8 +86,9 @@
       const ids = new Set(destacados.map((p) => p.ventaId).filter(Boolean));
       const porFecha = (a, b) => a.ts.localeCompare(b.ts);
       if (tipo === 'a') ventas = BG.ventasDeCliente(cli.id).filter((v) => !v.anulada && BG.esAnterior(v)).sort(porFecha);
-      // Estado de cuenta: todo el historial (lo pagado también; así nada «desaparece» al terminar de pagar),
-      // o solo lo que debe. El recibo de un pago muestra las compras que tocó ese pago y las que deben.
+      // Estado de cuenta: la cuenta ACTUAL (desde la última vez que quedó al día: lo de antes, todo pagado, es historial interno, HANDOFF §31), todo el
+      // historial si se pide, o solo lo que debe. El recibo de un pago muestra las compras que tocó ese pago y las que deben.
+      else if (!destacados.length && ver === 'cuenta') { const ids = BG.tramosDeCuenta(cli.id).actual.ventaIds; ventas = BG.ventasDeCliente(cli.id).filter((v) => !v.anulada && ids.has(v.id)).sort(porFecha); }
       else if (!destacados.length && ver !== 'debe') ventas = BG.ventasDeCliente(cli.id).filter((v) => !v.anulada).sort(porFecha);
       else ventas = BG.ventasDeCliente(cli.id).filter((v) => ids.has(v.id) || BG.saldoVenta(v) > 0).sort(porFecha);
     }
@@ -95,7 +96,11 @@
     // El estado de cuenta entero se arma como la ficha de la clienta (resumen, lo que debe y los movimientos de la cuenta); el recibo de un pago, como un
     // solo pago repartido entre sus compras. Lo demás (una compra, lo de antes, solo lo que debe) sigue como siempre.
     const pagoRecibo = tipo !== 'a' && tipo !== 'p' && destacados.length ? BG.resumenCobro(destacados[0]) : null;
-    const movimientos = tipo === 'c' && historial ? BG.libroCliente(cli.id).filter((m) => !m.anulado) : null;
+    // En la cuenta actual, los movimientos son los del tramo actual (el saldo de cada línea es el mismo: en el corte la cuenta estaba en 0).
+    const tramos = tipo === 'c' && historial ? BG.tramosDeCuenta(cli.id) : null;
+    const movimientos = tipo === 'c' && historial ? (ver === 'cuenta' ? tramos.actual.lineas : BG.libroCliente(cli.id)).filter((m) => !m.anulado) : null;
+    // Cuántas compras ya pagadas quedaron afuera (para decirlo en una línea: «lo anterior ya está pagado»).
+    const yaPagadas = tramos && ver === 'cuenta' ? tramos.anteriores.reduce((a, t) => a + t.ventaIds.size, 0) : 0;
     const numero = destacados.length ? destacados[0].recibo : tipo === 'v' ? ventas[0].recibo : null;
     // Lo que sumó cada pago, mirando la historia de la clienta (los puntos se cuentan sobre todo lo que pagó junto: un pago repartido no pierde puntos).
     const puntosMapa = BG.configFidelidad().activo ? BG.puntosPorPagoDe(cli.id) : new Map();
@@ -104,7 +109,8 @@
     return {
       tienda: { nombre: t.nombre, whatsapp: t.whatsapp, instagram: t.instagram, direccion: t.direccion, mensaje: t.mensaje },
       titulo: destacados.length ? (pagoRecibo && pagoRecibo.anulado ? 'Pago anulado' : 'Recibo de pago') : tipo === 'v' ? (BG.esAnterior(ventas[0]) ? 'Compra anterior' : 'Recibo') : tipo === 'a' ? 'Compras anteriores' : 'Estado de cuenta',
-      subtitulo: tipo === 'a' ? 'Lo que llevaste antes del sistema' : historial ? 'Todas tus compras y pagos' : tipo === 'c' && !destacados.length ? 'Lo que tenés pendiente' : '',
+      subtitulo: tipo === 'a' ? 'Lo que llevaste antes del sistema' : historial ? (ver === 'cuenta' && yaPagadas && tramos.actual.desde ? 'Tu cuenta desde el ' + BG.fmtFecha(tramos.actual.desde) + ' · lo anterior ya está pagado' : ver === 'cuenta' ? 'Tus compras y pagos' : 'Todas tus compras y pagos')
+        : tipo === 'c' && !destacados.length ? 'Lo que tenés pendiente' : '',
       historial: historial, anteriores: tipo === 'a', pago: pagoRecibo, movimientos: movimientos,
       numero: numero,
       emision: BG.hoy(),
@@ -475,7 +481,8 @@
   BG.vistas.recibo = (args, params) => {
     const tipo = args[0];
     const pagosIds = (params.get('pagos') || '').split(',').filter(Boolean);
-    const ver = params.get('ver') === 'debe' ? 'debe' : 'todo';
+    // Por defecto, la cuenta actual (lo ya pagado de antes queda como historial interno); «Todo el historial» y «Solo lo que debe», a pedido.
+    const ver = params.get('ver') === 'debe' ? 'debe' : params.get('ver') === 'todo' ? 'todo' : 'cuenta';
     const d = datosRecibo(tipo, args[1], pagosIds, ver);
     if (!d) return { html: '<div class="page"><p class="empty">No encontramos ese recibo.</p></div>' };
     const leerPref = (k, def, valido) => { try { const x = localStorage.getItem(k); return valido(x) ? x : def; } catch (e) { return def; } };
@@ -517,6 +524,7 @@
       + '<a class="btn btn-primary" data-accion="whatsapp" href="' + BG.waLink(cli, textoWaDe()) + '" target="_blank" rel="noopener">' + icon('chat') + 'WhatsApp</a></div></div>'
       + '<div class="receipt-opciones no-print">'
       + (esCuenta ? '<div class="seg" role="radiogroup" aria-label="Qué muestra el estado de cuenta">'
+        + '<label><input type="radio" name="r-ver" value="cuenta"' + (ver === 'cuenta' ? ' checked' : '') + '>Cuenta actual</label>'
         + '<label><input type="radio" name="r-ver" value="todo"' + (ver === 'todo' ? ' checked' : '') + '>Todo el historial</label>'
         + '<label><input type="radio" name="r-ver" value="debe"' + (ver === 'debe' ? ' checked' : '') + '>Solo lo que debe</label></div>' : '')
       + '<div class="r-tamano"><div class="seg" role="radiogroup" aria-label="Tamaño del comprobante"><span class="seg-label">Tamaño</span>'
@@ -621,7 +629,7 @@
             return;
           }
           if (t.name === 'r-margen') { margen = t.value; guardarPref(KEY_MARGEN, margen); aplicarFormato(formato); BG.toast('Márgenes ' + (margen === 'angosto' ? 'angostos' : 'normales') + ' al imprimir.'); return; }
-          if (t.name === 'r-ver') { BG.ir('#/recibo/c/' + cli.id + (t.value === 'debe' ? '?ver=debe' : '')); return; }
+          if (t.name === 'r-ver') { BG.ir('#/recibo/c/' + cli.id + (t.value === 'debe' ? '?ver=debe' : t.value === 'todo' ? '?ver=todo' : '')); return; }
           if (t.name !== 'formato') return;
           formato = t.value;
           guardarPref(KEY_FORMATO, formato);

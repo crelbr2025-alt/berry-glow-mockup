@@ -1626,3 +1626,6 @@ a.callout-link:hover { text-decoration: none; background: var(--berry-soft); }
 /* El encabezado de color va de borde a borde: sus márgenes negativos siguen al relleno nuevo (más chico) del comprobante. */
 .receipt.cab-color .r-head { margin: -24px -28px 0; padding: 16px 28px 12px; }
 @media (max-width: 560px) { .receipt:not(.is-ticket).cab-color .r-head { margin: -18px -14px 0; padding: 14px 14px 10px; } }
+/* Ficha: el historial ya pagado (control interno), plegado debajo de la cuenta actual (HANDOFF §31). */
+.hist-cuenta > summary { cursor: pointer; font-weight: 700; padding: 8px 0; }
+.hist-tramo { margin: 10px 0 4px; }
